@@ -126,6 +126,7 @@ pub struct RealtimeBucket {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RealtimeRequestLog {
+    pub session_id: String,
     pub model: String,
     pub provider_id: String,
     pub created_at: i64,

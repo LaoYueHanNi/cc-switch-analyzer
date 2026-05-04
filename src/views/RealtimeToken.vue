@@ -22,42 +22,54 @@
 
     <!-- 请求日志列表 -->
     <div v-if="logs.length > 0" class="log-list">
-      <!-- 表头 -->
-      <div class="log-header">
-        <span class="col-time">时间</span>
-        <span class="col-model">模型</span>
-        <span class="col-token c-input">输入</span>
-        <span class="col-token c-output">输出</span>
-        <span class="col-token c-cache-r">缓存读</span>
-        <span class="col-token c-cache-w">缓存写</span>
-        <span class="col-total">总token</span>
-        <span class="col-cost">费用</span>
-        <span class="col-latency">延迟</span>
-      </div>
-      <!-- 数据行 -->
-      <div class="log-row" :class="{ 'log-new': (row as any)._new }" v-for="(row, i) in logs" :key="row.createdAt + row.model + i">
-        <span class="col-time">{{ formatTime(row.createdAt) }}</span>
-        <span class="col-model" :title="row.model">{{ shortModel(row.model) }}</span>
-        <span class="col-token c-input">
-          <em>{{ formatNum(row.inputTokens) }}</em>
-          <small>{{ formatCost(row.inputCost) }}</small>
-        </span>
-        <span class="col-token c-output">
-          <em>{{ formatNum(row.outputTokens) }}</em>
-          <small>{{ formatCost(row.outputCost) }}</small>
-        </span>
-        <span class="col-token c-cache-r">
-          <em>{{ formatNum(row.cacheReadTokens) }}</em>
-          <small>{{ formatCost(row.cacheReadCost) }}</small>
-        </span>
-        <span class="col-token c-cache-w">
-          <em>{{ formatNum(row.cacheCreationTokens) }}</em>
-          <small>{{ formatCost(row.cacheCreationCost) }}</small>
-        </span>
-        <span class="col-total">{{ formatNum(row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreationTokens) }}</span>
-        <span class="col-cost">{{ formatCost(row.totalCost) }}</span>
-        <span class="col-latency">{{ formatLatency(row.latencyMs) }}</span>
-      </div>
+      <template v-for="(group, gi) in sessionGroups" :key="group.sessionId">
+        <!-- Session 分组头 -->
+        <div class="session-header" :class="{ 'session-new': groupHasNew(group) }" @click="toggleGroup(group.sessionId)">
+          <span class="sh-arrow" :class="{ collapsed: collapsedSessions.has(group.sessionId) }">▾</span>
+          <span class="sh-id">{{ shortSession(group.sessionId) }}</span>
+          <span class="sh-count">{{ group.rows.length }} 次</span>
+          <span class="sh-cost">{{ formatCost(group.cost) }}</span>
+          <span class="sh-time">{{ formatTime(group.rows[0].createdAt) }} ~ {{ formatTime(group.rows[group.rows.length - 1].createdAt).split(' ').pop() }}</span>
+        </div>
+        <template v-if="!collapsedSessions.has(group.sessionId)">
+        <!-- 表头（每组第一个显示） -->
+        <div class="log-header">
+          <span class="col-time">时间</span>
+          <span class="col-model">模型</span>
+          <span class="col-token c-input">输入</span>
+          <span class="col-token c-output">输出</span>
+          <span class="col-token c-cache-r">缓存读</span>
+          <span class="col-token c-cache-w">缓存写</span>
+          <span class="col-total">总token</span>
+          <span class="col-cost">费用</span>
+          <span class="col-latency">延迟</span>
+        </div>
+        <!-- 数据行 -->
+        <div class="log-row" :class="{ 'log-new': (row as any)._new }" v-for="(row, ri) in group.rows" :key="row.createdAt + row.model + ri">
+          <span class="col-time">{{ formatTime(row.createdAt) }}</span>
+          <span class="col-model" :title="row.model">{{ shortModel(row.model) }}</span>
+          <span class="col-token c-input">
+            <em>{{ formatNum(row.inputTokens) }}</em>
+            <small>{{ formatCost(row.inputCost) }}</small>
+          </span>
+          <span class="col-token c-output">
+            <em>{{ formatNum(row.outputTokens) }}</em>
+            <small>{{ formatCost(row.outputCost) }}</small>
+          </span>
+          <span class="col-token c-cache-r">
+            <em>{{ formatNum(row.cacheReadTokens) }}</em>
+            <small>{{ formatCost(row.cacheReadCost) }}</small>
+          </span>
+          <span class="col-token c-cache-w">
+            <em>{{ formatNum(row.cacheCreationTokens) }}</em>
+            <small>{{ formatCost(row.cacheCreationCost) }}</small>
+          </span>
+          <span class="col-total">{{ formatNum(row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreationTokens) }}</span>
+          <span class="col-cost">{{ formatCost(row.totalCost) }}</span>
+          <span class="col-latency">{{ formatLatency(row.latencyMs) }}</span>
+        </div>
+        </template>
+      </template>
     </div>
 
     <div v-else class="realtime-empty">
@@ -67,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useRealtimePolling } from '@/composables/useRealtimePolling'
 import { formatNum, formatCost } from '@/utils/format'
@@ -75,6 +87,19 @@ import type { RealtimeRequestLog } from '@/types/database'
 
 const dbStore = useDatabaseStore()
 const { logs, lastRefreshTime, startPolling, stopPolling, refreshNow } = useRealtimePolling()
+
+const collapsedSessions = ref<Set<string>>(new Set())
+
+function toggleGroup(sessionId: string): void {
+  const next = new Set(collapsedSessions.value)
+  if (next.has(sessionId)) next.delete(sessionId)
+  else next.add(sessionId)
+  collapsedSessions.value = next
+}
+
+function groupHasNew(group: SessionGroup): boolean {
+  return group.rows.some(r => (r as any)._new)
+}
 
 const hasNewData = computed(() => logs.value.some(r => (r as any)._new))
 
@@ -88,6 +113,34 @@ const totalTokens = computed(() =>
   )
 )
 
+interface SessionGroup {
+  sessionId: string
+  rows: RealtimeRequestLog[]
+  cost: number
+}
+
+const sessionGroups = computed<SessionGroup[]>(() => {
+  const map = new Map<string, RealtimeRequestLog[]>()
+  for (const log of logs.value) {
+    const sid = log.sessionId || 'unknown'
+    if (!map.has(sid)) map.set(sid, [])
+    map.get(sid)!.push(log)
+  }
+  // 每组按时间倒序
+  const groups: SessionGroup[] = []
+  for (const [sessionId, rows] of map) {
+    rows.sort((a, b) => b.createdAt - a.createdAt)
+    groups.push({
+      sessionId,
+      rows,
+      cost: rows.reduce((s, r) => s + r.totalCost, 0)
+    })
+  }
+  // 按组内最新时间倒序
+  groups.sort((a, b) => b.rows[0].createdAt - a.rows[0].createdAt)
+  return groups
+})
+
 function formatTime(epoch: number): string {
   const d = new Date(epoch * 1000)
   const mm = String(d.getMonth() + 1).padStart(2, '0')
@@ -95,6 +148,11 @@ function formatTime(epoch: number): string {
   const hh = String(d.getHours()).padStart(2, '0')
   const mi = String(d.getMinutes()).padStart(2, '0')
   return `${mm}/${dd} ${hh}:${mi}`
+}
+
+function shortSession(sessionId: string): string {
+  const parts = sessionId.split('-')
+  return parts[0] || sessionId.slice(0, 8)
 }
 
 function shortModel(name: string): string {
@@ -161,19 +219,40 @@ watch(() => dbStore.hasDatabase, (val) => {
   background: var(--bg-card); border-radius: 6px; border: 1px solid var(--border-main); font-size: 12px;
 }
 
+/* Session 分组头 */
+.session-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 10px;
+  background: var(--bg-card-alt);
+  border-bottom: 1px solid var(--border-main);
+  border-top: 1px solid var(--border-main);
+  position: sticky; top: 0; z-index: 2;
+  cursor: pointer;
+  user-select: none;
+}
+.session-header:hover { background: var(--bg-hover); }
+.session-new { animation: row-flash 1.5s ease-out; }
+.sh-arrow {
+  font-size: 10px; color: var(--text-muted); transition: transform 0.15s;
+}
+.sh-arrow.collapsed { transform: rotate(-90deg); }
+.sh-id { font-size: 12px; font-weight: 700; color: var(--color-blue); }
+.sh-count { font-size: 10px; color: var(--text-muted); }
+.sh-cost { font-size: 11px; font-weight: 600; color: var(--color-cost); }
+.sh-time { font-size: 10px; color: var(--text-faint); margin-left: auto; }
+
 .log-header {
-  display: flex; align-items: center; padding: 6px 10px;
+  display: flex; align-items: center; padding: 4px 10px;
   font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px;
-  border-bottom: 1px solid var(--border-main); background: var(--bg-card-alt);
-  position: sticky; top: 0; z-index: 1;
+  border-bottom: 1px solid var(--border-faint);
+  background: var(--bg-card);
 }
 
 .log-row {
-  display: flex; align-items: center; padding: 5px 10px;
+  display: flex; align-items: center; padding: 4px 10px;
   border-bottom: 1px solid var(--border-faint);
 }
 .log-row:nth-child(even) { background: var(--bg-card-alt); }
-.log-row:last-child { border-bottom: none; }
 
 /* 新行高亮动画 */
 .log-new {

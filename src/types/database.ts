@@ -71,6 +71,7 @@ export interface RealtimeBucket {
 }
 
 export interface RealtimeRequestLog {
+  sessionId: string
   model: string
   providerId: string
   createdAt: number

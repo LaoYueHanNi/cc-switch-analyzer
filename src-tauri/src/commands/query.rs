@@ -114,7 +114,7 @@ pub fn query_realtime_logs(state: State<AppState>) -> Result<Vec<RealtimeRequest
 
     let pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
 
-    let result: Vec<RealtimeRequestLog> = raw.into_iter().map(|(model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms)| {
+    let result: Vec<RealtimeRequestLog> = raw.into_iter().map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms)| {
         let (input_cost, output_cost, cache_read_cost, cache_creation_cost) =
             if let Some(p) = pricing.get_pricing_at(&model, created_at) {
                 (
@@ -127,6 +127,7 @@ pub fn query_realtime_logs(state: State<AppState>) -> Result<Vec<RealtimeRequest
                 (0.0, 0.0, 0.0, 0.0)
             };
         RealtimeRequestLog {
+            session_id,
             model,
             provider_id,
             created_at,

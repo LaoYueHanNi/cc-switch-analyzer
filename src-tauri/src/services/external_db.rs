@@ -742,10 +742,10 @@ impl ExternalDbService {
         Ok(result)
     }
 
-    pub fn get_recent_request_logs_raw(&self) -> Result<Vec<(String, String, i64, i64, i64, i64, i64, i64)>, String> {
+    pub fn get_recent_request_logs_raw(&self) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String> {
         let db = self.db()?;
         let sql = "
-            SELECT model, provider_id, created_at,
+            SELECT session_id, model, provider_id, created_at,
                    input_tokens, output_tokens,
                    cache_read_tokens, cache_creation_tokens,
                    latency_ms
@@ -759,12 +759,13 @@ impl ExternalDbService {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(2)?,
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,
                     row.get::<_, i64>(6)?,
                     row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
                 ))
             })
             .map_err(|e| format!("查询最近请求日志失败: {}", e))?;
