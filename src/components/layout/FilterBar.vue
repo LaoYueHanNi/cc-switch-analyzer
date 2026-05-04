@@ -1,69 +1,68 @@
 <template>
   <div class="filter-bar">
+    <!-- 第一行：日期 + 快捷日期 + 查询/重置 -->
     <div class="filter-row">
       <div class="filter-group">
-        <span class="filter-label">日期范围</span>
+        <span class="filter-label">日期</span>
         <n-date-picker
           v-model:value="dateRange"
           type="daterange"
-          size="small"
+          size="tiny"
           clearable
-          style="width: 240px"
+          style="width: 200px"
         />
       </div>
+      <div class="quick-dates">
+        <button
+          v-for="btn in quickDateButtons"
+          :key="btn.days"
+          class="quick-btn"
+          :class="{ active: activeQuickDays === btn.days }"
+          :disabled="!dbStore.hasDatabase"
+          @click="onQuickDate(btn.days)"
+        >
+          {{ btn.label }}
+        </button>
+      </div>
+      <div class="filter-actions">
+        <button class="action-btn primary" :disabled="!dbStore.hasDatabase" @click="onQuery">查询</button>
+        <button class="action-btn" :disabled="!dbStore.hasDatabase" @click="onReset">重置</button>
+      </div>
+    </div>
 
+    <!-- 第二行：供应商 + 模型 -->
+    <div class="filter-row">
       <div class="filter-group">
         <span class="filter-label">供应商</span>
         <n-select
           v-model:value="filterStore.providerId"
           :options="providerSelectOptions"
-          size="small"
+          size="tiny"
           clearable
           style="width: 150px"
           placeholder="全部"
+          teleport-disabled
         />
       </div>
-
       <div class="filter-group">
         <span class="filter-label">模型</span>
         <n-select
           v-model:value="filterStore.modelId"
           :options="modelSelectOptions"
-          size="small"
+          size="tiny"
           clearable
           style="width: 150px"
           placeholder="全部"
+          teleport-disabled
         />
       </div>
-
-      <div class="filter-actions">
-        <n-button size="small" type="primary" :disabled="!dbStore.hasDatabase" @click="onQuery">
-          查询
-        </n-button>
-        <n-button size="small" :disabled="!dbStore.hasDatabase" @click="onReset">
-          重置
-        </n-button>
-      </div>
-    </div>
-
-    <div class="quick-dates">
-      <n-button
-        v-for="btn in quickDateButtons"
-        :key="btn.days"
-        size="tiny"
-        :type="activeQuickDays === btn.days ? 'primary' : 'default'"
-        :disabled="!dbStore.hasDatabase"
-        @click="onQuickDate(btn.days)"
-      >
-        {{ btn.label }}
-      </n-button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { NButton, NDatePicker, NSelect } from 'naive-ui'
+import { NDatePicker, NSelect } from 'naive-ui'
 import { useDatabaseStore } from '@/stores/database'
 import { useFilterStore } from '@/stores/filter'
 import { useFilter } from '@/composables/useFilter'
@@ -72,13 +71,9 @@ const dbStore = useDatabaseStore()
 const filterStore = useFilterStore()
 const { executeQuery, quickDateQuery } = useFilter()
 
-// 当前激活的快捷日期天数
 const activeQuickDays = ref<number | null>(30)
-
-// 日期范围（Naive UI 使用时间戳范围）
 const dateRange = ref<[number, number] | null>(null)
 
-// dateRange → filterStore
 watch(dateRange, (val) => {
   if (val) {
     filterStore.fromDate = new Date(val[0])
@@ -91,11 +86,9 @@ watch(dateRange, (val) => {
   }
 })
 
-// filterStore → dateRange（初始化 + 外部设置）
 watch([() => filterStore.fromDate, () => filterStore.toDate], ([f, t]) => {
   if (f && t) {
     const ts = [f.getTime(), t.getTime()] as [number, number]
-    // 避免循环更新
     if (!dateRange.value || dateRange.value[0] !== ts[0] || dateRange.value[1] !== ts[1]) {
       dateRange.value = ts
     }
@@ -103,11 +96,11 @@ watch([() => filterStore.fromDate, () => filterStore.toDate], ([f, t]) => {
 }, { immediate: true })
 
 const quickDateButtons = [
-  { label: '近 1 天', days: 1 },
-  { label: '近 7 天', days: 7 },
-  { label: '近 30 天', days: 30 },
-  { label: '近 60 天', days: 60 },
-  { label: '近 180 天', days: 180 }
+  { label: '1天', days: 1 },
+  { label: '7天', days: 7 },
+  { label: '30天', days: 30 },
+  { label: '60天', days: 60 },
+  { label: '180天', days: 180 }
 ]
 
 const providerSelectOptions = computed(() => [
@@ -138,37 +131,90 @@ async function onQuickDate(days: number): Promise<void> {
 
 <style scoped>
 .filter-bar {
-  padding: 4px 12px 8px;
+  padding: 4px 12px 6px;
   border-top: 1px solid var(--border-light);
 }
 
 .filter-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.filter-row:last-child {
+  margin-bottom: 0;
 }
 
 .filter-group {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
 }
 
 .filter-label {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-tertiary);
   white-space: nowrap;
-}
-
-.filter-actions {
-  display: flex;
-  gap: 6px;
 }
 
 .quick-dates {
   display: flex;
   gap: 2px;
-  margin-top: 4px;
+}
+
+.quick-btn {
+  font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.quick-btn:hover {
+  border-color: var(--color-blue);
+  color: var(--color-blue);
+}
+
+.quick-btn.active {
+  background: var(--color-blue);
+  border-color: var(--color-blue);
+  color: #fff;
+}
+
+.quick-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: 4px;
+}
+
+.action-btn {
+  font-size: 10px;
+  padding: 1px 8px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.action-btn.primary {
+  background: var(--color-blue);
+  border-color: var(--color-blue);
+  color: #fff;
+}
+
+.action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 </style>

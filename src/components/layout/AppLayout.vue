@@ -11,7 +11,7 @@
       <p class="overlay-text">正在加载数据库...</p>
     </div>
 
-    <!-- 无数据库提示（带选择按钮 + 错误信息） -->
+    <!-- 无数据库提示 -->
     <div v-else-if="!dbStore.isLoaded" class="overlay no-db-overlay">
       <n-icon size="48" :color="themeStore.isDark ? '#666' : '#ccc'"><server-outline /></n-icon>
       <p class="overlay-text">请选择 CC-Switch 数据库文件</p>
@@ -24,44 +24,63 @@
       <p v-if="dbStore.error" class="error-text">错误：{{ dbStore.error }}</p>
     </div>
 
-    <!-- 主界面 -->
-    <template v-else>
-      <!-- 筛选 + 摘要（仅模型/供应商 Tab） -->
-      <div class="top-area">
+    <!-- 主界面：侧边栏 + 内容 -->
+    <div v-else class="main-body">
+      <!-- 左侧导航 -->
+      <div class="sidebar">
+        <div
+          v-for="item in navItems"
+          :key="item.name"
+          class="sidebar-item"
+          :class="{ active: activeTab === item.name }"
+          @click="onTabChange(item.name)"
+        >
+          <n-icon size="18"><component :is="item.icon" /></n-icon>
+          <span class="sidebar-label">{{ item.label }}</span>
+        </div>
+
+        <div class="sidebar-spacer" />
+
+        <!-- 刷新间隔：点击循环切换 -->
+        <div class="sidebar-item sidebar-bottom" @click="onCycleInterval" :title="intervalTitle">
+          <n-icon size="16"><refresh-outline /></n-icon>
+          <span class="sidebar-label interval-label">{{ intervalDisplay }}</span>
+        </div>
+
+        <!-- 暗色模式切换 -->
+        <div class="sidebar-item sidebar-bottom" :title="themeStore.isDark ? '切换亮色' : '切换暗色'" @click="themeStore.toggle()">
+          <n-icon size="16"><sunny-outline v-if="themeStore.isDark" /><moon-outline v-else /></n-icon>
+          <span class="sidebar-label">{{ themeStore.isDark ? '亮色' : '暗色' }}</span>
+        </div>
+      </div>
+
+      <!-- 右侧内容 -->
+      <div class="main-content">
+        <!-- 筛选 + 摘要（仅模型/供应商 Tab） -->
         <template v-if="activeTab === 'by-model' || activeTab === 'by-provider'">
           <FilterBar />
           <SummaryBar />
         </template>
-      </div>
 
-      <!-- Tab 栏 -->
-      <n-tabs
-        :value="activeTab"
-        @update:value="onTabChange"
-        type="line"
-        size="medium"
-        class="main-tabs"
-      >
-        <n-tab-pane name="by-model" tab="按模型" />
-        <n-tab-pane name="by-provider" tab="按供应商" />
-        <n-tab-pane name="session" tab="会话分析" />
-        <n-tab-pane name="realtime" tab="实时 Token" />
-        <n-tab-pane name="pricing" tab="定价计算" />
-      </n-tabs>
-
-      <!-- 内容区 -->
-      <div class="content-area">
-        <router-view />
+        <!-- 内容区 -->
+        <div class="content-area">
+          <router-view />
+        </div>
       </div>
-    </template>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref, watch, type Component } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { NSpin, NTabs, NTabPane, NButton, NIcon } from 'naive-ui'
-import { FolderOpenOutline, ServerOutline } from '@vicons/ionicons5'
+import { NSpin, NButton, NIcon } from 'naive-ui'
+import {
+  FolderOpenOutline, ServerOutline,
+  GridOutline, BusinessOutline, ChatbubblesOutline,
+  PulseOutline, CalculatorOutline,
+  MoonOutline, SunnyOutline, RefreshOutline
+} from '@vicons/ionicons5'
 import { useDatabaseStore } from '@/stores/database'
 import { useThemeStore } from '@/stores/theme'
 import { useDatabase } from '@/composables/useDatabase'
@@ -73,9 +92,16 @@ const router = useRouter()
 const route = useRoute()
 const dbStore = useDatabaseStore()
 const themeStore = useThemeStore()
-const { selectDatabase, autoLoadDatabase } = useDatabase()
+const { selectDatabase, autoLoadDatabase, refreshDatabase } = useDatabase()
 
-// 当前活跃的Tab名称
+const navItems: { name: string; label: string; icon: Component }[] = [
+  { name: 'by-model', label: '模型', icon: GridOutline },
+  { name: 'by-provider', label: '供应商', icon: BusinessOutline },
+  { name: 'session', label: '会话', icon: ChatbubblesOutline },
+  { name: 'realtime', label: '实时', icon: PulseOutline },
+  { name: 'pricing', label: '定价', icon: CalculatorOutline }
+]
+
 const activeTab = computed(() => {
   const name = route.name as string
   return name || 'by-model'
@@ -89,7 +115,58 @@ async function onSelectDb(): Promise<void> {
   await selectDatabase()
 }
 
-// 启动时自动尝试加载默认数据库
+// ===== 刷新间隔循环 =====
+const intervals = ['manual', '30s', '1min', '5min', '30min']
+const intervalLabels: Record<string, string> = {
+  manual: '手动',
+  '30s': '30s',
+  '1min': '1m',
+  '5min': '5m',
+  '30min': '30m'
+}
+const intervalTitles: Record<string, string> = {
+  manual: '手动刷新（点击执行）',
+  '30s': '每30秒自动刷新',
+  '1min': '每1分钟自动刷新',
+  '5min': '每5分钟自动刷新',
+  '30min': '每30分钟自动刷新'
+}
+const currentIntervalIndex = ref(1) // 默认 30s
+
+const intervalDisplay = computed(() => intervalLabels[intervals[currentIntervalIndex.value]])
+const intervalTitle = computed(() => intervalTitles[intervals[currentIntervalIndex.value]])
+
+let autoRefreshTimer: ReturnType<typeof setInterval> | null = null
+
+function onCycleInterval(): void {
+  // 手动模式下直接刷新
+  if (intervals[currentIntervalIndex.value] === 'manual') {
+    refreshDatabase()
+  }
+  // 切换到下一个
+  currentIntervalIndex.value = (currentIntervalIndex.value + 1) % intervals.length
+}
+
+// 监听间隔变化
+watch(currentIntervalIndex, (idx) => {
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer)
+    autoRefreshTimer = null
+  }
+  const intervalMap: Record<string, number> = {
+    '30s': 30_000,
+    '1min': 60_000,
+    '5min': 300_000,
+    '30min': 1_800_000
+  }
+  const ms = intervalMap[intervals[idx]]
+  if (ms) {
+    autoRefreshTimer = setInterval(() => {
+      if (dbStore.hasDatabase) refreshDatabase()
+    }, ms)
+  }
+}, { immediate: true })
+
 onMounted(async () => {
   await autoLoadDatabase()
 })
@@ -103,14 +180,12 @@ onMounted(async () => {
   overflow: hidden;
 }
 
-/* 工具栏区域 */
 .top-area {
   flex-shrink: 0;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border-main);
 }
 
-/* 遮罩层 */
 .overlay {
   display: flex;
   flex-direction: column;
@@ -141,15 +216,87 @@ onMounted(async () => {
   word-break: break-all;
 }
 
-/* Tab 栏 */
-.main-tabs {
-  flex-shrink: 0;
-  padding: 0 12px;
-  background: var(--bg-card);
-  border-bottom: 1px solid var(--border-light);
+/* 主区域 */
+.main-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
 }
 
-/* 内容区域 */
+/* 左侧导航 */
+.sidebar {
+  width: 64px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--bg-card);
+  border-right: 1px solid var(--border-main);
+  padding: 6px 0;
+}
+
+.sidebar-item {
+  width: 56px;
+  padding: 6px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: background 0.15s, color 0.15s;
+  position: relative;
+}
+
+.sidebar-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sidebar-item.active {
+  background: var(--bg-hover);
+  color: var(--color-blue);
+}
+
+.sidebar-item.active::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--color-blue);
+}
+
+.sidebar-label {
+  font-size: 9px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.interval-label {
+  color: var(--color-amber);
+}
+
+.sidebar-spacer {
+  flex: 1;
+}
+
+.sidebar-bottom {
+  padding: 4px 0;
+}
+
+/* 右侧内容 */
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .content-area {
   flex: 1;
   overflow: auto;

@@ -1,11 +1,39 @@
 <template>
   <div class="model-card">
+    <!-- 缓存窗口覆盖层 -->
+    <div v-if="showCache" class="cache-overlay-card">
+      <div class="cache-header">
+        <span class="cache-title">最近缓存窗口</span>
+        <span class="cache-close" @click="showCache = false">✕</span>
+      </div>
+      <div v-if="cacheLoading" class="cache-loading">加载中...</div>
+      <table v-else-if="cacheWindows.length > 0" class="cache-table">
+        <thead>
+          <tr>
+            <th>开始</th>
+            <th>结束</th>
+            <th>时长</th>
+            <th>命中</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="(w, i) in cacheWindows" :key="i">
+            <td>{{ w.startTime }}</td>
+            <td>{{ w.endTime }}</td>
+            <td class="dur">{{ w.duration }}</td>
+            <td class="hits">{{ w.hits }}次</td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="cache-empty">暂无缓存数据</div>
+    </div>
+
     <!-- 模型名称 -->
     <div class="card-header">
       <span class="model-name">{{ displayName }}</span>
-      <span v-if="hasTimePricing" class="time-badge" title="包含时段定价">
+      <span v-if="hasTimePricing" class="time-badge" :title="timeBadgeTitle">
         <n-icon size="14"><time-outline /></n-icon>
-        时段定价
+        {{ timeBadgeText }}
       </span>
     </div>
 
@@ -24,30 +52,19 @@
         <span class="cost-label">总费用</span>
       </div>
 
-      <!-- 总 Token -->
+      <!-- 总 Token + 请求数 -->
       <div class="token-section">
         <span class="token-value">{{ formatNum(totalTokens) }}</span>
         <span class="token-label">总 Token</span>
+        <span class="request-count">{{ requestCount }} 次请求</span>
       </div>
 
       <!-- 统计信息 -->
       <div class="stats-row">
-        <div class="stat-item">
-          <span class="stat-label">单次请求费用</span>
-          <span class="stat-num">¥{{ formatRate(costPerRequest) }}</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">缓存命中率</span>
-          <span class="stat-num">{{ formatPercent(cacheHitRate) }}</span>
-        </div>
-        <div class="stat-item clickable" @click="$emit('cacheWindows', modelId, $event)" title="点击查看缓存窗口详情">
-          <span class="stat-label">平均缓存时长</span>
-          <span class="stat-num clickable-num">{{ avgCacheDuration }}</span>
-        </div>
+        <span class="stat-item">单次 ¥{{ formatRate(costPerRequest) }}</span>
+        <span class="stat-item">命中率 {{ formatPercent(cacheHitRate) }}</span>
+        <span class="stat-item clickable" @click="onCacheClick" title="点击查看缓存窗口详情">缓存 {{ avgCacheDuration }}</span>
       </div>
-
-      <!-- 请求数 -->
-      <div class="request-count">{{ requestCount }} 次请求</div>
 
       <!-- 费用分解网格 -->
       <PricingGrid
@@ -69,26 +86,27 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { NButton, NIcon } from 'naive-ui'
 import { TimeOutline } from '@vicons/ionicons5'
-import { formatNum, formatRate, formatCost, formatPercent, formatDuration } from '@/utils/format'
+import { formatNum, formatRate, formatCost, formatPercent, formatDuration, epochToDateStr, epochToDateTimeStr } from '@/utils/format'
+import { platformAdapter } from '@/platform'
 import PricingGrid from '@/components/common/PricingGrid.vue'
 import type { ModelBreakdown } from '@/types/database'
-import type { PricingData } from '@/types/pricing'
+import type { PricingData, TimePricingRule } from '@/types/pricing'
 
 const props = defineProps<{
   modelData: ModelBreakdown
   pricing: PricingData | null
-  costBreakdown: [number, number, number, number]  // [input, output, cacheRead, cacheCreation]
+  costBreakdown: [number, number, number, number]
   totalCost: number
   cacheDurationSec: number
   hasTimePricing: boolean
+  timeRules: TimePricingRule[]
 }>()
 
 defineEmits<{
   compare: [modelId: string]
-  cacheWindows: [modelId: string, event: MouseEvent]
   setPricing: [modelId: string]
 }>()
 
@@ -113,6 +131,16 @@ const cacheHitRate = computed(() => {
 
 const avgCacheDuration = computed(() => formatDuration(props.cacheDurationSec))
 
+const timeBadgeText = computed(() => {
+  const labels = props.timeRules.map(r => r.label).filter(Boolean)
+  return labels.length > 0 ? labels.join('、') : '时段定价'
+})
+
+const timeBadgeTitle = computed(() => {
+  if (props.timeRules.length === 0) return '包含时段定价'
+  return props.timeRules.map(r => r.label || `${epochToDateStr(r.startTime)} ~ ${epochToDateStr(r.endTime)}`).join('\n')
+})
+
 type RateField = 'inputCostPerMillion' | 'outputCostPerMillion' | 'cacheReadCostPerMillion' | 'cacheCreationCostPerMillion'
 
 function getRateStr(field: RateField): string {
@@ -123,10 +151,49 @@ function getRateStr(field: RateField): string {
   }
   return formatRate((props.pricing?.[field] as number) || 0) + '/M'
 }
+
+// ===== 缓存窗口 =====
+interface CacheWindow {
+  startTime: string
+  endTime: string
+  duration: string
+  hits: number
+}
+
+const showCache = ref(false)
+const cacheLoading = ref(false)
+const cacheWindows = ref<CacheWindow[]>([])
+
+async function onCacheClick(): Promise<void> {
+  if (showCache.value) {
+    showCache.value = false
+    return
+  }
+  showCache.value = true
+  cacheLoading.value = true
+  try {
+    const result = await platformAdapter.queryCacheWindows(props.modelData.model)
+    cacheWindows.value = (result || []).map((w: any) => ({
+      startTime: epochToDateTimeStr(w.start_ts || w.startTs).split(' ')[1]
+        ? epochToDateTimeStr(w.start_ts || w.startTs).replace(/^\d{2}\//, '')
+        : '',
+      endTime: epochToDateTimeStr(w.end_ts || w.endTs).split(' ')[1]
+        ? epochToDateTimeStr(w.end_ts || w.endTs).replace(/^\d{2}\//, '')
+        : '',
+      duration: formatDuration(w.duration_sec || w.durationSec),
+      hits: w.hits
+    }))
+  } catch (err) {
+    console.error('缓存窗口加载失败:', err)
+  } finally {
+    cacheLoading.value = false
+  }
+}
 </script>
 
 <style scoped>
 .model-card {
+  position: relative;
   background: var(--bg-card);
   border-radius: 6px;
   border: 1px solid var(--border-main);
@@ -138,6 +205,79 @@ function getRateStr(field: RateField): string {
 
 .model-card:hover {
   box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+}
+
+/* 缓存窗口覆盖层 */
+.cache-overlay-card {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: var(--bg-card);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.cache-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.cache-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cache-close {
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.cache-close:hover {
+  color: var(--text-primary);
+}
+
+.cache-loading, .cache-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
+.cache-table {
+  border-collapse: collapse;
+  font-size: 10px;
+}
+
+.cache-table th {
+  text-align: left;
+  color: var(--text-muted);
+  font-weight: 500;
+  padding: 2px 6px 2px 0;
+  border-bottom: 1px solid var(--border-faint);
+  font-size: 9px;
+}
+
+.cache-table td {
+  padding: 2px 6px 2px 0;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--bg-base);
+  white-space: nowrap;
+}
+
+.dur {
+  color: var(--color-green);
+  font-weight: 500;
+}
+
+.hits {
+  text-align: right;
 }
 
 .card-header {
@@ -220,21 +360,18 @@ function getRateStr(field: RateField): string {
 .stats-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 10px;
+  gap: 4px 8px;
   margin-bottom: 4px;
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .stat-item {
-  display: flex;
-  flex-direction: column;
+  color: var(--text-tertiary);
+  white-space: nowrap;
 }
 
 .stat-item.clickable {
   cursor: pointer;
-}
-
-.clickable-num {
   text-decoration: underline;
   text-decoration-style: dotted;
   text-underline-offset: 3px;
@@ -244,20 +381,10 @@ function getRateStr(field: RateField): string {
   opacity: 0.7;
 }
 
-.stat-label {
-  color: var(--text-muted);
-  font-size: 10px;
-}
-
-.stat-num {
-  color: var(--text-primary);
-  font-weight: 500;
-  font-size: 11px;
-}
-
 .request-count {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-faint);
-  margin-bottom: 6px;
+  margin-left: auto;
+  white-space: nowrap;
 }
 </style>

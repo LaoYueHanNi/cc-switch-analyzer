@@ -36,7 +36,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, watch, nextTick } from 'vue'
 import { platformAdapter } from '@/platform'
 import { epochToDateTimeStr, formatDuration } from '@/utils/format'
 
@@ -62,35 +62,34 @@ interface CacheWindow {
 const windows = ref<CacheWindow[]>([])
 const loading = ref(false)
 const popupRef = ref<HTMLElement | null>(null)
+const popupStyle = ref<Record<string, string>>({ visibility: 'hidden' })
 
-const POPUP_OFFSET = 12
+const POPUP_OFFSET = 4
 const EDGE_MARGIN = 8
 
-const popupStyle = computed(() => {
+function reposition(): void {
   const el = popupRef.value
-  const pw = el?.offsetWidth || 350
-  const ph = el?.offsetHeight || 200
+  if (!el) return
+  const pw = el.offsetWidth
+  const ph = el.offsetHeight
   const vw = window.innerWidth
   const vh = window.innerHeight
 
-  let left = props.posX + POPUP_OFFSET
+  let left = props.posX
   let top = props.posY + POPUP_OFFSET
 
-  // 右侧溢出 → 向左偏移
   if (left + pw + EDGE_MARGIN > vw) {
-    left = props.posX - pw - POPUP_OFFSET
+    left = vw - pw - EDGE_MARGIN
   }
-  // 底部溢出 → 向上偏移
   if (top + ph + EDGE_MARGIN > vh) {
     top = props.posY - ph - POPUP_OFFSET
   }
 
-  // 最终安全钳位
-  left = Math.max(EDGE_MARGIN, Math.min(left, vw - pw - EDGE_MARGIN))
+  left = Math.max(EDGE_MARGIN, left)
   top = Math.max(EDGE_MARGIN, Math.min(top, vh - ph - EDGE_MARGIN))
 
-  return { left: left + 'px', top: top + 'px' }
-})
+  popupStyle.value = { left: left + 'px', top: top + 'px' }
+}
 
 async function loadCacheWindows(): Promise<void> {
   loading.value = true
@@ -113,14 +112,12 @@ async function loadCacheWindows(): Promise<void> {
   }
 }
 
-watch(() => props.show, (val) => {
+watch(() => props.show, async (val) => {
   if (val && props.modelId) {
-    loadCacheWindows()
-    // 等待 DOM 渲染后触发 popupStyle 重算（获取真实 offsetWidth/Height）
-    nextTick(() => {
-      // computed 依赖 popupRef，读取即触发重算
-      void popupStyle.value
-    })
+    popupStyle.value = { visibility: 'hidden' }
+    await loadCacheWindows()
+    await nextTick()
+    reposition()
   }
 })
 </script>

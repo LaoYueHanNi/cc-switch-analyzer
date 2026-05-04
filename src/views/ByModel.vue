@@ -22,8 +22,8 @@
         :total-cost="card.totalCost"
         :cache-duration-sec="card.cacheDurationSec"
         :has-time-pricing="card.hasTimePricing"
+        :time-rules="card.timeRules"
         @compare="onCompare"
-        @cache-windows="onCacheWindows"
         @set-pricing="onSetPricing"
       />
     </div>
@@ -36,15 +36,6 @@
       :source-cost-breakdown="compareCostBreakdown"
       :model-data="compareModelData"
       :all-models="pricingStore.pricingData"
-    />
-
-    <!-- 缓存窗口弹窗 -->
-    <CacheWindowDialog
-      v-model:show="showCacheWindows"
-      :model-name="cacheModelName"
-      :model-id="cacheModelId"
-      :pos-x="cachePosX"
-      :pos-y="cachePosY"
     />
   </div>
 </template>
@@ -59,9 +50,8 @@ import { useQueryStore } from '@/stores/query'
 import { usePricingStore } from '@/stores/pricing'
 import ModelCard from '@/components/model/ModelCard.vue'
 import ModelCompareDialog from '@/components/model/ModelCompareDialog.vue'
-import CacheWindowDialog from '@/components/common/CacheWindowDialog.vue'
 import type { ModelBreakdown } from '@/types/database'
-import type { PricingData } from '@/types/pricing'
+import type { PricingData, TimePricingRule } from '@/types/pricing'
 
 const dbStore = useDatabaseStore()
 const filterStore = useFilterStore()
@@ -78,6 +68,7 @@ interface ModelCardData {
   totalCost: number
   cacheDurationSec: number
   hasTimePricing: boolean
+  timeRules: TimePricingRule[]
 }
 
 const modelCards = computed<ModelCardData[]>(() => {
@@ -102,6 +93,7 @@ const modelCards = computed<ModelCardData[]>(() => {
     const totalCost = pre?.modelCosts?.[mb.model] || 0
     const cacheDurationSec = cacheDurations[mb.model] || 0
     const hasTimePricing = pricing?.hasTimePricing || false
+    const timeRules = pricing?.timeRules || []
 
     return {
       modelData: mb,
@@ -109,7 +101,8 @@ const modelCards = computed<ModelCardData[]>(() => {
       costBreakdown,
       totalCost,
       cacheDurationSec,
-      hasTimePricing
+      hasTimePricing,
+      timeRules
     }
   })
 })
@@ -129,22 +122,6 @@ function onCompare(modelId: string): void {
   compareCostBreakdown.value = card.costBreakdown
   compareModelData.value = card.modelData
   showCompare.value = true
-}
-
-// 缓存窗口
-const showCacheWindows = ref(false)
-const cacheModelName = ref('')
-const cacheModelId = ref('')
-const cachePosX = ref(0)
-const cachePosY = ref(0)
-
-function onCacheWindows(modelId: string, event: MouseEvent): void {
-  const card = modelCards.value.find(c => c.modelData.model === modelId)
-  cacheModelName.value = card?.pricing?.displayName || modelId
-  cacheModelId.value = modelId
-  cachePosX.value = event.clientX
-  cachePosY.value = event.clientY
-  showCacheWindows.value = true
 }
 
 // 跳转到定价 Tab 设置定价

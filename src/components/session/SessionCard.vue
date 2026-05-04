@@ -84,7 +84,8 @@ const modelBreakdownWithCosts = computed(() =>
     outputCost: m.outputCost,
     cacheReadCost: m.cacheReadCost,
     cacheCreationCost: m.cacheCreationCost,
-    totalCost: m.cost
+    totalCost: m.cost,
+    totalTokens: (m.inputTokens || 0) + (m.outputTokens || 0) + (m.cacheReadTokens || 0) + (m.cacheCreationTokens || 0)
   }))
 )
 

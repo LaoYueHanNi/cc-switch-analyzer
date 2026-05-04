@@ -103,4 +103,25 @@ html, body {
 body {
   zoom: 1.1;
 }
+
+/* 隐藏滚动条 */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-main);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* 全局缩小下拉菜单 */
+.n-base-selection-option__content {
+  font-size: 11px !important;
+}
 </style>

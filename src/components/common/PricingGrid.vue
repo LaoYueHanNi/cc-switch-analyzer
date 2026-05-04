@@ -1,16 +1,12 @@
 <template>
   <div class="pricing-grid">
-    <div
-      v-for="item in items"
-      :key="item.label"
-      class="pricing-row"
-    >
+    <template v-for="item in items" :key="item.label">
       <span class="pricing-dot" :style="{ backgroundColor: item.color }" />
       <span class="pricing-label">{{ item.label }}</span>
       <span class="pricing-tokens">{{ item.tokens }}</span>
       <span class="pricing-cost">{{ item.cost }}</span>
       <span class="pricing-rate">{{ item.rate }}</span>
-    </div>
+    </template>
   </div>
 </template>
 
@@ -78,35 +74,25 @@ const items = computed<PricingItem[]>(() => [
 
 <style scoped>
 .pricing-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: 6px auto 1fr auto auto;
+  gap: 2px 4px;
   font-size: 11px;
-}
-
-.pricing-row {
-  display: flex;
   align-items: center;
-  gap: 4px;
-  min-width: 0;
 }
 
 .pricing-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  flex-shrink: 0;
 }
 
 .pricing-label {
-  flex: 0 0 auto;
-  min-width: 28px;
   color: var(--text-tertiary);
+  white-space: nowrap;
 }
 
 .pricing-tokens {
-  flex: 1;
-  min-width: 0;
   color: var(--text-primary);
   text-align: right;
   white-space: nowrap;
@@ -115,19 +101,15 @@ const items = computed<PricingItem[]>(() => [
 }
 
 .pricing-cost {
-  flex: 1;
-  min-width: 0;
   color: var(--color-cost);
   text-align: right;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .pricing-rate {
-  flex: 0 0 auto;
   color: var(--text-muted);
   font-size: 10px;
+  text-align: right;
   white-space: nowrap;
 }
 </style>

@@ -5,9 +5,10 @@
       <n-select
         v-model:value="sortBy"
         :options="sortOptions"
-        size="small"
-        style="width: 140px"
+        size="tiny"
+        style="width: 120px"
         placeholder="排序方式"
+        teleport-disabled
       />
     </div>
 
@@ -110,7 +111,7 @@ watch(() => dbStore.refreshVersion, () => { if (dbStore.hasDatabase) loadData() 
 }
 
 .session-toolbar {
-  padding: 8px 0;
+  padding: 2px 0 6px;
 }
 
 .tab-loading,
