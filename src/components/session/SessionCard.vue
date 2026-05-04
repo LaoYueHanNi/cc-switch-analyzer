@@ -3,6 +3,8 @@
     <!-- 区域一：概览信息 -->
     <div class="session-overview">
       <div class="session-id" :title="sessionId">{{ shortId }}</div>
+      <div class="session-project" v-if="project" :title="project">{{ project }}</div>
+      <div class="session-title" v-if="title" :title="title">{{ truncateText(title, 20) }}</div>
       <div class="session-cost">{{ formatCost(totalCost) }}</div>
       <div class="session-tokens">{{ formatNum(totalTokens) }} Token</div>
       <div class="session-meta">
@@ -44,6 +46,8 @@ import ModelBreakdown from '@/components/session/ModelBreakdown.vue'
 
 const props = defineProps<{
   sessionId: string
+  title?: string
+  project?: string
   totalCost: number
   totalTokens: number
   requestCount: number
@@ -89,6 +93,11 @@ const modelBreakdownWithCosts = computed(() =>
   }))
 )
 
+function truncateText(text: string, max: number): string {
+  if (text.length <= max) return text
+  return text.slice(0, max) + '…'
+}
+
 function formatRange(start: number, end: number): string {
   return `${epochToDateTimeStr(start)} ~ ${epochToDateTimeStr(end).split(' ')[1]}`
 }
@@ -108,16 +117,35 @@ function formatRange(start: number, end: number): string {
 }
 
 .session-overview {
-  min-width: 140px;
-  flex: 0 0 auto;
+  width: 160px;
+  flex-shrink: 0;
 }
 
 .session-id {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   cursor: default;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-project {
+  font-size: 10px;
+  color: var(--text-faint);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-title {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  margin-bottom: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

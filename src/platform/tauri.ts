@@ -100,5 +100,8 @@ export const platformAdapter: PlatformAdapter = {
   },
   async refreshPricing() {
     return invoke('refresh_pricing')
+  },
+  async getSessionTitles(sessionIds: string[]) {
+    return invoke<Record<string, { title: string; project: string }>>('get_session_titles', { sessionIds })
   }
 }

@@ -62,6 +62,7 @@ const api = {
   }) => ipcRenderer.invoke('pricing:update-time-rule', data),
   deleteTimePricingRule: (id: number) => ipcRenderer.invoke('pricing:delete-time-rule', id),
   refreshPricing: () => ipcRenderer.invoke('pricing:refresh'),
+  getSessionTitles: (sessionIds: string[]) => ipcRenderer.invoke('session-title:get-titles', sessionIds),
 
   // 对话框
   openFileDialog: (filters?: { name: string; extensions: string[] }[]) =>

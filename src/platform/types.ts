@@ -72,4 +72,5 @@ export interface PlatformAdapter {
   updateTimePricingRule(data: UpdateTimePricingRuleData): Promise<void>
   deleteTimePricingRule(id: number): Promise<void>
   refreshPricing(): Promise<void>
+  getSessionTitles(sessionIds: string[]): Promise<Record<string, { title: string; project: string }>>
 }

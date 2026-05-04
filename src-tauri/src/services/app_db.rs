@@ -1,4 +1,5 @@
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::models::*;
@@ -49,6 +50,12 @@ impl AppDbService {
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
                     updated_at INTEGER DEFAULT (strftime('%s','now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS session_titles (
+                    session_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    created_at INTEGER DEFAULT (strftime('%s','now'))
                 );",
             )
             .map_err(|e| format!("初始化数据库表失败: {}", e))?;
@@ -249,6 +256,41 @@ impl AppDbService {
                 params![id],
             )
             .map_err(|e| format!("删除时间定价失败: {}", e))?;
+        Ok(())
+    }
+
+    // ========== 会话标题 ==========
+
+    pub fn get_session_titles(&self, session_ids: &[String]) -> Result<HashMap<String, String>, String> {
+        if session_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "SELECT session_id, title FROM session_titles WHERE session_id IN ({})",
+            placeholders.join(",")
+        );
+        let refs: Vec<&dyn rusqlite::types::ToSql> = session_ids
+            .iter()
+            .map(|s| s as &dyn rusqlite::types::ToSql)
+            .collect();
+        let mut stmt = self.db.prepare(&sql).map_err(|e| format!("查询会话标题失败: {}", e))?;
+        let rows = stmt.query_map(refs.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }).map_err(|e| format!("查询会话标题失败: {}", e))?;
+        let mut result = HashMap::new();
+        for row in rows {
+            let (sid, title) = row.map_err(|e| format!("读取会话标题失败: {}", e))?;
+            result.insert(sid, title);
+        }
+        Ok(result)
+    }
+
+    pub fn save_session_title(&self, session_id: &str, title: &str) -> Result<(), String> {
+        self.db.execute(
+            "INSERT OR REPLACE INTO session_titles (session_id, title, created_at) VALUES (?, ?, strftime('%s','now'))",
+            params![session_id, title],
+        ).map_err(|e| format!("保存会话标题失败: {}", e))?;
         Ok(())
     }
 }

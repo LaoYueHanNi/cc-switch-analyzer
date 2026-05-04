@@ -71,6 +71,12 @@ export class AppDbService {
         value TEXT NOT NULL,
         updated_at INTEGER DEFAULT (strftime('%s','now'))
       );
+
+      CREATE TABLE IF NOT EXISTS session_titles (
+        session_id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        created_at INTEGER DEFAULT (strftime('%s','now'))
+      );
     `)
   }
 
@@ -191,5 +197,24 @@ export class AppDbService {
 
   deleteTimeOverride(id: number): void {
     this.db.prepare('DELETE FROM time_pricing_overrides WHERE id = ?').run(id)
+  }
+
+  // ========== 会话标题 ==========
+
+  getSessionTitles(sessionIds: string[]): Map<string, string> {
+    if (sessionIds.length === 0) return new Map()
+    const placeholders = sessionIds.map(() => '?').join(',')
+    const rows = this.db.prepare(
+      `SELECT session_id, title FROM session_titles WHERE session_id IN (${placeholders})`
+    ).all(...sessionIds) as { session_id: string; title: string }[]
+    const result = new Map<string, string>()
+    for (const row of rows) { result.set(row.session_id, row.title) }
+    return result
+  }
+
+  saveSessionTitle(sessionId: string, title: string): void {
+    this.db.prepare(
+      'INSERT OR REPLACE INTO session_titles (session_id, title, created_at) VALUES (?, ?, strftime(\'%s\',\'now\'))'
+    ).run(sessionId, title)
   }
 }

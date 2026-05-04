@@ -64,5 +64,8 @@ export const platformAdapter: PlatformAdapter = {
   },
   async refreshPricing() {
     return window.api.refreshPricing()
+  },
+  async getSessionTitles(sessionIds: string[]) {
+    return window.api.getSessionTitles(sessionIds)
   }
 }

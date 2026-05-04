@@ -65,6 +65,8 @@ pub fn run() {
             commands::query::query_realtime_logs,
             commands::query::query_precompute,
             commands::query::query_sessions_with_cost,
+            // 会话标题
+            commands::session_title::get_session_titles,
             // 定价操作
             commands::pricing::get_exchange_rate,
             commands::pricing::set_exchange_rate,

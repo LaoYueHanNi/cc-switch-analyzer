@@ -26,6 +26,8 @@
         v-for="s in sessionCards"
         :key="s.sessionId"
         v-bind="s"
+        :title="getTitle(s.sessionId)"
+        :project="getProject(s.sessionId)"
       />
     </div>
   </div>
@@ -37,10 +39,12 @@ import { NSelect, NSpin } from 'naive-ui'
 import { platformAdapter } from '@/platform'
 import { useDatabaseStore } from '@/stores/database'
 import { useFilterStore } from '@/stores/filter'
+import { useSessionTitles } from '@/composables/useSessionTitles'
 import SessionCard from '@/components/session/SessionCard.vue'
 
 const dbStore = useDatabaseStore()
 const filterStore = useFilterStore()
+const { getTitle, getProject, fetchTitles } = useSessionTitles()
 const loading = ref(false)
 const sortBy = ref('totalCost')
 
@@ -90,6 +94,9 @@ async function loadData(): Promise<void> {
     const result = await platformAdapter.querySessionsWithCost(params)
     console.log('[SessionAnalysis] 会话结果数:', result?.length || 0)
     sessionsRaw.value = result || []
+    if (result && result.length > 0) {
+      fetchTitles(result.map((s: any) => s.sessionId).filter(Boolean))
+    }
   } catch (err: any) {
     console.error('[SessionAnalysis] 会话查询失败:', err.message || err)
     sessionsRaw.value = []

@@ -46,7 +46,9 @@
         <!-- Session 分组头 -->
         <div class="session-header" :class="{ 'session-new': groupHasNew(group) }" @click="toggleGroup(group.sessionId)">
           <span class="sh-arrow" :class="{ collapsed: collapsedSessions.has(group.sessionId) }">▾</span>
+          <span class="sh-project" v-if="getProject(group.sessionId)" :title="getProject(group.sessionId)">{{ getProject(group.sessionId) }}</span>
           <span class="sh-id">{{ shortSession(group.sessionId) }}</span>
+          <span class="sh-title" v-if="getTitle(group.sessionId)" :title="getTitle(group.sessionId)">{{ getTitle(group.sessionId) }}</span>
           <span class="sh-count">{{ group.rows.length }} 次</span>
           <span class="sh-cost">{{ formatCost(group.cost) }}</span>
           <span class="sh-time">{{ formatTime(group.rows[0].createdAt) }} ~ {{ formatTime(group.rows[group.rows.length - 1].createdAt).split(' ').pop() }}</span>
@@ -106,11 +108,13 @@
 import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useRealtimePolling } from '@/composables/useRealtimePolling'
+import { useSessionTitles } from '@/composables/useSessionTitles'
 import { formatNum, formatCost, formatPercent } from '@/utils/format'
 import type { RealtimeRequestLog } from '@/types/database'
 
 const dbStore = useDatabaseStore()
 const { logs, lastRefreshTime, startPolling, stopPolling, refreshNow } = useRealtimePolling()
+const { getTitle, getProject, fetchTitles } = useSessionTitles()
 
 const collapsedSessions = ref<Set<string>>(new Set())
 
@@ -199,6 +203,11 @@ function formatLatency(ms: number): string {
   return ms + 'ms'
 }
 
+watch(logs, () => {
+  const ids = [...new Set(logs.value.map(r => r.sessionId).filter(Boolean))]
+  if (ids.length > 0) fetchTitles(ids)
+})
+
 onMounted(() => {
   if (dbStore.hasDatabase) startPolling()
 })
@@ -255,8 +264,8 @@ watch(() => dbStore.hasDatabase, (val) => {
 
 /* Session 分组头 */
 .session-header {
-  display: flex; align-items: center; gap: 8px;
-  padding: 5px 10px;
+  display: flex; align-items: center;
+  padding: 5px 10px; gap: 6px;
   background: var(--bg-card-alt);
   border-bottom: 1px solid var(--border-main);
   border-top: 1px solid var(--border-main);
@@ -267,13 +276,36 @@ watch(() => dbStore.hasDatabase, (val) => {
 .session-header:hover { background: var(--bg-hover); }
 .session-new { animation: row-flash 1.5s ease-out; }
 .sh-arrow {
+  width: 14px; flex-shrink: 0;
   font-size: 10px; color: var(--text-muted); transition: transform 0.15s;
 }
 .sh-arrow.collapsed { transform: rotate(-90deg); }
-.sh-id { font-size: 12px; font-weight: 700; color: var(--color-blue); }
-.sh-count { font-size: 10px; color: var(--text-muted); }
-.sh-cost { font-size: 11px; font-weight: 600; color: var(--color-cost); }
-.sh-time { font-size: 10px; color: var(--text-faint); margin-left: auto; }
+.sh-project {
+  width: 100px; flex-shrink: 0;
+  font-size: 10px; color: var(--text-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sh-id {
+  width: 65px; flex-shrink: 0;
+  font-size: 12px; font-weight: 700; color: var(--color-blue);
+}
+.sh-title {
+  flex: 1; min-width: 0;
+  font-size: 11px; color: var(--text-secondary); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sh-count {
+  width: 45px; flex-shrink: 0; text-align: right;
+  font-size: 10px; color: var(--text-muted);
+}
+.sh-cost {
+  width: 70px; flex-shrink: 0; text-align: right;
+  font-size: 11px; font-weight: 600; color: var(--color-cost);
+}
+.sh-time {
+  width: 120px; flex-shrink: 0; text-align: right;
+  font-size: 10px; color: var(--text-faint);
+}
 
 .session-body {
   border-bottom: 1px solid var(--border-main);

@@ -4,6 +4,7 @@ import { PricingEngine } from '../services/pricing-engine'
 import { registerDatabaseIPC, setExternalDb, setPricingEngineForDb } from './database.ipc'
 import { registerDialogIPC, setExternalDbForDialog, setPricingEngineForDialog } from './dialog.ipc'
 import { registerPricingIPC } from './pricing.ipc'
+import { registerSessionTitleIPC } from './session-title.ipc'
 
 // 全局服务实例
 let externalDb: ExternalDbService
@@ -28,6 +29,7 @@ export function initIPC(): { externalDb: ExternalDbService; appDb: AppDbService;
   registerDialogIPC()
   registerDatabaseIPC()
   registerPricingIPC(appDb, pricingEngine, () => externalDb)
+  registerSessionTitleIPC(appDb)
 
   return { externalDb, appDb, pricingEngine }
 }
