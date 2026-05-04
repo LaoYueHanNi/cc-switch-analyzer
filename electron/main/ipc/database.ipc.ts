@@ -129,6 +129,27 @@ export function registerDatabaseIPC(): void {
     return externalDb.getMinuteLevelTokenTrend()
   })
 
+  ipcMain.handle('query:realtime-logs', () => {
+    if (!externalDb || !externalDb.isOpen) throw new Error('数据库未打开')
+    if (!pricingEngine) throw new Error('定价引擎未初始化')
+    const raw = externalDb.getRecentRequestLogsRaw()
+    return raw.map(r => {
+      const p = pricingEngine!.getPricingAt(r.model, r.createdAt)
+      const inputCost = p ? r.inputTokens * p.inputCostPerMillion / 1_000_000 : 0
+      const outputCost = p ? r.outputTokens * p.outputCostPerMillion / 1_000_000 : 0
+      const cacheReadCost = p ? r.cacheReadTokens * p.cacheReadCostPerMillion / 1_000_000 : 0
+      const cacheCreationCost = p ? r.cacheCreationTokens * p.cacheCreationCostPerMillion / 1_000_000 : 0
+      return {
+        ...r,
+        inputCost,
+        outputCost,
+        cacheReadCost,
+        cacheCreationCost,
+        totalCost: inputCost + outputCost + cacheReadCost + cacheCreationCost
+      }
+    })
+  })
+
   // ===== 预计算查询（组合查询 + 费用计算） =====
 
   ipcMain.handle('query:precompute', (_event, params: FilterParams) => {

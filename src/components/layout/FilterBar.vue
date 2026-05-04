@@ -139,7 +139,7 @@ async function onQuickDate(days: number): Promise<void> {
 <style scoped>
 .filter-bar {
   padding: 4px 12px 8px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--border-light);
 }
 
 .filter-row {
@@ -157,7 +157,7 @@ async function onQuickDate(days: number): Promise<void> {
 
 .filter-label {
   font-size: 12px;
-  color: #666;
+  color: var(--text-tertiary);
   white-space: nowrap;
 }
 

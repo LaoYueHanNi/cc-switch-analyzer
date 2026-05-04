@@ -23,6 +23,10 @@ function renderChart(): void {
     chart = echarts.init(chartRef.value)
   }
 
+  const cs = getComputedStyle(document.documentElement)
+  const textMuted = cs.getPropertyValue('--text-muted').trim()
+  const colorCost = cs.getPropertyValue('--color-cost').trim()
+
   const duration = props.endTime - props.startTime
   if (duration <= 0) return
 
@@ -46,7 +50,7 @@ function renderChart(): void {
       show: true,
       type: 'category',
       data: [startLabel, ...new Array(bucketCount - 2).fill(''), endLabel],
-      axisLabel: { fontSize: 9, color: '#999', interval: 0 },
+      axisLabel: { fontSize: 9, color: textMuted, interval: 0 },
       axisTick: { show: false },
       axisLine: { show: false }
     },
@@ -56,7 +60,7 @@ function renderChart(): void {
       data: buckets,
       smooth: true,
       showSymbol: false,
-      lineStyle: { color: '#e74c3c', width: 1.5 },
+      lineStyle: { color: colorCost, width: 1.5 },
       areaStyle: {
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
           { offset: 0, color: 'rgba(231,76,60,0.35)' },

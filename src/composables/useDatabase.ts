@@ -87,6 +87,7 @@ export function useDatabase() {
       const result = await platformAdapter.refreshDatabase()
       if (result.hasNew && result.recordCount != null) {
         dbStore.recordCount = result.recordCount
+        dbStore.refreshVersion++
       }
     } catch (err: any) {
       console.error('刷新失败:', err)

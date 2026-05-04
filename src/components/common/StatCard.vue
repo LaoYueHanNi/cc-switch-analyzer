@@ -20,15 +20,15 @@ defineProps<{
   flex-shrink: 0;
   min-width: 100px;
   padding: 6px 10px;
-  background: #fff;
+  background: var(--bg-card);
   border-radius: 4px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--border-main);
   border-left-width: 3px;
 }
 
 .stat-label {
   font-size: 11px;
-  color: #999;
+  color: var(--text-muted);
   white-space: nowrap;
 }
 
@@ -40,7 +40,7 @@ defineProps<{
 
 .stat-subtitle {
   font-size: 10px;
-  color: #bbb;
+  color: var(--text-faint);
   margin-top: 1px;
 }
 </style>

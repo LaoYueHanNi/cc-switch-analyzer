@@ -59,6 +59,7 @@ export interface PlatformAdapter {
   queryByProvider(params: FilterParams): Promise<any>
   queryPrecompute(params: FilterParams): Promise<any>
   queryRealtime(): Promise<any>
+  queryRealtimeLogs(): Promise<any>
   queryCacheWindows(modelId: string): Promise<any[]>
   querySessionsWithCost(params: FilterParams): Promise<any[]>
   // 定价

@@ -83,6 +83,7 @@ async function loadData(): Promise<void> {
 
 watch(() => filterStore.filterParams, () => loadData(), { deep: true })
 watch(() => dbStore.hasDatabase, (val) => { if (val) loadData() }, { immediate: true })
+watch(() => dbStore.refreshVersion, () => { if (dbStore.hasDatabase) loadData() })
 </script>
 
 <style scoped>
@@ -97,7 +98,7 @@ watch(() => dbStore.hasDatabase, (val) => { if (val) loadData() }, { immediate: 
   align-items: center;
   justify-content: center;
   padding: 60px 0;
-  color: #999;
+  color: var(--text-muted);
   gap: 12px;
 }
 

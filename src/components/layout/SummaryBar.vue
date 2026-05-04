@@ -90,15 +90,15 @@ const items = computed(() => {
   flex-shrink: 0;
   min-width: 110px;
   padding: 6px 10px;
-  background: #fff;
+  background: var(--bg-card);
   border-radius: 4px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--border-main);
   border-left-width: 3px;
 }
 
 .summary-label {
   font-size: 11px;
-  color: #999;
+  color: var(--text-muted);
   white-space: nowrap;
 }
 

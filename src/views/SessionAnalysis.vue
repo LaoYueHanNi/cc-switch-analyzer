@@ -99,6 +99,7 @@ async function loadData(): Promise<void> {
 
 watch(() => dbStore.hasDatabase, (val) => { if (val) loadData() }, { immediate: true })
 watch(() => filterStore.filterParams, () => loadData(), { deep: true })
+watch(() => dbStore.refreshVersion, () => { if (dbStore.hasDatabase) loadData() })
 </script>
 
 <style scoped>
@@ -119,7 +120,7 @@ watch(() => filterStore.filterParams, () => loadData(), { deep: true })
   align-items: center;
   justify-content: center;
   padding: 60px 0;
-  color: #999;
+  color: var(--text-muted);
   gap: 12px;
   flex: 1;
 }

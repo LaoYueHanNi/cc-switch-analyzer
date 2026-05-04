@@ -165,7 +165,7 @@ watch(() => props.show, (val) => {
 
 .compare-desc {
   font-size: 13px;
-  color: #666;
+  color: var(--text-tertiary);
   margin-bottom: 12px;
 }
 
@@ -187,13 +187,13 @@ watch(() => props.show, (val) => {
 
 .cost-label-text {
   font-size: 12px;
-  color: #999;
+  color: var(--text-muted);
 }
 
 .cost-num {
   font-size: 18px;
   font-weight: 600;
-  color: #e74c3c;
+  color: var(--color-cost);
 }
 
 .cost-diff {
@@ -202,11 +202,11 @@ watch(() => props.show, (val) => {
 }
 
 .cost-diff.increase {
-  color: #e74c3c;
+  color: var(--color-cost);
 }
 
 .cost-diff.decrease {
-  color: #27ae60;
+  color: var(--color-green);
 }
 
 .breakdown-compare {
@@ -221,7 +221,7 @@ watch(() => props.show, (val) => {
   gap: 4px;
   padding: 2px 8px;
   font-size: 10px;
-  color: #999;
+  color: var(--text-muted);
 }
 
 .ch-dot { width: 8px; }
@@ -236,7 +236,7 @@ watch(() => props.show, (val) => {
   gap: 4px;
   font-size: 12px;
   padding: 4px 8px;
-  background: #eef5ff;
+  background: var(--color-blue-bg);
   border-radius: 4px;
 }
 
@@ -249,39 +249,39 @@ watch(() => props.show, (val) => {
 
 .compare-label {
   width: 52px;
-  color: #666;
+  color: var(--text-tertiary);
   flex-shrink: 0;
 }
 
 .compare-rate {
   min-width: 52px;
-  color: #999;
+  color: var(--text-muted);
   font-size: 10px;
   text-align: right;
 }
 
 .compare-cost {
-  color: #e74c3c;
+  color: var(--color-cost);
   min-width: 52px;
   text-align: right;
 }
 
 .compare-arrow {
   width: 16px;
-  color: #999;
+  color: var(--text-muted);
   text-align: center;
   flex-shrink: 0;
 }
 
 .compare-rate-target {
   min-width: 52px;
-  color: #6ba3d6;
+  color: var(--color-blue);
   font-size: 10px;
   text-align: right;
 }
 
 .compare-cost-compare {
-  color: #2980b9;
+  color: var(--color-blue);
   min-width: 52px;
   font-weight: 600;
   text-align: right;
@@ -294,11 +294,11 @@ watch(() => props.show, (val) => {
 }
 
 .compare-diff-small.increase {
-  color: #e74c3c;
+  color: var(--color-cost);
 }
 
 .compare-diff-small.decrease {
-  color: #27ae60;
+  color: var(--color-green);
 }
 
 .compare-actions {

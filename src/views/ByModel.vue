@@ -199,6 +199,11 @@ watch(() => dbStore.hasDatabase, (val) => {
 watch(() => pricingStore.exchangeRate, () => {
   if (dbStore.hasDatabase) loadData()
 })
+
+// 全局刷新触发
+watch(() => dbStore.refreshVersion, () => {
+  if (dbStore.hasDatabase) loadData()
+})
 </script>
 
 <style scoped>
@@ -213,7 +218,7 @@ watch(() => pricingStore.exchangeRate, () => {
   align-items: center;
   justify-content: center;
   padding: 60px 0;
-  color: #999;
+  color: var(--text-muted);
   gap: 12px;
 }
 

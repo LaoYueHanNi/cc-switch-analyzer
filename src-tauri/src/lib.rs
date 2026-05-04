@@ -62,6 +62,7 @@ pub fn run() {
             commands::query::query_session_request_tokens,
             commands::query::query_session_timestamps,
             commands::query::query_realtime,
+            commands::query::query_realtime_logs,
             commands::query::query_precompute,
             commands::query::query_sessions_with_cost,
             // 定价操作

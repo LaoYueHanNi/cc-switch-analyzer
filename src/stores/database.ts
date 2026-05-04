@@ -8,6 +8,7 @@ export const useDatabaseStore = defineStore('database', () => {
   const isLoading = ref(false)
   const isLoaded = ref(false)
   const error = ref('')
+  const refreshVersion = ref(0)
 
   const hasDatabase = computed(() => isLoaded.value && dbPath.value !== '')
 
@@ -43,6 +44,7 @@ export const useDatabaseStore = defineStore('database', () => {
     isLoaded,
     error,
     hasDatabase,
+    refreshVersion,
     setLoading,
     setLoaded,
     setError,

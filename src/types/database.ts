@@ -69,3 +69,19 @@ export interface RealtimeBucket {
   cacheRead: number
   cacheCreation: number
 }
+
+export interface RealtimeRequestLog {
+  model: string
+  providerId: string
+  createdAt: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  latencyMs: number
+  inputCost: number
+  outputCost: number
+  cacheReadCost: number
+  cacheCreationCost: number
+  totalCost: number
+}

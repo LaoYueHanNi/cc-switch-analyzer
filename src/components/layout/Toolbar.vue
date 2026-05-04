@@ -1,6 +1,11 @@
 <template>
   <div class="toolbar">
     <div class="toolbar-left">
+      <n-button size="tiny" quaternary @click="themeStore.toggle()" :title="themeStore.isDark ? '切换亮色' : '切换暗色'">
+        <template #icon>
+          <n-icon size="16"><sunny-outline v-if="themeStore.isDark" /><moon-outline v-else /></n-icon>
+        </template>
+      </n-button>
       <n-button size="small" type="primary" @click="onSelectDb">
         <template #icon>
           <n-icon><folder-open-outline /></n-icon>
@@ -29,13 +34,14 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { NButton, NSelect, NIcon } from 'naive-ui'
-import { FolderOpenOutline } from '@vicons/ionicons5'
+import { FolderOpenOutline, MoonOutline, SunnyOutline } from '@vicons/ionicons5'
 import { useDatabaseStore } from '@/stores/database'
 import { useDatabase } from '@/composables/useDatabase'
-
+import { useThemeStore } from '@/stores/theme'
 const dbStore = useDatabaseStore()
+const themeStore = useThemeStore()
 const { selectDatabase, refreshDatabase } = useDatabase()
-const refreshInterval = ref('manual')
+const refreshInterval = ref('30s')
 
 const intervalOptions = [
   { label: '手动', value: 'manual' },
@@ -96,7 +102,7 @@ watch(refreshInterval, (val) => {
 
 .db-path {
   font-size: 12px;
-  color: #666;
+  color: var(--text-tertiary);
   max-width: 500px;
   overflow: hidden;
   text-overflow: ellipsis;

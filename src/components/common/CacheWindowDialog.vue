@@ -135,8 +135,8 @@ watch(() => props.show, (val) => {
 .cache-popup {
   position: fixed;
   z-index: 1000;
-  background: #fff;
-  border: 1px solid #ddd;
+  background: var(--bg-card);
+  border: 1px solid var(--border-main);
   border-radius: 6px;
   padding: 10px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
@@ -146,7 +146,7 @@ watch(() => props.show, (val) => {
 .cache-title {
   font-size: 12px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
   margin-bottom: 6px;
   white-space: nowrap;
   overflow: hidden;
@@ -154,7 +154,7 @@ watch(() => props.show, (val) => {
 }
 
 .cache-loading {
-  color: #999;
+  color: var(--text-muted);
   font-size: 12px;
   padding: 8px 0;
 }
@@ -166,22 +166,22 @@ watch(() => props.show, (val) => {
 
 .cache-table th {
   text-align: left;
-  color: #999;
+  color: var(--text-muted);
   font-weight: 500;
   padding: 2px 8px 2px 0;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--border-faint);
   font-size: 10px;
 }
 
 .cache-table td {
   padding: 3px 8px 3px 0;
-  color: #444;
-  border-bottom: 1px solid #f5f5f5;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--bg-base);
   white-space: nowrap;
 }
 
 .dur {
-  color: #16a085;
+  color: var(--color-green);
   font-weight: 500;
 }
 
@@ -190,7 +190,7 @@ watch(() => props.show, (val) => {
 }
 
 .empty-hint {
-  color: #999;
+  color: var(--text-muted);
   font-size: 12px;
   padding: 8px 0;
 }

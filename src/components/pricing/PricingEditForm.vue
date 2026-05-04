@@ -59,7 +59,7 @@ const cacheCreation = ref(props.currentPricing.cacheCreation)
 
 .edit-label {
   font-size: 11px;
-  color: #666;
+  color: var(--text-tertiary);
   white-space: nowrap;
 }
 

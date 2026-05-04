@@ -21,9 +21,9 @@ defineProps<{
 
 <style scoped>
 .provider-card {
-  background: #fff;
+  background: var(--bg-card);
   border-radius: 6px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--border-main);
   padding: 10px;
   min-width: 0;
   overflow: hidden;
@@ -37,7 +37,7 @@ defineProps<{
 .provider-name {
   font-size: 13px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
   margin-bottom: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -54,17 +54,17 @@ defineProps<{
 .cost-value {
   font-size: 17px;
   font-weight: 700;
-  color: #e74c3c;
+  color: var(--color-cost);
 }
 
 .cost-label {
   font-size: 10px;
-  color: #999;
+  color: var(--text-muted);
 }
 
 .request-count {
   font-size: 11px;
-  color: #666;
+  color: var(--text-tertiary);
   margin-bottom: 2px;
 }
 </style>

@@ -99,9 +99,9 @@ function formatRange(start: number, end: number): string {
   flex-wrap: wrap;
   gap: 12px;
   padding: 12px;
-  background: #fff;
+  background: var(--bg-card);
   border-radius: 8px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--border-main);
   margin-bottom: 10px;
   align-items: center;
 }
@@ -114,7 +114,7 @@ function formatRange(start: number, end: number): string {
 .session-id {
   font-size: 13px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
   margin-bottom: 4px;
   cursor: default;
   overflow: hidden;
@@ -125,12 +125,12 @@ function formatRange(start: number, end: number): string {
 .session-cost {
   font-size: 18px;
   font-weight: 700;
-  color: #e74c3c;
+  color: var(--color-cost);
 }
 
 .session-tokens {
   font-size: 14px;
-  color: #16a085;
+  color: var(--color-green);
   font-weight: 600;
 }
 
@@ -139,7 +139,7 @@ function formatRange(start: number, end: number): string {
 .session-context,
 .session-cache {
   font-size: 11px;
-  color: #888;
+  color: var(--text-muted);
   margin-top: 2px;
 }
 

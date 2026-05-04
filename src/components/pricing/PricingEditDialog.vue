@@ -79,7 +79,7 @@ watch(() => props.show, (val) => {
 
 .edit-label {
   font-size: 12px;
-  color: #555;
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 

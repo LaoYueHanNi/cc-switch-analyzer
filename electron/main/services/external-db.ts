@@ -83,6 +83,22 @@ export interface RealtimeBucket {
   cacheCreation: number
 }
 
+export interface RealtimeRequestLog {
+  model: string
+  providerId: string
+  createdAt: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  latencyMs: number
+  inputCost: number
+  outputCost: number
+  cacheReadCost: number
+  cacheCreationCost: number
+  totalCost: number
+}
+
 export interface SessionBreakdown {
   sessionId: string
   requests: number
@@ -526,5 +542,17 @@ export class ExternalDbService {
       GROUP BY bucket
       ORDER BY bucket
     `).all(oneHourAgo) as RealtimeBucket[]
+  }
+
+  getRecentRequestLogsRaw(): { model: string; providerId: string; createdAt: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number; latencyMs: number }[] {
+    return this.getDb().prepare(`
+      SELECT model, provider_id AS providerId, created_at AS createdAt,
+             input_tokens AS inputTokens, output_tokens AS outputTokens,
+             cache_read_tokens AS cacheReadTokens, cache_creation_tokens AS cacheCreationTokens,
+             latency_ms AS latencyMs
+      FROM proxy_request_logs
+      ORDER BY created_at DESC
+      LIMIT 100
+    `).all() as any[]
   }
 }

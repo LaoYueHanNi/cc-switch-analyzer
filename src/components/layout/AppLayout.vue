@@ -13,7 +13,7 @@
 
     <!-- 无数据库提示（带选择按钮 + 错误信息） -->
     <div v-else-if="!dbStore.isLoaded" class="overlay no-db-overlay">
-      <n-icon size="48" color="#ccc"><server-outline /></n-icon>
+      <n-icon size="48" :color="themeStore.isDark ? '#666' : '#ccc'"><server-outline /></n-icon>
       <p class="overlay-text">请选择 CC-Switch 数据库文件</p>
       <n-button type="primary" size="medium" @click="onSelectDb">
         <template #icon>
@@ -63,6 +63,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { NSpin, NTabs, NTabPane, NButton, NIcon } from 'naive-ui'
 import { FolderOpenOutline, ServerOutline } from '@vicons/ionicons5'
 import { useDatabaseStore } from '@/stores/database'
+import { useThemeStore } from '@/stores/theme'
 import { useDatabase } from '@/composables/useDatabase'
 import Toolbar from './Toolbar.vue'
 import FilterBar from './FilterBar.vue'
@@ -71,6 +72,7 @@ import SummaryBar from './SummaryBar.vue'
 const router = useRouter()
 const route = useRoute()
 const dbStore = useDatabaseStore()
+const themeStore = useThemeStore()
 const { selectDatabase, autoLoadDatabase } = useDatabase()
 
 // 当前活跃的Tab名称
@@ -95,7 +97,7 @@ onMounted(async () => {
 
 <style scoped>
 .app-layout {
-  height: 100vh;
+  height: calc(100vh / 1.1);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -104,8 +106,8 @@ onMounted(async () => {
 /* 工具栏区域 */
 .top-area {
   flex-shrink: 0;
-  background: #fff;
-  border-bottom: 1px solid #e8e8e8;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border-main);
 }
 
 /* 遮罩层 */
@@ -119,21 +121,21 @@ onMounted(async () => {
 }
 
 .loading-overlay {
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--bg-card);
 }
 
 .no-db-overlay {
-  background: #f5f5f5;
+  background: var(--bg-base);
 }
 
 .overlay-text {
   font-size: 16px;
-  color: #666;
+  color: var(--text-tertiary);
 }
 
 .error-text {
   font-size: 13px;
-  color: #e74c3c;
+  color: var(--color-cost);
   max-width: 500px;
   text-align: center;
   word-break: break-all;
@@ -143,15 +145,15 @@ onMounted(async () => {
 .main-tabs {
   flex-shrink: 0;
   padding: 0 12px;
-  background: #fff;
-  border-bottom: 1px solid #f0f0f0;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border-light);
 }
 
 /* 内容区域 */
 .content-area {
   flex: 1;
   overflow: auto;
-  background: #f5f5f5;
+  background: var(--bg-base);
   padding: 12px 16px;
 }
 </style>

@@ -106,6 +106,47 @@ pub fn query_realtime(state: State<AppState>) -> Result<Vec<RealtimeBucket>, Str
 }
 
 #[tauri::command]
+pub fn query_realtime_logs(state: State<AppState>) -> Result<Vec<RealtimeRequestLog>, String> {
+    let ext_db = state.external_db.lock().map_err(|e| e.to_string())?;
+    require_db!(ext_db);
+    let raw = ext_db.get_recent_request_logs_raw()?;
+    drop(ext_db);
+
+    let pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
+
+    let result: Vec<RealtimeRequestLog> = raw.into_iter().map(|(model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms)| {
+        let (input_cost, output_cost, cache_read_cost, cache_creation_cost) =
+            if let Some(p) = pricing.get_pricing_at(&model, created_at) {
+                (
+                    input_tokens as f64 * p.input_cost_per_million / 1_000_000.0,
+                    output_tokens as f64 * p.output_cost_per_million / 1_000_000.0,
+                    cache_read_tokens as f64 * p.cache_read_cost_per_million / 1_000_000.0,
+                    cache_creation_tokens as f64 * p.cache_creation_cost_per_million / 1_000_000.0,
+                )
+            } else {
+                (0.0, 0.0, 0.0, 0.0)
+            };
+        RealtimeRequestLog {
+            model,
+            provider_id,
+            created_at,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_creation_tokens,
+            latency_ms,
+            input_cost,
+            output_cost,
+            cache_read_cost,
+            cache_creation_cost,
+            total_cost: input_cost + output_cost + cache_read_cost + cache_creation_cost,
+        }
+    }).collect();
+
+    Ok(result)
+}
+
+#[tauri::command]
 pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<PrecomputeQueryResult, String> {
     eprintln!("[QUERY] query_precompute: params={:?}", params);
     let ext_db = state.external_db.lock().map_err(|e| e.to_string())?;

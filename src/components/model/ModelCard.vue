@@ -127,9 +127,9 @@ function getRateStr(field: RateField): string {
 
 <style scoped>
 .model-card {
-  background: #fff;
+  background: var(--bg-card);
   border-radius: 6px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--border-main);
   padding: 10px;
   min-width: 0;
   overflow: hidden;
@@ -151,7 +151,7 @@ function getRateStr(field: RateField): string {
 .model-name {
   font-size: 13px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -159,7 +159,7 @@ function getRateStr(field: RateField): string {
 
 .time-badge {
   font-size: 10px;
-  color: #f39c12;
+  color: var(--color-orange);
   display: flex;
   align-items: center;
   gap: 2px;
@@ -168,7 +168,7 @@ function getRateStr(field: RateField): string {
 .no-pricing {
   text-align: center;
   padding: 12px 0;
-  color: #999;
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -182,7 +182,7 @@ function getRateStr(field: RateField): string {
 .cost-value {
   font-size: 17px;
   font-weight: 700;
-  color: #e74c3c;
+  color: var(--color-cost);
   cursor: pointer;
   text-decoration: underline;
   text-decoration-style: dotted;
@@ -196,7 +196,7 @@ function getRateStr(field: RateField): string {
 
 .cost-label {
   font-size: 10px;
-  color: #999;
+  color: var(--text-muted);
 }
 
 .token-section {
@@ -209,12 +209,12 @@ function getRateStr(field: RateField): string {
 .token-value {
   font-size: 13px;
   font-weight: 600;
-  color: #16a085;
+  color: var(--color-green);
 }
 
 .token-label {
   font-size: 10px;
-  color: #999;
+  color: var(--text-muted);
 }
 
 .stats-row {
@@ -245,19 +245,19 @@ function getRateStr(field: RateField): string {
 }
 
 .stat-label {
-  color: #999;
+  color: var(--text-muted);
   font-size: 10px;
 }
 
 .stat-num {
-  color: #333;
+  color: var(--text-primary);
   font-weight: 500;
   font-size: 11px;
 }
 
 .request-count {
   font-size: 11px;
-  color: #bbb;
+  color: var(--text-faint);
   margin-bottom: 6px;
 }
 </style>

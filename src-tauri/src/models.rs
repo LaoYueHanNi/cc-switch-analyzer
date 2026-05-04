@@ -123,6 +123,24 @@ pub struct RealtimeBucket {
     pub cache_creation: i64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RealtimeRequestLog {
+    pub model: String,
+    pub provider_id: String,
+    pub created_at: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_creation_tokens: i64,
+    pub latency_ms: i64,
+    pub input_cost: f64,
+    pub output_cost: f64,
+    pub cache_read_cost: f64,
+    pub cache_creation_cost: f64,
+    pub total_cost: f64,
+}
+
 // ========== 会话分析 ==========
 
 #[derive(Debug, Clone, Serialize)]

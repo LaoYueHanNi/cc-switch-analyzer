@@ -354,7 +354,7 @@ watch(() => dbStore.hasDatabase, async (val) => {
 
 .pricing-toolbar {
   padding: 8px 0 12px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--border-light);
   margin-bottom: 12px;
 }
 
@@ -379,13 +379,13 @@ watch(() => dbStore.hasDatabase, async (val) => {
 
 .token-label {
   font-size: 11px;
-  color: #666;
+  color: var(--text-tertiary);
   white-space: nowrap;
 }
 
 .token-suffix {
   font-size: 11px;
-  color: #999;
+  color: var(--text-muted);
 }
 
 .rate-input {
@@ -397,7 +397,7 @@ watch(() => dbStore.hasDatabase, async (val) => {
 
 .rate-label {
   font-size: 12px;
-  color: #666;
+  color: var(--text-tertiary);
 }
 
 .pricing-section {
@@ -407,7 +407,7 @@ watch(() => dbStore.hasDatabase, async (val) => {
 .section-title {
   font-size: 14px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
   margin-bottom: 8px;
   display: flex;
   align-items: center;

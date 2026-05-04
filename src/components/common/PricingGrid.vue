@@ -101,13 +101,13 @@ const items = computed<PricingItem[]>(() => [
 .pricing-label {
   flex: 0 0 auto;
   min-width: 28px;
-  color: #666;
+  color: var(--text-tertiary);
 }
 
 .pricing-tokens {
   flex: 1;
   min-width: 0;
-  color: #333;
+  color: var(--text-primary);
   text-align: right;
   white-space: nowrap;
   overflow: hidden;
@@ -117,7 +117,7 @@ const items = computed<PricingItem[]>(() => [
 .pricing-cost {
   flex: 1;
   min-width: 0;
-  color: #e74c3c;
+  color: var(--color-cost);
   text-align: right;
   white-space: nowrap;
   overflow: hidden;
@@ -126,7 +126,7 @@ const items = computed<PricingItem[]>(() => [
 
 .pricing-rate {
   flex: 0 0 auto;
-  color: #999;
+  color: var(--text-muted);
   font-size: 10px;
   white-space: nowrap;
 }
