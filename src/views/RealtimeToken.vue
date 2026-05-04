@@ -2,7 +2,7 @@
   <div class="realtime-token">
     <!-- 顶部统计 -->
     <div class="realtime-stats">
-      <span class="stat-title">最近 100 条请求</span>
+      <span class="stat-title">最近 500 条请求</span>
       <div class="stat-items">
         <div class="realtime-stat">
           <span class="stat-label">总费用</span>
@@ -11,6 +11,26 @@
         <div class="realtime-stat">
           <span class="stat-label">总 Token</span>
           <span class="stat-value">{{ formatNum(totalTokens) }}</span>
+        </div>
+        <div class="realtime-stat">
+          <span class="stat-label" style="color: var(--color-purple)">输入费用</span>
+          <span class="stat-value" style="color: var(--color-purple)">{{ formatCost(totalInputCost) }}</span>
+        </div>
+        <div class="realtime-stat">
+          <span class="stat-label" style="color: var(--color-orange)">输出费用</span>
+          <span class="stat-value" style="color: var(--color-orange)">{{ formatCost(totalOutputCost) }}</span>
+        </div>
+        <div class="realtime-stat">
+          <span class="stat-label" style="color: var(--color-blue)">缓存读费用</span>
+          <span class="stat-value" style="color: var(--color-blue)">{{ formatCost(totalCacheReadCost) }}</span>
+        </div>
+        <div class="realtime-stat">
+          <span class="stat-label" style="color: var(--color-dark-orange)">缓存写费用</span>
+          <span class="stat-value" style="color: var(--color-dark-orange)">{{ formatCost(totalCacheCreationCost) }}</span>
+        </div>
+        <div class="realtime-stat">
+          <span class="stat-label">缓存命中率</span>
+          <span class="stat-value">{{ formatPercent(cacheHitRate) }}</span>
         </div>
       </div>
       <div class="live-badge" :class="{ 'live-pulse': hasNewData }">
@@ -32,7 +52,8 @@
           <span class="sh-time">{{ formatTime(group.rows[0].createdAt) }} ~ {{ formatTime(group.rows[group.rows.length - 1].createdAt).split(' ').pop() }}</span>
         </div>
         <template v-if="!collapsedSessions.has(group.sessionId)">
-        <!-- 表头（每组第一个显示） -->
+        <div class="session-body">
+        <!-- 表头 -->
         <div class="log-header">
           <span class="col-time">时间</span>
           <span class="col-model">模型</span>
@@ -45,6 +66,7 @@
           <span class="col-latency">延迟</span>
         </div>
         <!-- 数据行 -->
+        <div class="session-rows">
         <div class="log-row" :class="{ 'log-new': (row as any)._new }" v-for="(row, ri) in group.rows" :key="row.createdAt + row.model + ri">
           <span class="col-time">{{ formatTime(row.createdAt) }}</span>
           <span class="col-model" :title="row.model">{{ shortModel(row.model) }}</span>
@@ -68,6 +90,8 @@
           <span class="col-cost">{{ formatCost(row.totalCost) }}</span>
           <span class="col-latency">{{ formatLatency(row.latencyMs) }}</span>
         </div>
+        </div>
+        </div>
         </template>
       </template>
     </div>
@@ -82,7 +106,7 @@
 import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useRealtimePolling } from '@/composables/useRealtimePolling'
-import { formatNum, formatCost } from '@/utils/format'
+import { formatNum, formatCost, formatPercent } from '@/utils/format'
 import type { RealtimeRequestLog } from '@/types/database'
 
 const dbStore = useDatabaseStore()
@@ -112,6 +136,16 @@ const totalTokens = computed(() =>
     sum + r.inputTokens + r.outputTokens + r.cacheReadTokens + r.cacheCreationTokens, 0
   )
 )
+
+const totalInputCost = computed(() => logs.value.reduce((s, r) => s + r.inputCost, 0))
+const totalOutputCost = computed(() => logs.value.reduce((s, r) => s + r.outputCost, 0))
+const totalCacheReadCost = computed(() => logs.value.reduce((s, r) => s + r.cacheReadCost, 0))
+const totalCacheCreationCost = computed(() => logs.value.reduce((s, r) => s + r.cacheCreationCost, 0))
+const cacheHitRate = computed(() => {
+  const input = logs.value.reduce((s, r) => s + r.inputTokens, 0)
+  const cacheRead = logs.value.reduce((s, r) => s + r.cacheReadTokens, 0)
+  return (input + cacheRead) > 0 ? cacheRead / (input + cacheRead) : 0
+})
 
 interface SessionGroup {
   sessionId: string
@@ -241,11 +275,21 @@ watch(() => dbStore.hasDatabase, (val) => {
 .sh-cost { font-size: 11px; font-weight: 600; color: var(--color-cost); }
 .sh-time { font-size: 10px; color: var(--text-faint); margin-left: auto; }
 
+.session-body {
+  border-bottom: 1px solid var(--border-main);
+}
+
+.session-rows {
+  max-height: 270px;
+  overflow-y: auto;
+}
+
 .log-header {
   display: flex; align-items: center; padding: 4px 10px;
   font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px;
   border-bottom: 1px solid var(--border-faint);
   background: var(--bg-card);
+  position: sticky; top: 0; z-index: 1;
 }
 
 .log-row {

@@ -544,7 +544,18 @@ export class ExternalDbService {
     `).all(oneHourAgo) as RealtimeBucket[]
   }
 
-  getRecentRequestLogsRaw(): { sessionId: string; model: string; providerId: string; createdAt: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number; latencyMs: number }[] {
+  getRecentRequestLogsRaw(since?: number): { sessionId: string; model: string; providerId: string; createdAt: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number; latencyMs: number }[] {
+    if (since != null) {
+      return this.getDb().prepare(`
+        SELECT session_id AS sessionId, model, provider_id AS providerId, created_at AS createdAt,
+               input_tokens AS inputTokens, output_tokens AS outputTokens,
+               cache_read_tokens AS cacheReadTokens, cache_creation_tokens AS cacheCreationTokens,
+               latency_ms AS latencyMs
+        FROM proxy_request_logs
+        WHERE created_at > ?
+        ORDER BY created_at DESC
+      `).all(since) as any[]
+    }
     return this.getDb().prepare(`
       SELECT session_id AS sessionId, model, provider_id AS providerId, created_at AS createdAt,
              input_tokens AS inputTokens, output_tokens AS outputTokens,
@@ -552,7 +563,7 @@ export class ExternalDbService {
              latency_ms AS latencyMs
       FROM proxy_request_logs
       ORDER BY created_at DESC
-      LIMIT 100
+      LIMIT 500
     `).all() as any[]
   }
 }

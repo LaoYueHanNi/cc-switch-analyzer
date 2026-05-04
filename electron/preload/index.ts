@@ -22,7 +22,7 @@ const api = {
   querySessionRequestTokens: (params: any) => ipcRenderer.invoke('query:session-request-tokens', params),
   querySessionTimestamps: (sessionIds: string[]) => ipcRenderer.invoke('query:session-timestamps', sessionIds),
   queryRealtime: () => ipcRenderer.invoke('query:realtime'),
-  queryRealtimeLogs: () => ipcRenderer.invoke('query:realtime-logs'),
+  queryRealtimeLogs: (since?: number) => ipcRenderer.invoke('query:realtime-logs', since),
   queryPrecompute: (params: any) => ipcRenderer.invoke('query:precompute', params),
   querySessionsWithCost: (params: any) => ipcRenderer.invoke('query:sessions-with-cost', params),
 

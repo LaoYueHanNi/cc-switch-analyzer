@@ -53,8 +53,8 @@ export const platformAdapter: PlatformAdapter = {
   async queryRealtime() {
     return invoke('query_realtime')
   },
-  async queryRealtimeLogs() {
-    return invoke('query_realtime_logs')
+  async queryRealtimeLogs(since?: number) {
+    return invoke('query_realtime_logs', { since: since ?? null })
   },
   async queryCacheWindows(modelId: string) {
     return invoke('query_cache_windows', { modelId })

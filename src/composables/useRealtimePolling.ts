@@ -2,7 +2,8 @@ import { ref, onUnmounted } from 'vue'
 import { platformAdapter } from '@/platform'
 import type { RealtimeRequestLog } from '@/types/database'
 
-// 实时轮询 composable
+const MAX_LOGS = 500
+
 export function useRealtimePolling() {
   const logs = ref<RealtimeRequestLog[]>([])
   const lastRefreshTime = ref('')
@@ -27,21 +28,24 @@ export function useRealtimePolling() {
 
   async function fetchData(): Promise<void> {
     try {
-      const result = await platformAdapter.queryRealtimeLogs()
-      const data = result || []
-      // 标记上次最大时间戳（下次刷新用）
-      if (data.length > 0) {
-        const currentMax = data[0].createdAt
-        if (prevMaxCreatedAt === 0) prevMaxCreatedAt = currentMax
-        // 给新行打标
-        for (const row of data) {
-          if (row.createdAt > prevMaxCreatedAt) {
+      if (prevMaxCreatedAt === 0) {
+        // 首次：全量加载
+        const data: RealtimeRequestLog[] = await platformAdapter.queryRealtimeLogs() ?? []
+        if (data.length > 0) {
+          prevMaxCreatedAt = data[0].createdAt
+        }
+        logs.value = data
+      } else {
+        // 增量：只查 created_at > prevMax 的新行
+        const fresh: RealtimeRequestLog[] = await platformAdapter.queryRealtimeLogs(prevMaxCreatedAt) ?? []
+        if (fresh.length > 0) {
+          for (const row of fresh) {
             (row as any)._new = true
           }
+          logs.value = [...fresh, ...logs.value].slice(0, MAX_LOGS)
+          prevMaxCreatedAt = fresh[0].createdAt
         }
-        prevMaxCreatedAt = currentMax
       }
-      logs.value = data
       lastRefreshTime.value = new Date().toLocaleTimeString('zh-CN')
     } catch (err: any) {
       console.error('实时日志查询失败:', err)
@@ -49,6 +53,9 @@ export function useRealtimePolling() {
   }
 
   async function refreshNow(): Promise<void> {
+    // 强制全量刷新
+    prevMaxCreatedAt = 0
+    logs.value = []
     await fetchData()
   }
 

@@ -3,43 +3,42 @@
     <!-- 定价专用工具栏 -->
     <div class="pricing-toolbar">
       <div class="toolbar-row">
-        <n-select
-          v-model:value="searchModel"
-          :options="modelOptions"
-          filterable
-          clearable
-          size="small"
-          placeholder="搜索模型..."
-          style="width: 240px"
-        />
-        <n-button size="tiny" @click="searchModel = null">清除</n-button>
-      </div>
-      <div class="toolbar-row">
-        <div class="token-inputs">
-          <div class="token-input-group">
-            <span class="token-label">输入 Token</span>
-            <n-input-number v-model:value="simInput" size="small" :show-button="false" :min="0" :step="1" style="width: 80px" />
-            <span class="token-suffix">K</span>
-          </div>
-          <div class="token-input-group">
-            <span class="token-label">缓存读取</span>
-            <n-input-number v-model:value="simCacheRead" size="small" :show-button="false" :min="0" :step="1" style="width: 80px" />
-            <span class="token-suffix">K</span>
-          </div>
-          <div class="token-input-group">
-            <span class="token-label">输出 Token</span>
-            <n-input-number v-model:value="simOutput" size="small" :show-button="false" :min="0" :step="1" style="width: 80px" />
-            <span class="token-suffix">K</span>
-          </div>
-          <div class="token-input-group">
-            <span class="token-label">缓存写入</span>
-            <n-input-number v-model:value="simCacheCreation" size="small" :show-button="false" :min="0" :step="1" style="width: 80px" />
-            <span class="token-suffix">K</span>
-          </div>
+        <div class="filter-group">
+          <span class="filter-label">模型</span>
+          <n-select
+            v-model:value="searchModel"
+            :options="modelOptions"
+            filterable
+            clearable
+            size="tiny"
+            placeholder="全部"
+            style="width: 180px"
+            teleport-disabled
+          />
         </div>
-        <div class="rate-input">
-          <span class="rate-label">汇率</span>
-          <n-input-number v-model:value="exchangeRate" size="small" :show-button="false" :min="0.01" :step="0.1" style="width: 80px" />
+        <div class="filter-group">
+          <span class="filter-label">输入</span>
+          <n-input-number v-model:value="simInput" size="tiny" :show-button="false" :min="0" :step="1" style="width: 52px" />
+          <span class="filter-label">K</span>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">缓存读</span>
+          <n-input-number v-model:value="simCacheRead" size="tiny" :show-button="false" :min="0" :step="1" style="width: 52px" />
+          <span class="filter-label">K</span>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">输出</span>
+          <n-input-number v-model:value="simOutput" size="tiny" :show-button="false" :min="0" :step="1" style="width: 52px" />
+          <span class="filter-label">K</span>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">缓存写</span>
+          <n-input-number v-model:value="simCacheCreation" size="tiny" :show-button="false" :min="0" :step="1" style="width: 52px" />
+          <span class="filter-label">K</span>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">汇率</span>
+          <n-input-number v-model:value="exchangeRate" size="tiny" :show-button="false" :min="0.01" :step="0.1" style="width: 52px" />
         </div>
       </div>
     </div>
@@ -111,7 +110,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
-import { NSelect, NButton, NInputNumber, NIcon } from 'naive-ui'
+import { NSelect, NInputNumber, NIcon } from 'naive-ui'
 import { ChevronDownOutline, ChevronUpOutline } from '@vicons/ionicons5'
 import { platformAdapter } from '@/platform'
 import { useDatabaseStore } from '@/stores/database'
@@ -353,7 +352,7 @@ watch(() => dbStore.hasDatabase, async (val) => {
 }
 
 .pricing-toolbar {
-  padding: 8px 0 12px;
+  padding: 4px 0 6px;
   border-bottom: 1px solid var(--border-light);
   margin-bottom: 12px;
 }
@@ -361,43 +360,20 @@ watch(() => dbStore.hasDatabase, async (val) => {
 .toolbar-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.token-inputs {
-  display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
-.token-input-group {
+.filter-group {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
 }
 
-.token-label {
+.filter-label {
   font-size: 11px;
   color: var(--text-tertiary);
   white-space: nowrap;
-}
-
-.token-suffix {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.rate-input {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: 12px;
-}
-
-.rate-label {
-  font-size: 12px;
-  color: var(--text-tertiary);
 }
 
 .pricing-section {

@@ -129,10 +129,10 @@ export function registerDatabaseIPC(): void {
     return externalDb.getMinuteLevelTokenTrend()
   })
 
-  ipcMain.handle('query:realtime-logs', () => {
+  ipcMain.handle('query:realtime-logs', (_event, since?: number) => {
     if (!externalDb || !externalDb.isOpen) throw new Error('数据库未打开')
     if (!pricingEngine) throw new Error('定价引擎未初始化')
-    const raw = externalDb.getRecentRequestLogsRaw()
+    const raw = externalDb.getRecentRequestLogsRaw(since)
     return raw.map(r => {
       const p = pricingEngine!.getPricingAt(r.model, r.createdAt)
       const inputCost = p ? r.inputTokens * p.inputCostPerMillion / 1_000_000 : 0

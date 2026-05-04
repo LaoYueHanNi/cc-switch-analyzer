@@ -106,10 +106,10 @@ pub fn query_realtime(state: State<AppState>) -> Result<Vec<RealtimeBucket>, Str
 }
 
 #[tauri::command]
-pub fn query_realtime_logs(state: State<AppState>) -> Result<Vec<RealtimeRequestLog>, String> {
+pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result<Vec<RealtimeRequestLog>, String> {
     let ext_db = state.external_db.lock().map_err(|e| e.to_string())?;
     require_db!(ext_db);
-    let raw = ext_db.get_recent_request_logs_raw()?;
+    let raw = ext_db.get_recent_request_logs_raw(since)?;
     drop(ext_db);
 
     let pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;

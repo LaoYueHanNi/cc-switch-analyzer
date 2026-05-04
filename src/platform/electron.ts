@@ -28,8 +28,8 @@ export const platformAdapter: PlatformAdapter = {
   async queryRealtime() {
     return window.api.queryRealtime()
   },
-  async queryRealtimeLogs() {
-    return window.api.queryRealtimeLogs()
+  async queryRealtimeLogs(since?: number) {
+    return window.api.queryRealtimeLogs(since)
   },
   async queryCacheWindows(modelId: string) {
     return window.api.queryCacheWindows(modelId)

@@ -742,33 +742,42 @@ impl ExternalDbService {
         Ok(result)
     }
 
-    pub fn get_recent_request_logs_raw(&self) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String> {
+    pub fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String> {
         let db = self.db()?;
-        let sql = "
-            SELECT session_id, model, provider_id, created_at,
-                   input_tokens, output_tokens,
-                   cache_read_tokens, cache_creation_tokens,
-                   latency_ms
-            FROM proxy_request_logs
-            ORDER BY created_at DESC
-            LIMIT 100";
+        let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
+            Some(s) => ("
+                SELECT session_id, model, provider_id, created_at,
+                       input_tokens, output_tokens,
+                       cache_read_tokens, cache_creation_tokens,
+                       latency_ms
+                FROM proxy_request_logs
+                WHERE created_at > ?
+                ORDER BY created_at DESC", vec![Box::new(s)]),
+            None => ("
+                SELECT session_id, model, provider_id, created_at,
+                       input_tokens, output_tokens,
+                       cache_read_tokens, cache_creation_tokens,
+                       latency_ms
+                FROM proxy_request_logs
+                ORDER BY created_at DESC
+                LIMIT 500", vec![]),
+        };
 
         let mut stmt = db.prepare(sql).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, i64>(6)?,
-                    row.get::<_, i64>(7)?,
-                    row.get::<_, i64>(8)?,
-                ))
-            })
-            .map_err(|e| format!("查询最近请求日志失败: {}", e))?;
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(params_refs.as_slice(), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+            ))
+        }).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
 
         let mut result = Vec::new();
         for row in rows {

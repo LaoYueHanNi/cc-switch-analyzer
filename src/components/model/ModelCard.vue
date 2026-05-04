@@ -7,24 +7,30 @@
         <span class="cache-close" @click="showCache = false">✕</span>
       </div>
       <div v-if="cacheLoading" class="cache-loading">加载中...</div>
-      <table v-else-if="cacheWindows.length > 0" class="cache-table">
-        <thead>
-          <tr>
-            <th>开始</th>
-            <th>结束</th>
-            <th>时长</th>
-            <th>命中</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(w, i) in cacheWindows" :key="i">
-            <td>{{ w.startTime }}</td>
-            <td>{{ w.endTime }}</td>
-            <td class="dur">{{ w.duration }}</td>
-            <td class="hits">{{ w.hits }}次</td>
-          </tr>
-        </tbody>
-      </table>
+      <template v-else-if="cacheWindows.length > 0">
+        <table class="cache-table cache-table-head">
+          <thead>
+            <tr>
+              <th>开始</th>
+              <th>结束</th>
+              <th>时长</th>
+              <th>命中</th>
+            </tr>
+          </thead>
+        </table>
+        <div class="cache-body-scroll">
+          <table class="cache-table">
+            <tbody>
+              <tr v-for="(w, i) in cacheWindows" :key="i">
+                <td>{{ w.startTime }}</td>
+                <td>{{ w.endTime }}</td>
+                <td class="dur">{{ w.duration }}</td>
+                <td class="hits">{{ w.hits }}次</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
       <div v-else class="cache-empty">暂无缓存数据</div>
     </div>
 
@@ -216,7 +222,17 @@ async function onCacheClick(): Promise<void> {
   padding: 8px 10px;
   display: flex;
   flex-direction: column;
-  overflow: auto;
+  overflow: hidden;
+}
+
+.cache-table-head {
+  flex-shrink: 0;
+}
+
+.cache-body-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .cache-header {
