@@ -3,12 +3,13 @@ mod models;
 mod services;
 mod utils;
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use services::app_db::AppDbService;
 use services::external_db::ExternalDbService;
 use services::pricing_engine::PricingEngine;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder};
-use tauri::{Manager, WindowEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 
 // 全局应用状态
 pub struct AppState {
@@ -31,9 +32,14 @@ pub fn run() {
         db_latest_timestamp: Mutex::new(None),
     };
 
-    tauri::Builder::default()
+    // macOS Cmd+Q 先触发 ExitRequested 再触发 CloseRequested
+    // 用此标记区分"系统退出"和"用户点关闭按钮"
+    let should_exit = Arc::new(AtomicBool::new(false));
+    let should_exit_close = should_exit.clone();
+
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
+        .setup(move |app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -50,10 +56,16 @@ pub fn run() {
                 .build()?;
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
+                .icon_as_template(true)
                 .tooltip("CC-Switch Analyzer")
                 .menu(&menu)
                 .on_tray_icon_event(|tray, event| {
-                    if let tauri::tray::TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
                         let win = tray.app_handle().get_webview_window("main").unwrap();
                         win.show().unwrap();
                         win.set_focus().unwrap();
@@ -70,13 +82,18 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // 点击关闭按钮时隐藏到托盘
+            // 点击关闭按钮时隐藏到托盘（系统退出请求除外）
             let win = app.get_webview_window("main").unwrap();
             let win_clone = win.clone();
             win.on_window_event(move |event| {
                 if let WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    win_clone.hide().unwrap();
+                    if should_exit_close.load(Ordering::SeqCst) {
+                        // Cmd+Q / 系统关机等，允许关闭
+                    } else {
+                        // 用户点击关闭按钮，隐藏到托盘
+                        api.prevent_close();
+                        let _ = win_clone.hide();
+                    }
                 }
             });
 
@@ -121,6 +138,24 @@ pub fn run() {
             commands::pricing::delete_time_pricing_rule,
             commands::pricing::refresh_pricing,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // 监听系统级退出请求（macOS Cmd+Q 等）
+    // ExitRequested 在 CloseRequested 之前触发，设置标记让窗口允许关闭
+    // Reopen: 点击 Dock 图标时重新显示窗口
+    app.run(move |app_handle, event| {
+        match event {
+            RunEvent::ExitRequested { .. } => {
+                should_exit.store(true, Ordering::SeqCst);
+            }
+            RunEvent::Reopen { .. } => {
+                if let Some(win) = app_handle.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
+            }
+            _ => {}
+        }
+    });
 }
