@@ -1,10 +1,12 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, shell, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createMainWindow } from './window'
 import { initIPC } from './ipc'
 
 let mainWindow: BrowserWindow | null = null
+let tray: Tray | null = null
+let isQuitting = false
 
 function createWindow(): void {
   mainWindow = createMainWindow()
@@ -14,11 +16,42 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // 点 X 隐藏到托盘
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault()
+      mainWindow?.hide()
+    }
+  })
+
   // 开发模式 HMR
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+}
+
+function createTray(): void {
+  const iconPath = join(__dirname, '../../src-tauri/icons/32x32.png')
+  const icon = nativeImage.createFromPath(iconPath)
+  tray = new Tray(icon.resize({ width: 16, height: 16 }))
+  tray.setToolTip('CC-Switch Analyzer')
+
+  const contextMenu = Menu.buildFromTemplate([
+    { label: '显示窗口', click: () => showWindow() },
+    { type: 'separator' },
+    { label: '退出', click: () => { isQuitting = true; app.quit() } }
+  ])
+  tray.setContextMenu(contextMenu)
+
+  tray.on('double-click', () => showWindow())
+}
+
+function showWindow(): void {
+  if (mainWindow) {
+    mainWindow.show()
+    mainWindow.focus()
   }
 }
 
@@ -33,14 +66,14 @@ app.whenReady().then(() => {
   initIPC()
 
   createWindow()
+  createTray()
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    else showWindow()
   })
 })
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
+app.on('before-quit', () => {
+  isQuitting = true
 })

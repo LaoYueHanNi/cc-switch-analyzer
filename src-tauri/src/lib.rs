@@ -7,6 +7,8 @@ use std::sync::Mutex;
 use services::app_db::AppDbService;
 use services::external_db::ExternalDbService;
 use services::pricing_engine::PricingEngine;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder};
+use tauri::{Manager, WindowEvent};
 
 // 全局应用状态
 pub struct AppState {
@@ -39,6 +41,45 @@ pub fn run() {
                         .build(),
                 )?;
             }
+
+            // 系统托盘
+            let menu = tauri::menu::MenuBuilder::new(app)
+                .item(&tauri::menu::MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?)
+                .separator()
+                .item(&tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?)
+                .build()?;
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("CC-Switch Analyzer")
+                .menu(&menu)
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                        let win = tray.app_handle().get_webview_window("main").unwrap();
+                        win.show().unwrap();
+                        win.set_focus().unwrap();
+                    }
+                })
+                .on_menu_event(move |app_handle, event| {
+                    if event.id() == "quit" {
+                        app_handle.exit(0);
+                    } else if event.id() == "show" {
+                        let win = app_handle.get_webview_window("main").unwrap();
+                        win.show().unwrap();
+                        win.set_focus().unwrap();
+                    }
+                })
+                .build(app)?;
+
+            // 点击关闭按钮时隐藏到托盘
+            let win = app.get_webview_window("main").unwrap();
+            let win_clone = win.clone();
+            win.on_window_event(move |event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    win_clone.hide().unwrap();
+                }
+            });
+
             Ok(())
         })
         .manage(state)
