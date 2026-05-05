@@ -2,7 +2,7 @@ import { ExternalDbService } from '../services/external-db'
 import { AppDbService } from '../services/app-db'
 import { PricingEngine } from '../services/pricing-engine'
 import { registerDatabaseIPC, setExternalDb, setPricingEngineForDb } from './database.ipc'
-import { registerDialogIPC, setExternalDbForDialog, setPricingEngineForDialog } from './dialog.ipc'
+import { registerDialogIPC, setExternalDbForDialog, setPricingEngineForDialog, setAppDbForDialog } from './dialog.ipc'
 import { registerPricingIPC } from './pricing.ipc'
 import { registerSessionTitleIPC } from './session-title.ipc'
 
@@ -24,6 +24,7 @@ export function initIPC(): { externalDb: ExternalDbService; appDb: AppDbService;
   setExternalDbForDialog(externalDb)
   setPricingEngineForDb(pricingEngine)
   setPricingEngineForDialog(pricingEngine)
+  setAppDbForDialog(appDb)
 
   // 注册所有 IPC handler
   registerDialogIPC()

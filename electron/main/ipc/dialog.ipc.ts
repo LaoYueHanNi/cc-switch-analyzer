@@ -4,9 +4,11 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { ExternalDbService } from '../services/external-db'
 import type { PricingEngine } from '../services/pricing-engine'
+import type { AppDbService } from '../services/app-db'
 
 let externalDb: ExternalDbService | null = null
 let pricingEngine: PricingEngine | null = null
+let appDb: AppDbService | null = null
 
 export function setExternalDbForDialog(service: ExternalDbService): void {
   externalDb = service
@@ -14,6 +16,10 @@ export function setExternalDbForDialog(service: ExternalDbService): void {
 
 export function setPricingEngineForDialog(engine: PricingEngine): void {
   pricingEngine = engine
+}
+
+export function setAppDbForDialog(db: AppDbService): void {
+  appDb = db
 }
 
 // 注册文件对话框 IPC handler
@@ -76,8 +82,12 @@ export function registerDialogIPC(): void {
         }
       }
 
+      // 记住选择的数据库路径
+      if (appDb) {
+        appDb.setSetting('last_db_path', filePath)
+      }
+
       return {
-        path: filePath,
         recordCount: count,
         dateRange: {
           min: dateRange.min,
@@ -92,13 +102,15 @@ export function registerDialogIPC(): void {
     }
   })
 
-  // 自动加载默认数据库
+  // 自动加载默认数据库（优先使用记忆路径）
   ipcMain.handle('db:auto-load', async () => {
     const defaultPath = join(homedir(), '.cc-switch', 'cc-switch.db')
-    console.log('[db:auto-load] 检查默认路径:', defaultPath)
+    const remembered = appDb?.getSetting('last_db_path')
+    const dbPath = (remembered && existsSync(remembered)) ? remembered : defaultPath
+    console.log('[db:auto-load] 路径:', dbPath)
 
-    if (!existsSync(defaultPath)) {
-      console.log('[db:auto-load] 默认数据库不存在')
+    if (!existsSync(dbPath)) {
+      console.log('[db:auto-load] 数据库不存在')
       return null
     }
 
@@ -108,7 +120,7 @@ export function registerDialogIPC(): void {
     }
 
     try {
-      externalDb.open(defaultPath)
+      externalDb.open(dbPath)
       const count = externalDb.getRecordCount()
       const dateRange = externalDb.getDateRange()
       const providers = externalDb.getProviders()
@@ -123,7 +135,7 @@ export function registerDialogIPC(): void {
 
       console.log('[db:auto-load] 自动加载成功, 记录数:', count)
       return {
-        path: defaultPath,
+        path: dbPath,
         recordCount: count,
         dateRange: { min: dateRange.min, max: dateRange.max },
         providers,

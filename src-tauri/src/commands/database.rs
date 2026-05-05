@@ -14,15 +14,27 @@ pub fn select_database(state: State<AppState>) -> Result<Option<DatabaseInfo>, S
 
 #[tauri::command]
 pub fn auto_load_database(state: State<AppState>) -> Result<Option<DatabaseInfo>, String> {
-    let default_path = crate::utils::get_default_db_path();
-    eprintln!("[DB] auto_load_database: path={}", default_path.display());
-    if !default_path.exists() {
-        eprintln!("[DB] 默认数据库不存在");
+    // 优先使用上次选择的数据库路径
+    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+    let remembered = app_db.get_setting("last_db_path");
+    let db_path = remembered
+        .as_ref()
+        .filter(|p| std::path::Path::new(p).exists())
+        .cloned()
+        .unwrap_or_else(|| {
+            let default = crate::utils::get_default_db_path();
+            default.to_str().unwrap().to_string()
+        });
+    drop(app_db);
+
+    eprintln!("[DB] auto_load_database: path={}", db_path);
+    if !std::path::Path::new(&db_path).exists() {
+        eprintln!("[DB] 数据库不存在");
         return Ok(None);
     }
 
     let mut ext_db = state.external_db.lock().map_err(|e| e.to_string())?;
-    ext_db.open(default_path.to_str().unwrap())?;
+    ext_db.open(&db_path)?;
     eprintln!("[DB] 数据库打开成功");
 
     let count = ext_db.get_record_count()?;
@@ -42,7 +54,7 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Option<DatabaseInfo>
     }
 
     Ok(Some(DatabaseInfo {
-        path: default_path.to_str().unwrap().to_string(),
+        path: db_path,
         record_count: count,
         date_range,
         providers,
@@ -70,6 +82,14 @@ pub fn load_database(file_path: String, state: State<AppState>) -> Result<Databa
         match pricing.refresh(&ext_db, &app_db) {
             Ok(()) => eprintln!("[DB] 定价引擎刷新成功, 模型数={}", pricing.size()),
             Err(e) => eprintln!("[DB] 定价引擎刷新失败: {}", e),
+        }
+    }
+
+    // 记住选择的数据库路径
+    {
+        let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+        if let Err(e) = app_db.set_setting("last_db_path", &file_path) {
+            eprintln!("[DB] 保存数据库路径失败: {}", e);
         }
     }
 
