@@ -1,5 +1,5 @@
 <template>
-  <div class="app-layout">
+  <div class="app-layout" ref="appLayoutRef">
     <!-- 工具栏始终可见 -->
     <div class="top-area">
       <Toolbar />
@@ -72,7 +72,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch, type Component } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { NSpin, NButton, NIcon } from 'naive-ui'
 import {
@@ -136,6 +136,14 @@ const currentIntervalIndex = ref(1) // 默认 30s
 const intervalDisplay = computed(() => intervalLabels[intervals[currentIntervalIndex.value]])
 const intervalTitle = computed(() => intervalTitles[intervals[currentIntervalIndex.value]])
 
+// body { zoom: 1.1 } 导致 macOS WebKit 下 calc(100vh / 1.1) 精度不足
+// 使用 window.innerHeight 精确补偿 zoom 倍率
+const appLayoutRef = ref<HTMLElement>()
+const syncLayoutHeight = () => {
+  if (!appLayoutRef.value) return
+  appLayoutRef.value.style.height = `${window.innerHeight / 1.1}px`
+}
+
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null
 
 function onCycleInterval(): void {
@@ -168,13 +176,19 @@ watch(currentIntervalIndex, (idx) => {
 }, { immediate: true })
 
 onMounted(async () => {
+  syncLayoutHeight()
+  window.addEventListener('resize', syncLayoutHeight)
   await autoLoadDatabase()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', syncLayoutHeight)
 })
 </script>
 
 <style scoped>
 .app-layout {
-  height: calc(100vh / 1.1);
+  /* height 由 JS syncLayoutHeight 动态设置，避免 CSS 100vh + zoom 精度问题 */
   display: flex;
   flex-direction: column;
   overflow: hidden;
