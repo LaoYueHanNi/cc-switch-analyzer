@@ -38,6 +38,13 @@ pub fn run() {
     let should_exit_close = should_exit.clone();
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // 第二个实例启动时，激活已有窗口
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             if cfg!(debug_assertions) {
@@ -149,6 +156,7 @@ pub fn run() {
             RunEvent::ExitRequested { .. } => {
                 should_exit.store(true, Ordering::SeqCst);
             }
+            #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => {
                 if let Some(win) = app_handle.get_webview_window("main") {
                     let _ = win.show();
