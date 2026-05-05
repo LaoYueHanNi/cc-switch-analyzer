@@ -20,7 +20,8 @@ pnpm build:tauri        # 生产构建 → .app + .dmg (~5MB)
 
 ## Electron
 pnpm dev:electron       # 开发模式
-pnpm build:electron     # 生产构建 → DMG/ZIP (~150MB)
+pnpm build:electron     # 编译 → out/（不含安装包）
+pnpm build:electron && npx electron-builder --win  # 打 NSIS 安装包 → dist-electron/
 
 ## 仅前端
 pnpm dev:tauri-frontend   # Vite 开发服务器 (port 1420)
