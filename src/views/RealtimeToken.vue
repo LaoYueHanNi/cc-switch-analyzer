@@ -65,6 +65,7 @@
           <span class="col-token c-cache-w">缓存写</span>
           <span class="col-total">总token</span>
           <span class="col-cost">费用</span>
+          <span class="col-tier">档位</span>
           <span class="col-latency">延迟</span>
         </div>
         <!-- 数据行 -->
@@ -90,6 +91,8 @@
           </span>
           <span class="col-total">{{ formatNum(row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreationTokens) }}</span>
           <span class="col-cost">{{ formatCost(row.totalCost) }}</span>
+          <span class="col-tier" v-if="row.contextTierThreshold">>= {{ Math.round(row.contextTierThreshold / 1000) }}K</span>
+          <span class="col-tier" v-else>-</span>
           <span class="col-latency">{{ formatLatency(row.latencyMs) }}</span>
         </div>
         </div>
@@ -371,6 +374,9 @@ watch(() => dbStore.hasDatabase, (val) => {
 
 /* 费用列 */
 .col-cost { width: 68px; flex-shrink: 0; text-align: right; font-weight: 700; color: var(--color-amber); font-size: 12px; }
+
+/* 档位列 */
+.col-tier { width: 48px; flex-shrink: 0; text-align: right; font-size: 10px; color: var(--text-secondary); }
 
 /* 延迟列 */
 .col-latency { width: 50px; flex-shrink: 0; text-align: right; color: var(--text-muted); font-size: 11px; }

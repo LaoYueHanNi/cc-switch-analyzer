@@ -110,7 +110,8 @@ pub fn compute_session_costs(
     let mut session_costs: HashMap<String, f64> = HashMap::new();
 
     for req in session_request_tokens {
-        if let Some(pricing) = ps.get_pricing_at(&req.model, req.created_at) {
+        let context_size = req.input_tokens + req.cache_read;
+        if let Some(pricing) = ps.get_pricing_at_with_context(&req.model, req.created_at, context_size) {
             let cost = ps.calculate_cost(
                 &pricing,
                 req.input_tokens,
@@ -153,7 +154,8 @@ pub fn compute_session_model_costs(
 
     // 从请求级数据累加费用
     for req in session_request_tokens {
-        let pricing = match ps.get_pricing_at(&req.model, req.created_at) {
+        let context_size = req.input_tokens + req.cache_read;
+        let pricing = match ps.get_pricing_at_with_context(&req.model, req.created_at, context_size) {
             Some(p) => p,
             None => continue,
         };

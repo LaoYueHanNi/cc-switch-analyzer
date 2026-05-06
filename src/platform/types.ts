@@ -48,6 +48,33 @@ export interface UpdateTimePricingRuleData {
   label: string
 }
 
+export interface ContextTierData {
+  modelId: string
+  threshold: number
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreation: number
+}
+
+export interface TimeRuleContextTierData {
+  modelId: string
+  startTime: number
+  endTime: number
+  threshold: number
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreation: number
+}
+
+export interface DeleteTimePricingRuleData {
+  modelId: string
+  startTime: number
+  endTime: number
+  id: number
+}
+
 export interface PlatformAdapter {
   // 数据库
   selectDatabase(): Promise<DbResult | null>
@@ -70,7 +97,13 @@ export interface PlatformAdapter {
   removePricingOverride(modelId: string): Promise<void>
   addTimePricingRule(data: TimePricingRuleData): Promise<any>
   updateTimePricingRule(data: UpdateTimePricingRuleData): Promise<void>
-  deleteTimePricingRule(id: number): Promise<void>
+  deleteTimePricingRule(data: DeleteTimePricingRuleData): Promise<void>
   refreshPricing(): Promise<void>
+  // 上下文定价档位
+  saveOverrideContextTier(data: ContextTierData): Promise<void>
+  deleteOverrideContextTier(data: { modelId: string; threshold: number }): Promise<void>
+  saveTimeRuleContextTier(data: TimeRuleContextTierData): Promise<any>
+  updateTimeRuleContextTier(data: { id: number; input: number; output: number; cacheRead: number; cacheCreation: number }): Promise<void>
+  deleteTimeRuleContextTier(id: number): Promise<void>
   getSessionTitles(sessionIds: string[]): Promise<Record<string, { title: string; project: string }>>
 }

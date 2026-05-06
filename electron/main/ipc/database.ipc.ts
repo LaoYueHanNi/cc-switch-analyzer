@@ -134,18 +134,21 @@ export function registerDatabaseIPC(): void {
     if (!pricingEngine) throw new Error('定价引擎未初始化')
     const raw = externalDb.getRecentRequestLogsRaw(since)
     return raw.map(r => {
-      const p = pricingEngine!.getPricingAt(r.model, r.createdAt)
+      const contextSize = r.inputTokens + r.cacheReadTokens
+      const p = pricingEngine!.getPricingAtWithContext(r.model, r.createdAt, contextSize)
       const inputCost = p ? r.inputTokens * p.inputCostPerMillion / 1_000_000 : 0
       const outputCost = p ? r.outputTokens * p.outputCostPerMillion / 1_000_000 : 0
       const cacheReadCost = p ? r.cacheReadTokens * p.cacheReadCostPerMillion / 1_000_000 : 0
       const cacheCreationCost = p ? r.cacheCreationTokens * p.cacheCreationCostPerMillion / 1_000_000 : 0
+      const contextTierThreshold = pricingEngine!.getMatchedTierThreshold(r.model, r.createdAt, contextSize)
       return {
         ...r,
         inputCost,
         outputCost,
         cacheReadCost,
         cacheCreationCost,
-        totalCost: inputCost + outputCost + cacheReadCost + cacheCreationCost
+        totalCost: inputCost + outputCost + cacheReadCost + cacheCreationCost,
+        contextTierThreshold: contextTierThreshold ?? undefined
       }
     })
   })

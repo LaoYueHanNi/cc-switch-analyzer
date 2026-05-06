@@ -95,11 +95,40 @@ export const platformAdapter: PlatformAdapter = {
       cacheCreation: data.cacheCreation, label: data.label
     })
   },
-  async deleteTimePricingRule(id: number) {
-    return invoke('delete_time_pricing_rule', { id })
+  async deleteTimePricingRule(data: { modelId: string; startTime: number; endTime: number; id: number }) {
+    return invoke('delete_time_pricing_rule', {
+      modelId: data.modelId, startTime: data.startTime, endTime: data.endTime, id: data.id
+    })
   },
   async refreshPricing() {
     return invoke('refresh_pricing')
+  },
+  async saveOverrideContextTier(data: { modelId: string; threshold: number; input: number; output: number; cacheRead: number; cacheCreation: number }) {
+    return invoke('save_override_context_tier', {
+      modelId: data.modelId, threshold: data.threshold, input: data.input, output: data.output,
+      cacheRead: data.cacheRead, cacheCreation: data.cacheCreation
+    })
+  },
+  async deleteOverrideContextTier(data: { modelId: string; threshold: number }) {
+    return invoke('delete_override_context_tier', {
+      modelId: data.modelId, threshold: data.threshold
+    })
+  },
+  async saveTimeRuleContextTier(data: { modelId: string; startTime: number; endTime: number; threshold: number; input: number; output: number; cacheRead: number; cacheCreation: number }) {
+    return invoke('save_time_rule_context_tier', {
+      modelId: data.modelId, startTime: data.startTime, endTime: data.endTime,
+      threshold: data.threshold, input: data.input, output: data.output,
+      cacheRead: data.cacheRead, cacheCreation: data.cacheCreation
+    })
+  },
+  async updateTimeRuleContextTier(data: { id: number; input: number; output: number; cacheRead: number; cacheCreation: number }) {
+    return invoke('update_time_rule_context_tier', {
+      id: data.id, input: data.input, output: data.output,
+      cacheRead: data.cacheRead, cacheCreation: data.cacheCreation
+    })
+  },
+  async deleteTimeRuleContextTier(id: number) {
+    return invoke('delete_time_rule_context_tier', { id })
   },
   async getSessionTitles(sessionIds: string[]) {
     return invoke<Record<string, { title: string; project: string }>>('get_session_titles', { sessionIds })

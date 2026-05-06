@@ -87,7 +87,65 @@ export function registerPricingIPC(appDb: AppDbService, pricingEngine: PricingEn
   })
 
   // 删除时间定价规则
-  ipcMain.handle('pricing:delete-time-rule', (_event, id: number) => {
+  ipcMain.handle('pricing:delete-time-rule', (_event, data: {
+    modelId: string
+    startTime: number
+    endTime: number
+    id: number
+  }) => {
+    appDb.deleteTimeOverrideGroup(data.modelId, data.startTime, data.endTime)
+  })
+
+  // 保存覆盖上下文档位
+  ipcMain.handle('pricing:save-override-tier', (_event, data: {
+    modelId: string
+    threshold: number
+    input: number
+    output: number
+    cacheRead: number
+    cacheCreation: number
+  }) => {
+    appDb.saveOverrideTier(data.modelId, data.threshold, data.input, data.output, data.cacheRead, data.cacheCreation)
+  })
+
+  // 删除覆盖上下文档位
+  ipcMain.handle('pricing:delete-override-tier', (_event, data: {
+    modelId: string
+    threshold: number
+  }) => {
+    appDb.deleteOverrideTier(data.modelId, data.threshold)
+  })
+
+  // 保存时间规则上下文档位
+  ipcMain.handle('pricing:save-time-rule-tier', (_event, data: {
+    modelId: string
+    startTime: number
+    endTime: number
+    threshold: number
+    input: number
+    output: number
+    cacheRead: number
+    cacheCreation: number
+  }) => {
+    return appDb.addTimeOverrideTier(
+      data.modelId, data.startTime, data.endTime, data.threshold,
+      data.input, data.output, data.cacheRead, data.cacheCreation
+    )
+  })
+
+  // 更新时间规则上下文档位
+  ipcMain.handle('pricing:update-time-rule-tier', (_event, data: {
+    id: number
+    input: number
+    output: number
+    cacheRead: number
+    cacheCreation: number
+  }) => {
+    appDb.updateTimeOverrideTier(data.id, data.input, data.output, data.cacheRead, data.cacheCreation)
+  })
+
+  // 删除时间规则上下文档位
+  ipcMain.handle('pricing:delete-time-rule-tier', (_event, id: number) => {
     appDb.deleteTimeOverride(id)
   })
 
@@ -118,7 +176,8 @@ export function registerPricingIPC(appDb: AppDbService, pricingEngine: PricingEn
       isOverride: p.isOverride,
       hasTimePricing: pricingEngine.hasTimePricing(p.modelId),
       timeRules: pricingEngine.getTimeRules(p.modelId),
-      isUsed: usedModels.has(p.modelId)
+      isUsed: usedModels.has(p.modelId),
+      contextTiers: pricingEngine.getOverrideTiers(p.modelId)
     }))
   })
 }

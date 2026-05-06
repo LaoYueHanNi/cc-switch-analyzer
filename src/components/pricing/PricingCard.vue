@@ -3,12 +3,15 @@
     <div class="pricing-header">
       <div class="pricing-header-left">
         <span class="pricing-name">{{ displayName }}</span>
+        <n-button size="tiny" text @click="$emit('edit')">编辑</n-button>
+      </div>
+      <div v-if="isOverride || activeRule" class="pricing-badges">
+        <span v-if="isOverride" class="custom-badge">自定义</span>
         <span v-if="activeRule" class="active-pill">
           <n-icon size="9"><time-outline /></n-icon>
           {{ activeRule.label || '生效中' }}
         </span>
       </div>
-      <n-button size="tiny" text @click="$emit('edit')">编辑</n-button>
     </div>
 
     <div class="pricing-cost">¥{{ formatRate(computedCost) }}</div>
@@ -28,7 +31,18 @@
       :cache-creation-rate="formatRate(getRate('cacheCreationCostPerMillion')) + '/M'"
     />
 
-    <span v-if="isOverride" class="custom-badge">自定义</span>
+    <!-- 上下文定价档位 -->
+    <div v-if="contextTiers.length > 0" class="context-tiers">
+      <div v-for="tier in contextTiers" :key="tier.threshold" class="context-tier">
+        <span class="tier-threshold">>= {{ Math.round(tier.threshold / 1000) }}K</span>
+        <span class="tier-rates">
+          <span class="tier-rate" :style="{ color: COLORS.PURPLE }">{{ formatRate(tier.inputCostPerMillion) }}</span>
+          <span class="tier-rate" :style="{ color: COLORS.ORANGE }">{{ formatRate(tier.outputCostPerMillion) }}</span>
+          <span class="tier-rate" :style="{ color: COLORS.BLUE }">{{ formatRate(tier.cacheReadCostPerMillion) }}</span>
+          <span class="tier-rate" :style="{ color: COLORS.DARK_ORANGE }">{{ formatRate(tier.cacheCreationCostPerMillion) }}</span>
+        </span>
+      </div>
+    </div>
 
     <!-- 时间定价规则 -->
     <div v-if="timeRules.length > 0" class="time-rules">
@@ -43,7 +57,7 @@
         <n-button size="tiny" quaternary class="rule-icon-btn" @click="$emit('editTimeRule', rule)">
           <template #icon><n-icon size="11"><create-outline /></n-icon></template>
         </n-button>
-        <n-button size="tiny" quaternary class="rule-icon-btn" @click="$emit('deleteTimeRule', rule.id)">
+        <n-button size="tiny" quaternary class="rule-icon-btn" @click="$emit('deleteTimeRule', rule)">
           <template #icon><n-icon size="11"><trash-outline /></n-icon></template>
         </n-button>
       </div>
@@ -60,10 +74,11 @@
 import { computed } from 'vue'
 import { NButton, NIcon } from 'naive-ui'
 import { TimeOutline, CreateOutline, TrashOutline, AddOutline } from '@vicons/ionicons5'
-import { formatRate, formatNum } from '@/utils/format'
+import { formatRate } from '@/utils/format'
 import { epochToDateStr } from '@/utils/format'
+import { COLORS } from '@/utils/constants'
 import PricingGrid from '@/components/common/PricingGrid.vue'
-import type { PricingData, TimePricingRule } from '@/types/pricing'
+import type { PricingData, TimePricingRule, ContextTier } from '@/types/pricing'
 
 const props = defineProps<{
   pricing: PricingData | null
@@ -71,6 +86,7 @@ const props = defineProps<{
   computedCost: number
   isOverride: boolean
   timeRules: TimePricingRule[]
+  contextTiers: ContextTier[]
   simTokens: { input: number; output: number; cacheRead: number; cacheCreation: number }
 }>()
 
@@ -78,7 +94,7 @@ defineEmits<{
   edit: []
   addTimeRule: []
   editTimeRule: [rule: TimePricingRule]
-  deleteTimeRule: [id: number]
+  deleteTimeRule: [rule: TimePricingRule]
 }>()
 
 // 当前时间命中时间定价规则
@@ -92,10 +108,31 @@ function isActive(rule: TimePricingRule): boolean {
   return now >= rule.startTime && now <= rule.endTime
 }
 
-// 获取有效单价（优先时间定价）
+// 上下文档位匹配：找 threshold <= contextSize 的最大档位
+function resolveTier(tiers: ContextTier[], contextSize: number): ContextTier | null {
+  let best: ContextTier | null = null
+  for (const tier of tiers) {
+    if (tier.threshold <= contextSize && (!best || tier.threshold > best.threshold)) {
+      best = tier
+    }
+  }
+  return best
+}
+
+// 获取有效单价（优先级：时间规则档位 → 时间规则 → 覆盖档位 → 覆盖 → 默认）
 type RateField = 'inputCostPerMillion' | 'outputCostPerMillion' | 'cacheReadCostPerMillion' | 'cacheCreationCostPerMillion'
 function getRate(field: RateField): number {
-  if (activeRule.value) return activeRule.value[field]
+  const contextSize = props.simTokens.input + props.simTokens.cacheRead
+  // 1. 时间规则 + 其档位
+  if (activeRule.value) {
+    const tier = resolveTier(activeRule.value.contextTiers || [], contextSize)
+    if (tier) return tier[field]
+    return activeRule.value[field]
+  }
+  // 2. 用户覆盖 + 其档位
+  const overrideTier = resolveTier(props.contextTiers, contextSize)
+  if (overrideTier) return overrideTier[field]
+  // 3. 默认定价
   return props.pricing?.[field] || 0
 }
 
@@ -130,18 +167,22 @@ function formatDate(ts: number): string {
 
 .pricing-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px;
+  flex-direction: column;
+  gap: 2px;
   margin-bottom: 3px;
 }
 
 .pricing-header-left {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 4px;
-  flex: 1;
-  min-width: 0;
+}
+
+.pricing-badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .pricing-name {
@@ -181,8 +222,39 @@ function formatDate(ts: number): string {
   background: var(--color-teal-bg);
   padding: 1px 4px;
   border-radius: 2px;
+}
+
+.context-tiers {
   margin-top: 4px;
-  margin-right: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 11px;
+}
+
+.context-tier {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+}
+
+.tier-threshold {
+  color: var(--text-secondary);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.tier-rates {
+  display: flex;
+  gap: 4px;
+  font-size: 10px;
+  justify-content: flex-end;
+  flex: 1;
+}
+
+.tier-rate {
+  white-space: nowrap;
 }
 
 .time-rules {

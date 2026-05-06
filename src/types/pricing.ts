@@ -1,5 +1,14 @@
 // 定价类型定义
 
+export interface ContextTier {
+  id?: number                     // 时间规则档位行 ID（仅时间规则下的 tier 有）
+  threshold: number               // 上下文大小边界（tokens）
+  inputCostPerMillion: number
+  outputCostPerMillion: number
+  cacheReadCostPerMillion: number
+  cacheCreationCostPerMillion: number
+}
+
 export interface ModelPricing {
   modelId: string
   displayName: string
@@ -20,6 +29,7 @@ export interface PricingOverride {
   cacheReadCostPerMillion: number
   cacheCreationCostPerMillion: number
   updatedAt: number
+  contextTiers: ContextTier[]
 }
 
 export interface TimePricingRule {
@@ -32,6 +42,7 @@ export interface TimePricingRule {
   cacheReadCostPerMillion: number
   cacheCreationCostPerMillion: number
   label: string
+  contextTiers: ContextTier[]
 }
 
 export interface PricingData {
@@ -45,6 +56,7 @@ export interface PricingData {
   hasTimePricing: boolean
   timeRules: TimePricingRule[]
   isUsed: boolean
+  contextTiers: ContextTier[]
 }
 
 export interface TokenDimensions {

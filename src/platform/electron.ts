@@ -59,11 +59,27 @@ export const platformAdapter: PlatformAdapter = {
   async updateTimePricingRule(data: UpdateTimePricingRuleData) {
     return window.api.updateTimePricingRule(data)
   },
-  async deleteTimePricingRule(id: number) {
-    return window.api.deleteTimePricingRule(id)
+  async deleteTimePricingRule(data: { modelId: string; startTime: number; endTime: number; id: number }) {
+    return window.api.deleteTimePricingRule(data)
   },
   async refreshPricing() {
     return window.api.refreshPricing()
+  },
+  // 上下文定价档位
+  async saveOverrideContextTier(data: { modelId: string; threshold: number; input: number; output: number; cacheRead: number; cacheCreation: number }) {
+    return window.api.saveOverrideContextTier(data)
+  },
+  async deleteOverrideContextTier(data: { modelId: string; threshold: number }) {
+    return window.api.deleteOverrideContextTier(data)
+  },
+  async saveTimeRuleContextTier(data: { modelId: string; startTime: number; endTime: number; threshold: number; input: number; output: number; cacheRead: number; cacheCreation: number }) {
+    return window.api.saveTimeRuleContextTier(data)
+  },
+  async updateTimeRuleContextTier(data: { id: number; input: number; output: number; cacheRead: number; cacheCreation: number }) {
+    return window.api.updateTimeRuleContextTier(data)
+  },
+  async deleteTimeRuleContextTier(id: number) {
+    return window.api.deleteTimeRuleContextTier(id)
   },
   async getSessionTitles(sessionIds: string[]) {
     return window.api.getSessionTitles(sessionIds)

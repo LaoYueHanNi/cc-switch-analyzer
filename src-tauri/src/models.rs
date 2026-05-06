@@ -140,6 +140,8 @@ pub struct RealtimeRequestLog {
     pub cache_read_cost: f64,
     pub cache_creation_cost: f64,
     pub total_cost: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_tier_threshold: Option<i64>,
 }
 
 // ========== 会话分析 ==========
@@ -196,6 +198,18 @@ pub struct CacheWindow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ContextTier {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
+    pub threshold: i64,
+    pub input_cost_per_million: f64,
+    pub output_cost_per_million: f64,
+    pub cache_read_cost_per_million: f64,
+    pub cache_creation_cost_per_million: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MergedPricing {
     pub model_id: String,
     pub display_name: String,
@@ -215,6 +229,8 @@ pub struct PricingOverride {
     pub cache_read_cost_per_million: f64,
     pub cache_creation_cost_per_million: f64,
     pub updated_at: i64,
+    #[serde(default)]
+    pub context_tiers: Vec<ContextTier>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,6 +245,8 @@ pub struct TimePricingRule {
     pub cache_read_cost_per_million: f64,
     pub cache_creation_cost_per_million: f64,
     pub label: String,
+    #[serde(default)]
+    pub context_tiers: Vec<ContextTier>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -244,6 +262,8 @@ pub struct PricingData {
     pub has_time_pricing: bool,
     pub time_rules: Vec<TimePricingRule>,
     pub is_used: bool,
+    #[serde(default)]
+    pub context_tiers: Vec<ContextTier>,
 }
 
 // ========== 预计算结果 ==========

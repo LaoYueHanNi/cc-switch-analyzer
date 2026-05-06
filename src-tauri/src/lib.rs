@@ -144,6 +144,12 @@ pub fn run() {
             commands::pricing::update_time_pricing_rule,
             commands::pricing::delete_time_pricing_rule,
             commands::pricing::refresh_pricing,
+            // 上下文定价档位
+            commands::pricing::save_override_context_tier,
+            commands::pricing::delete_override_context_tier,
+            commands::pricing::save_time_rule_context_tier,
+            commands::pricing::update_time_rule_context_tier,
+            commands::pricing::delete_time_rule_context_tier,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

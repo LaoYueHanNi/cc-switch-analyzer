@@ -132,7 +132,8 @@ export function computeSessionCosts(
   const sessionCosts: Record<string, number> = {}
 
   for (const req of sessionRequestTokens) {
-    const pAt = ps.getPricingAt(req.model, req.createdAt)
+    const contextSize = req.inputTokens + req.cacheRead
+    const pAt = ps.getPricingAtWithContext(req.model, req.createdAt, contextSize)
     if (pAt) {
       const tokens: TokenDimensions = {
         input: req.inputTokens,
@@ -169,7 +170,8 @@ export function computeSessionModelCosts(
 
   // 从请求级数据累加费用（使用时间感知定价）
   for (const req of sessionRequestTokens) {
-    const pAt = ps.getPricingAt(req.model, req.createdAt)
+    const contextSize = req.inputTokens + req.cacheRead
+    const pAt = ps.getPricingAtWithContext(req.model, req.createdAt, contextSize)
     if (!pAt) continue
 
     const tokens: TokenDimensions = {

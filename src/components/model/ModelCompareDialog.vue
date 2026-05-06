@@ -78,7 +78,7 @@ import { NModal, NCard, NSelect, NButton } from 'naive-ui'
 import { formatCost, formatRate } from '@/utils/format'
 import { COLORS } from '@/utils/constants'
 import type { ModelBreakdown } from '@/types/database'
-import type { PricingData, TimePricingRule } from '@/types/pricing'
+import type { PricingData, TimePricingRule, ContextTier } from '@/types/pricing'
 
 const props = defineProps<{
   show: boolean
@@ -103,11 +103,27 @@ const modelOptions = computed(() =>
 
 type RateField = 'inputCostPerMillion' | 'outputCostPerMillion' | 'cacheReadCostPerMillion' | 'cacheCreationCostPerMillion'
 
-function getActiveRate(pricing: PricingData | undefined, field: RateField): number {
+function resolveTier(tiers: ContextTier[], contextSize: number): ContextTier | null {
+  let best: ContextTier | null = null
+  for (const tier of tiers) {
+    if (tier.threshold <= contextSize && (!best || tier.threshold > best.threshold)) {
+      best = tier
+    }
+  }
+  return best
+}
+
+function getActiveRate(pricing: PricingData | undefined, field: RateField, contextSize: number): number {
   if (!pricing) return 0
   const now = Math.floor(Date.now() / 1000)
   const rule = pricing.timeRules?.find((r: TimePricingRule) => now >= r.startTime && now <= r.endTime)
-  if (rule) return rule[field]
+  if (rule) {
+    const tier = resolveTier(rule.contextTiers || [], contextSize)
+    if (tier) return tier[field]
+    return rule[field]
+  }
+  const tier = resolveTier(pricing.contextTiers || [], contextSize)
+  if (tier) return tier[field]
   return pricing[field] || 0
 }
 
@@ -125,10 +141,12 @@ const comparisonResult = computed(() => {
     cacheCreation: props.modelData.cacheCreation
   }
 
+  const contextSize = tokens.input + tokens.cacheRead
+
   // 用目标模型的当前有效单价计算费用
   const fields: RateField[] = ['inputCostPerMillion', 'outputCostPerMillion', 'cacheReadCostPerMillion', 'cacheCreationCostPerMillion']
   const tokenKeys: (keyof typeof tokens)[] = ['input', 'output', 'cacheRead', 'cacheCreation']
-  const targetCosts = fields.map((f, i) => tokens[tokenKeys[i]] * getActiveRate(targetPricing, f) / 1_000_000)
+  const targetCosts = fields.map((f, i) => tokens[tokenKeys[i]] * getActiveRate(targetPricing, f, contextSize) / 1_000_000)
   const targetCost = targetCosts.reduce((a, b) => a + b, 0)
 
   const diffPercent = props.sourceCost > 0
@@ -143,8 +161,8 @@ const comparisonResult = computed(() => {
     label,
     cost: bd[i],
     targetCost: targetCosts[i],
-    sourceRate: getActiveRate(sourcePricing, fields[i]),
-    targetRate: getActiveRate(targetPricing, fields[i]),
+    sourceRate: getActiveRate(sourcePricing, fields[i], contextSize),
+    targetRate: getActiveRate(targetPricing, fields[i], contextSize),
     color: colors[i],
     diff: bd[i] > 0 ? ((targetCosts[i] - bd[i]) / bd[i]) * 100 : 0
   }))

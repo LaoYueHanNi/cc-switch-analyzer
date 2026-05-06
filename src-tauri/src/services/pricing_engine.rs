@@ -5,12 +5,14 @@ use crate::services::app_db::AppDbService;
 use crate::services::external_db::ExternalDbService;
 use crate::utils::DEFAULT_EXCHANGE_RATE;
 
-// 定价计算引擎 —— 三层定价优先级
+// 定价计算引擎 —— 三层定价优先级（上下文大小为子维度）
 pub struct PricingEngine {
     merged: HashMap<String, MergedPricing>,
     time_overrides: Vec<TimePricingRule>,
     time_overrides_by_model: HashMap<String, Vec<TimePricingRule>>,
     exchange_rate: f64,
+    override_tiers: HashMap<String, Vec<ContextTier>>,
+    time_rule_tiers: HashMap<i64, Vec<ContextTier>>,
 }
 
 impl PricingEngine {
@@ -20,11 +22,37 @@ impl PricingEngine {
             time_overrides: Vec::new(),
             time_overrides_by_model: HashMap::new(),
             exchange_rate: DEFAULT_EXCHANGE_RATE,
+            override_tiers: HashMap::new(),
+            time_rule_tiers: HashMap::new(),
         }
     }
 
     fn round(v: f64) -> f64 {
         (v * 1e6).round() / 1e6
+    }
+
+    fn resolve_tier(tiers: &[ContextTier], context_size: i64) -> Option<&ContextTier> {
+        let mut best: Option<&ContextTier> = None;
+        for tier in tiers {
+            if tier.threshold <= context_size {
+                best = Some(tier);
+            } else {
+                break;
+            }
+        }
+        best
+    }
+
+    fn tier_to_merged(model_id: &str, tier: &ContextTier, display_name: &str) -> MergedPricing {
+        MergedPricing {
+            model_id: model_id.to_string(),
+            display_name: display_name.to_string(),
+            input_cost_per_million: tier.input_cost_per_million,
+            output_cost_per_million: tier.output_cost_per_million,
+            cache_read_cost_per_million: tier.cache_read_cost_per_million,
+            cache_creation_cost_per_million: tier.cache_creation_cost_per_million,
+            is_override: true,
+        }
     }
 
     // 刷新全部定价数据
@@ -46,13 +74,18 @@ impl PricingEngine {
         // 3. 加载用户覆盖
         let overrides = app_db.get_all_overrides()?;
 
-        // 4. 合并
+        // 4. 合并 + 提取覆盖上下文档位
+        self.override_tiers.clear();
         self.merge(base, overrides);
 
-        // 5. 加载时间规则并分组
+        // 5. 加载时间规则并分组 + 提取时间规则上下文档位
+        self.time_rule_tiers.clear();
         self.time_overrides = app_db.get_all_time_overrides()?;
         self.time_overrides_by_model.clear();
         for rule in &self.time_overrides {
+            if !rule.context_tiers.is_empty() {
+                self.time_rule_tiers.insert(rule.id, rule.context_tiers.clone());
+            }
             self.time_overrides_by_model
                 .entry(rule.model_id.clone())
                 .or_default()
@@ -87,6 +120,11 @@ impl PricingEngine {
                 .get(&ov.model_id)
                 .map(|p| p.display_name.clone())
                 .unwrap_or_else(|| ov.model_id.clone());
+            if !ov.context_tiers.is_empty() {
+                let mut sorted = ov.context_tiers;
+                sorted.sort_by_key(|t| t.threshold);
+                self.override_tiers.insert(ov.model_id.clone(), sorted);
+            }
             result.insert(
                 ov.model_id.clone(),
                 MergedPricing {
@@ -132,6 +170,54 @@ impl PricingEngine {
         self.merged.get(model_id).cloned()
     }
 
+    // 上下文感知定价查询：时间规则 → 覆盖档位 → 固定定价
+    pub fn get_pricing_at_with_context(
+        &self,
+        model_id: &str,
+        epoch_seconds: i64,
+        context_size: i64,
+    ) -> Option<MergedPricing> {
+        let display_name = self
+            .merged
+            .get(model_id)
+            .map(|p| p.display_name.clone())
+            .unwrap_or_else(|| model_id.to_string());
+
+        // 1. 时间规则优先
+        if let Some(rules) = self.time_overrides_by_model.get(model_id) {
+            for rule in rules {
+                if rule.start_time <= epoch_seconds && epoch_seconds <= rule.end_time {
+                    // 检查时间规则的上下文档位
+                    if let Some(tiers) = self.time_rule_tiers.get(&rule.id) {
+                        if let Some(tier) = Self::resolve_tier(tiers, context_size) {
+                            return Some(Self::tier_to_merged(model_id, tier, &display_name));
+                        }
+                    }
+                    // 时间规则默认定价
+                    return Some(MergedPricing {
+                        model_id: model_id.to_string(),
+                        display_name: display_name.clone(),
+                        input_cost_per_million: rule.input_cost_per_million,
+                        output_cost_per_million: rule.output_cost_per_million,
+                        cache_read_cost_per_million: rule.cache_read_cost_per_million,
+                        cache_creation_cost_per_million: rule.cache_creation_cost_per_million,
+                        is_override: true,
+                    });
+                }
+            }
+        }
+
+        // 2. 覆盖上下文档位
+        if let Some(tiers) = self.override_tiers.get(model_id) {
+            if let Some(tier) = Self::resolve_tier(tiers, context_size) {
+                return Some(Self::tier_to_merged(model_id, tier, &display_name));
+            }
+        }
+
+        // 3. 固定定价
+        self.merged.get(model_id).cloned()
+    }
+
     // 费用计算
     pub fn calculate_cost(&self, pricing: &MergedPricing, input: i64, output: i64, cache_read: i64, cache_creation: i64) -> f64 {
         (input as f64 * pricing.input_cost_per_million
@@ -171,6 +257,34 @@ impl PricingEngine {
             .get(model_id)
             .cloned()
             .unwrap_or_default()
+    }
+
+    pub fn get_override_tiers(&self, model_id: &str) -> Vec<ContextTier> {
+        self.override_tiers.get(model_id).cloned().unwrap_or_default()
+    }
+
+    /// 返回命中的上下文档位 threshold，无命中返回 None
+    pub fn get_matched_tier_threshold(&self, model_id: &str, epoch_seconds: i64, context_size: i64) -> Option<i64> {
+        // 1. 时间规则的档位
+        if let Some(rules) = self.time_overrides_by_model.get(model_id) {
+            for rule in rules {
+                if rule.start_time <= epoch_seconds && epoch_seconds <= rule.end_time {
+                    if let Some(tiers) = self.time_rule_tiers.get(&rule.id) {
+                        if let Some(tier) = Self::resolve_tier(tiers, context_size) {
+                            return Some(tier.threshold);
+                        }
+                    }
+                    return None;
+                }
+            }
+        }
+        // 2. 覆盖档位
+        if let Some(tiers) = self.override_tiers.get(model_id) {
+            if let Some(tier) = Self::resolve_tier(tiers, context_size) {
+                return Some(tier.threshold);
+            }
+        }
+        None
     }
 
     pub fn has_time_pricing(&self, model_id: &str) -> bool {

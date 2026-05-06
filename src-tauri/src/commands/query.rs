@@ -115,8 +115,9 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     let pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
 
     let result: Vec<RealtimeRequestLog> = raw.into_iter().map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms)| {
+        let context_size = input_tokens + cache_read_tokens;
         let (input_cost, output_cost, cache_read_cost, cache_creation_cost) =
-            if let Some(p) = pricing.get_pricing_at(&model, created_at) {
+            if let Some(p) = pricing.get_pricing_at_with_context(&model, created_at, context_size) {
                 (
                     input_tokens as f64 * p.input_cost_per_million / 1_000_000.0,
                     output_tokens as f64 * p.output_cost_per_million / 1_000_000.0,
@@ -126,6 +127,7 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
             } else {
                 (0.0, 0.0, 0.0, 0.0)
             };
+        let context_tier_threshold = pricing.get_matched_tier_threshold(&model, created_at, context_size);
         RealtimeRequestLog {
             session_id,
             model,
@@ -141,6 +143,7 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
             cache_read_cost,
             cache_creation_cost,
             total_cost: input_cost + output_cost + cache_read_cost + cache_creation_cost,
+            context_tier_threshold,
         }
     }).collect();
 

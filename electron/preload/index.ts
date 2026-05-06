@@ -60,8 +60,40 @@ const api = {
     cacheCreation: number
     label: string
   }) => ipcRenderer.invoke('pricing:update-time-rule', data),
-  deleteTimePricingRule: (id: number) => ipcRenderer.invoke('pricing:delete-time-rule', id),
+  deleteTimePricingRule: (data: { modelId: string; startTime: number; endTime: number; id: number }) =>
+    ipcRenderer.invoke('pricing:delete-time-rule', data),
   refreshPricing: () => ipcRenderer.invoke('pricing:refresh'),
+
+  // 上下文定价档位
+  saveOverrideContextTier: (data: {
+    modelId: string
+    threshold: number
+    input: number
+    output: number
+    cacheRead: number
+    cacheCreation: number
+  }) => ipcRenderer.invoke('pricing:save-override-tier', data),
+  deleteOverrideContextTier: (data: { modelId: string; threshold: number }) =>
+    ipcRenderer.invoke('pricing:delete-override-tier', data),
+  saveTimeRuleContextTier: (data: {
+    modelId: string
+    startTime: number
+    endTime: number
+    threshold: number
+    input: number
+    output: number
+    cacheRead: number
+    cacheCreation: number
+  }) => ipcRenderer.invoke('pricing:save-time-rule-tier', data),
+  updateTimeRuleContextTier: (data: {
+    id: number
+    input: number
+    output: number
+    cacheRead: number
+    cacheCreation: number
+  }) => ipcRenderer.invoke('pricing:update-time-rule-tier', data),
+  deleteTimeRuleContextTier: (id: number) =>
+    ipcRenderer.invoke('pricing:delete-time-rule-tier', id),
   getSessionTitles: (sessionIds: string[]) => ipcRenderer.invoke('session-title:get-titles', sessionIds),
 
   // 对话框

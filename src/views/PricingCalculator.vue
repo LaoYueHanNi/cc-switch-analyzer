@@ -55,11 +55,12 @@
           :computed-cost="card.computedCost"
           :is-override="card?.isOverride || false"
           :time-rules="card?.timeRules || []"
+          :context-tiers="card?.contextTiers || []"
           :sim-tokens="simTokens"
           @edit="onOpenEditDialog(card)"
           @add-time-rule="onAddTimeRule(card.modelId)"
           @edit-time-rule="(rule) => onEditTimeRule(rule)"
-          @delete-time-rule="(id) => onDeleteTimeRule(id)"
+          @delete-time-rule="(rule) => onDeleteTimeRule(rule)"
         />
       </div>
     </div>
@@ -79,11 +80,12 @@
           :computed-cost="card.computedCost"
           :is-override="card?.isOverride || false"
           :time-rules="card?.timeRules || []"
+          :context-tiers="card?.contextTiers || []"
           :sim-tokens="simTokens"
           @edit="onOpenEditDialog(card)"
           @add-time-rule="onAddTimeRule(card.modelId)"
           @edit-time-rule="(rule) => onEditTimeRule(rule)"
-          @delete-time-rule="(id) => onDeleteTimeRule(id)"
+          @delete-time-rule="(rule) => onDeleteTimeRule(rule)"
         />
       </div>
     </div>
@@ -93,6 +95,7 @@
       v-model:show="showTimeDialog"
       :is-edit="!!editingTimeRule"
       :initial-data="timeDialogData"
+      :context-tiers="editingTimeRule?.contextTiers || []"
       @confirm="onConfirmTimeRule"
     />
 
@@ -102,9 +105,11 @@
       :model-name="editModelName"
       :current-pricing="editCurrentPricing"
       :show-restore="editShowRestore"
-      @save="onSavePricing(editModelId!, $event)"
+      :context-tiers="editContextTiers"
+      @save="onSavePricing"
       @restore="onRestorePricing(editModelId!)"
     />
+
   </div>
 </template>
 
@@ -115,11 +120,10 @@ import { ChevronDownOutline, ChevronUpOutline } from '@vicons/ionicons5'
 import { platformAdapter } from '@/platform'
 import { useDatabaseStore } from '@/stores/database'
 import { usePricingStore } from '@/stores/pricing'
-import { formatRate } from '@/utils/format'
 import PricingCard from '@/components/pricing/PricingCard.vue'
 import PricingEditDialog from '@/components/pricing/PricingEditDialog.vue'
 import TimePricingDialog from '@/components/pricing/TimePricingDialog.vue'
-import type { PricingData, TimePricingRule } from '@/types/pricing'
+import type { PricingData, TimePricingRule, ContextTier } from '@/types/pricing'
 
 const dbStore = useDatabaseStore()
 const pricingStore = usePricingStore()
@@ -138,6 +142,7 @@ const editModelId = ref<string | null>(null)
 const editModelName = ref('')
 const editCurrentPricing = ref({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 })
 const editShowRestore = ref(false)
+const editContextTiers = ref<ContextTier[]>([])
 
 // 时间定价弹窗
 const showTimeDialog = ref(false)
@@ -202,14 +207,31 @@ interface CardEntry extends PricingData {
 const allCards = computed<CardEntry[]>(() => {
   const st = simTokens.value
   const now = Math.floor(Date.now() / 1000)
+  const contextSize = st.input + st.cacheRead
   return pricingStore.pricingData
     .filter(p => !searchModel.value || p.modelId.includes(searchModel.value) || (p.displayName && p.displayName.includes(searchModel.value)))
     .map(p => {
+      let inp: number, out: number, cr: number, cc: number
       const rule = p.timeRules?.find(r => now >= r.startTime && now <= r.endTime)
-      const inp = rule ? rule.inputCostPerMillion : p.inputCostPerMillion
-      const out = rule ? rule.outputCostPerMillion : p.outputCostPerMillion
-      const cr = rule ? rule.cacheReadCostPerMillion : p.cacheReadCostPerMillion
-      const cc = rule ? rule.cacheCreationCostPerMillion : p.cacheCreationCostPerMillion
+      if (rule) {
+        const tier = resolveTier(rule.contextTiers || [], contextSize)
+        if (tier) {
+          inp = tier.inputCostPerMillion; out = tier.outputCostPerMillion
+          cr = tier.cacheReadCostPerMillion; cc = tier.cacheCreationCostPerMillion
+        } else {
+          inp = rule.inputCostPerMillion; out = rule.outputCostPerMillion
+          cr = rule.cacheReadCostPerMillion; cc = rule.cacheCreationCostPerMillion
+        }
+      } else {
+        const tier = resolveTier(p.contextTiers || [], contextSize)
+        if (tier) {
+          inp = tier.inputCostPerMillion; out = tier.outputCostPerMillion
+          cr = tier.cacheReadCostPerMillion; cc = tier.cacheCreationCostPerMillion
+        } else {
+          inp = p.inputCostPerMillion; out = p.outputCostPerMillion
+          cr = p.cacheReadCostPerMillion; cc = p.cacheCreationCostPerMillion
+        }
+      }
       const cost = inp * st.input / 1_000_000 + out * st.output / 1_000_000
         + cr * st.cacheRead / 1_000_000 + cc * st.cacheCreation / 1_000_000
       return {
@@ -220,6 +242,16 @@ const allCards = computed<CardEntry[]>(() => {
     })
     .sort((a, b) => b.computedCost - a.computedCost)
 })
+
+function resolveTier(tiers: ContextTier[], contextSize: number): ContextTier | null {
+  let best: ContextTier | null = null
+  for (const tier of tiers) {
+    if (tier.threshold <= contextSize && (!best || tier.threshold > best.threshold)) {
+      best = tier
+    }
+  }
+  return best
+}
 
 const usedCards = computed(() => allCards.value.filter(c => c.isUsed))
 const unusedCards = computed(() => allCards.value.filter(c => !c.isUsed))
@@ -235,6 +267,7 @@ function onOpenEditDialog(card: CardEntry): void {
     cacheCreation: card.cacheCreationCostPerMillion || 0
   }
   editShowRestore.value = card.isOverride || false
+  editContextTiers.value = card.contextTiers ? [...card.contextTiers.map(t => ({ ...t }))] : []
   showEditDialog.value = true
 }
 
@@ -268,7 +301,8 @@ async function loadPricingData(): Promise<void> {
 }
 
 // 保存定价覆盖
-async function onSavePricing(modelId: string, data: { input: number; output: number; cacheRead: number; cacheCreation: number }): Promise<void> {
+async function onSavePricing(data: { input: number; output: number; cacheRead: number; cacheCreation: number }, tiers: ContextTier[]): Promise<void> {
+  const modelId = editModelId.value!
   await platformAdapter.setPricingOverride({
     modelId,
     input: data.input,
@@ -276,6 +310,29 @@ async function onSavePricing(modelId: string, data: { input: number; output: num
     cacheRead: data.cacheRead,
     cacheCreation: data.cacheCreation
   })
+
+  // 同步上下文档位：对比旧档位，删除不再存在的，新增或更新保留的
+  const oldTiers = editContextTiers.value || []
+  for (const old of oldTiers) {
+    if (!tiers.find(t => t.threshold === old.threshold)) {
+      await platformAdapter.deleteOverrideContextTier({ modelId, threshold: old.threshold })
+    }
+  }
+  for (const tier of tiers) {
+    const old = oldTiers.find(t => t.threshold === tier.threshold)
+    if (old) {
+      await platformAdapter.deleteOverrideContextTier({ modelId, threshold: old.threshold })
+    }
+    await platformAdapter.saveOverrideContextTier({
+      modelId,
+      threshold: tier.threshold,
+      input: tier.inputCostPerMillion,
+      output: tier.outputCostPerMillion,
+      cacheRead: tier.cacheReadCostPerMillion,
+      cacheCreation: tier.cacheCreationCostPerMillion
+    })
+  }
+
   await platformAdapter.refreshPricing()
   await loadPricingData()
 }
@@ -300,7 +357,8 @@ function onEditTimeRule(rule: TimePricingRule): void {
   showTimeDialog.value = true
 }
 
-async function onConfirmTimeRule(data: { label: string; startTime: number; endTime: number; input: number; output: number; cacheRead: number; cacheCreation: number }): Promise<void> {
+async function onConfirmTimeRule(data: { label: string; startTime: number; endTime: number; input: number; output: number; cacheRead: number; cacheCreation: number }, tiers: ContextTier[]): Promise<void> {
+  const modelId = currentTimeRuleModelId.value
   if (editingTimeRule.value) {
     await platformAdapter.updateTimePricingRule({
       id: editingTimeRule.value.id,
@@ -312,9 +370,40 @@ async function onConfirmTimeRule(data: { label: string; startTime: number; endTi
       cacheCreation: data.cacheCreation,
       label: data.label
     })
+
+    // 同步上下文档位：对比旧档位，删除不再存在的，新增或更新保留的
+    const oldTiers = editingTimeRule.value.contextTiers || []
+    for (const old of oldTiers) {
+      if (!tiers.find(t => t.threshold === old.threshold)) {
+        if (old.id) await platformAdapter.deleteTimeRuleContextTier(old.id)
+      }
+    }
+    for (const tier of tiers) {
+      const old = oldTiers.find(t => t.threshold === tier.threshold)
+      if (old?.id) {
+        await platformAdapter.updateTimeRuleContextTier({
+          id: old.id,
+          input: tier.inputCostPerMillion,
+          output: tier.outputCostPerMillion,
+          cacheRead: tier.cacheReadCostPerMillion,
+          cacheCreation: tier.cacheCreationCostPerMillion
+        })
+      } else {
+        await platformAdapter.saveTimeRuleContextTier({
+          modelId,
+          startTime: data.startTime,
+          endTime: data.endTime,
+          threshold: tier.threshold,
+          input: tier.inputCostPerMillion,
+          output: tier.outputCostPerMillion,
+          cacheRead: tier.cacheReadCostPerMillion,
+          cacheCreation: tier.cacheCreationCostPerMillion
+        })
+      }
+    }
   } else {
     await platformAdapter.addTimePricingRule({
-      modelId: currentTimeRuleModelId.value,
+      modelId,
       startTime: data.startTime,
       endTime: data.endTime,
       input: data.input,
@@ -323,14 +412,32 @@ async function onConfirmTimeRule(data: { label: string; startTime: number; endTi
       cacheCreation: data.cacheCreation,
       label: data.label
     })
+    // 保存新增规则的上下文档位
+    for (const tier of tiers) {
+      await platformAdapter.saveTimeRuleContextTier({
+        modelId,
+        startTime: data.startTime,
+        endTime: data.endTime,
+        threshold: tier.threshold,
+        input: tier.inputCostPerMillion,
+        output: tier.outputCostPerMillion,
+        cacheRead: tier.cacheReadCostPerMillion,
+        cacheCreation: tier.cacheCreationCostPerMillion
+      })
+    }
   }
   await platformAdapter.refreshPricing()
   await loadPricingData()
   editingTimeRule.value = null
 }
 
-async function onDeleteTimeRule(id: number): Promise<void> {
-  await platformAdapter.deleteTimePricingRule(id)
+async function onDeleteTimeRule(rule: { id: number; modelId: string; startTime: number; endTime: number }): Promise<void> {
+  await platformAdapter.deleteTimePricingRule({
+    modelId: rule.modelId,
+    startTime: rule.startTime,
+    endTime: rule.endTime,
+    id: rule.id
+  })
   await platformAdapter.refreshPricing()
   await loadPricingData()
 }

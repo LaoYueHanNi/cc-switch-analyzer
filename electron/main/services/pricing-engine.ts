@@ -1,5 +1,5 @@
 import type { ExternalDbService, ModelPricing, FilterParams } from './external-db'
-import type { AppDbService } from './app-db'
+import type { AppDbService, ContextTier } from './app-db'
 import { DEFAULT_EXCHANGE_RATE } from '../utils/constants'
 
 // 合并后的定价（包含 isOverride 标记）
@@ -21,18 +21,44 @@ export interface TokenDimensions {
   cacheCreation: number
 }
 
-// 定价计算引擎 —— 三层定价优先级
+// 定价计算引擎 —— 三层定价优先级（上下文大小为子维度）
 export class PricingEngine {
   private merged: Map<string, MergedPricing> = new Map()
   private timeOverrides: any[] = []  // TimePricingRule[]
   private timeOverridesByModel: Map<string, any[]> = new Map()
   private exchangeRate: number = DEFAULT_EXCHANGE_RATE
+  private overrideTiers: Map<string, ContextTier[]> = new Map()
+  private timeRuleTiers: Map<number, ContextTier[]> = new Map()
 
   private externalDb: ExternalDbService
   private appDb: AppDbService
 
   private round(v: number): number {
     return Math.round(v * 1e6) / 1e6
+  }
+
+  private resolveTier(tiers: ContextTier[], contextSize: number): ContextTier | null {
+    let best: ContextTier | null = null
+    for (const tier of tiers) {
+      if (tier.threshold <= contextSize) {
+        best = tier
+      } else {
+        break
+      }
+    }
+    return best
+  }
+
+  private tierToMerged(modelId: string, tier: ContextTier, displayName: string): MergedPricing {
+    return {
+      modelId,
+      displayName,
+      inputCostPerMillion: tier.inputCostPerMillion,
+      outputCostPerMillion: tier.outputCostPerMillion,
+      cacheReadCostPerMillion: tier.cacheReadCostPerMillion,
+      cacheCreationCostPerMillion: tier.cacheCreationCostPerMillion,
+      isOverride: true
+    }
   }
 
   constructor(externalDb: ExternalDbService, appDb: AppDbService) {
@@ -54,10 +80,15 @@ export class PricingEngine {
     // 4. 合并：覆盖替换基础
     this.merged = this.merge(base, overrides)
 
-    // 5. 加载时间规则并分组
+    // 5. 加载时间规则并分组 + 提取上下文档位
+    this.timeRuleTiers = new Map()
     this.timeOverrides = this.appDb.getAllTimeOverrides()
     this.timeOverridesByModel = new Map()
     for (const rule of this.timeOverrides) {
+      if (rule.contextTiers?.length > 0) {
+        const sorted = [...rule.contextTiers].sort((a: any, b: any) => a.threshold - b.threshold)
+        this.timeRuleTiers.set(rule.id, sorted)
+      }
       const list = this.timeOverridesByModel.get(rule.modelId) || []
       list.push(rule)
       this.timeOverridesByModel.set(rule.modelId, list)
@@ -85,9 +116,14 @@ export class PricingEngine {
   // 加载用户覆盖（RMB 直存）
   private loadOverrides(): Map<string, MergedPricing> {
     const rawOverrides = this.appDb.getAllOverrides()
+    this.overrideTiers = new Map()
     const map = new Map<string, MergedPricing>()
     for (const ov of rawOverrides) {
       const baseEntry = this.merged.get(ov.modelId)
+      if (ov.contextTiers?.length > 0) {
+        const sorted = [...ov.contextTiers].sort((a: any, b: any) => a.threshold - b.threshold)
+        this.overrideTiers.set(ov.modelId, sorted)
+      }
       map.set(ov.modelId, {
         modelId: ov.modelId,
         displayName: baseEntry?.displayName || ov.modelId,
@@ -143,6 +179,44 @@ export class PricingEngine {
     return this.merged.get(modelId) || null
   }
 
+  // 上下文感知定价查询：时间规则 → 覆盖档位 → 固定定价
+  getPricingAtWithContext(modelId: string, epochSeconds: number, contextSize: number): MergedPricing | null {
+    const displayName = this.merged.get(modelId)?.displayName || modelId
+
+    // 1. 时间规则优先
+    const rules = this.timeOverridesByModel.get(modelId)
+    if (rules) {
+      for (const rule of rules) {
+        if (rule.startTime <= epochSeconds && epochSeconds <= rule.endTime) {
+          const tiers = this.timeRuleTiers.get(rule.id)
+          if (tiers) {
+            const tier = this.resolveTier(tiers, contextSize)
+            if (tier) return this.tierToMerged(modelId, tier, displayName)
+          }
+          return {
+            modelId,
+            displayName,
+            inputCostPerMillion: rule.inputCostPerMillion,
+            outputCostPerMillion: rule.outputCostPerMillion,
+            cacheReadCostPerMillion: rule.cacheReadCostPerMillion,
+            cacheCreationCostPerMillion: rule.cacheCreationCostPerMillion,
+            isOverride: true
+          }
+        }
+      }
+    }
+
+    // 2. 覆盖上下文档位
+    const overrideTiers = this.overrideTiers.get(modelId)
+    if (overrideTiers) {
+      const tier = this.resolveTier(overrideTiers, contextSize)
+      if (tier) return this.tierToMerged(modelId, tier, displayName)
+    }
+
+    // 3. 固定定价
+    return this.merged.get(modelId) || null
+  }
+
   // 费用计算
   calculateCost(pricing: MergedPricing, tokens: TokenDimensions): number {
     return (
@@ -176,6 +250,36 @@ export class PricingEngine {
   // 获取某模型的时间规则
   getTimeRules(modelId: string): any[] {
     return this.timeOverridesByModel.get(modelId) || []
+  }
+
+  // 获取某模型的覆盖上下文档位
+  getOverrideTiers(modelId: string): ContextTier[] {
+    return this.overrideTiers.get(modelId) || []
+  }
+
+  // 返回命中的上下文档位 threshold，无命中返回 null
+  getMatchedTierThreshold(modelId: string, epochSeconds: number, contextSize: number): number | null {
+    // 1. 时间规则的档位
+    const rules = this.timeOverridesByModel.get(modelId)
+    if (rules) {
+      for (const rule of rules) {
+        if (rule.startTime <= epochSeconds && epochSeconds <= rule.endTime) {
+          const tiers = this.timeRuleTiers.get(rule.id)
+          if (tiers) {
+            const tier = PricingEngine.resolveTier(tiers, contextSize)
+            if (tier) return tier.threshold
+          }
+          return null
+        }
+      }
+    }
+    // 2. 覆盖档位
+    const overrideTiers = this.overrideTiers.get(modelId)
+    if (overrideTiers) {
+      const tier = PricingEngine.resolveTier(overrideTiers, contextSize)
+      if (tier) return tier.threshold
+    }
+    return null
   }
 
   // 检查是否有时间定价

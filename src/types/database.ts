@@ -85,4 +85,5 @@ export interface RealtimeRequestLog {
   cacheReadCost: number
   cacheCreationCost: number
   totalCost: number
+  contextTierThreshold?: number
 }
