@@ -1,7 +1,7 @@
 // 工具函数
 
-/// 默认汇率
-pub const DEFAULT_EXCHANGE_RATE: f64 = 7.0;
+/// 云端定价文件 URL（Gitee raw 文件地址）
+pub const CLOUD_PRICING_URL: &str = "https://gitee.com/oyw125/model-price-table/raw/master/model_pricing.json";
 
 /// 缓存窗口历史范围（天）
 pub const CACHE_WINDOW_DAYS: i64 = 30;

@@ -177,11 +177,6 @@ watch(() => dbStore.hasDatabase, (val) => {
   if (val) loadData()
 }, { immediate: true })
 
-// 定价变化后重新加载
-watch(() => pricingStore.exchangeRate, () => {
-  if (dbStore.hasDatabase) loadData()
-})
-
 // 全局刷新触发
 watch(() => dbStore.refreshVersion, () => {
   if (dbStore.hasDatabase) loadData()

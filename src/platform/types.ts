@@ -90,8 +90,6 @@ export interface PlatformAdapter {
   queryCacheWindows(modelId: string): Promise<any[]>
   querySessionsWithCost(params: FilterParams): Promise<any[]>
   // 定价
-  getExchangeRate(): Promise<number>
-  setExchangeRate(rate: number): Promise<void>
   getAllPricing(): Promise<any[]>
   setPricingOverride(data: PricingOverrideData): Promise<void>
   removePricingOverride(modelId: string): Promise<void>
@@ -105,5 +103,7 @@ export interface PlatformAdapter {
   saveTimeRuleContextTier(data: TimeRuleContextTierData): Promise<any>
   updateTimeRuleContextTier(data: { id: number; input: number; output: number; cacheRead: number; cacheCreation: number }): Promise<void>
   deleteTimeRuleContextTier(id: number): Promise<void>
+  // 云端定价
+  fetchCloudPricing(): Promise<void>
   getSessionTitles(sessionIds: string[]): Promise<Record<string, { title: string; project: string }>>
 }

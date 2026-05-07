@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import { mkdirSync, existsSync, copyFileSync } from 'fs'
 import { dirname } from 'path'
-import { APP_DB_PATH, DEFAULT_EXCHANGE_RATE } from '../utils/constants'
+import { APP_DB_PATH } from '../utils/constants'
 
 // 上下文定价档位
 export interface ContextTier {
@@ -36,6 +36,48 @@ export interface TimePricingRule {
   cacheCreationCostPerMillion: number
   label: string
   contextTiers: ContextTier[]
+}
+
+// 云端定价时间规则
+export interface CloudPricingTimeRule {
+  label: string
+  startTime: number
+  endTime: number
+  inputCostPerMillion: number
+  outputCostPerMillion: number
+  cacheReadCostPerMillion: number
+  cacheCreationCostPerMillion: number
+  contextTiers: ContextTier[]
+}
+
+// 云端定价模型
+export interface CloudPricingModel {
+  modelId: string
+  displayName: string
+  inputCostPerMillion: number
+  outputCostPerMillion: number
+  cacheReadCostPerMillion: number
+  cacheCreationCostPerMillion: number
+  contextTiers: ContextTier[]
+  timeRules: CloudPricingTimeRule[]
+}
+
+// 云端定价数据
+export interface CloudPricingData {
+  version: number
+  updatedAt: number
+  currency: string
+  models: CloudPricingModel[]
+}
+
+// 缓存读取的基础定价行
+export interface ModelPricingRow {
+  modelId: string
+  displayName: string
+  inputCostPerMillion: number
+  outputCostPerMillion: number
+  cacheReadCostPerMillion: number
+  cacheCreationCostPerMillion: number
 }
 
 // 应用自有数据库服务
@@ -76,7 +118,10 @@ export class AppDbService {
       this.backupBeforeMigration(version)
       this.migrateV1()
     }
-    // 未来: if (version < 2) { this.backupBeforeMigration(1); this.migrateV2(); }
+    if (version < 2) {
+      this.backupBeforeMigration(1)
+      this.migrateV2()
+    }
   }
 
   private getSchemaVersion(): number {
@@ -161,6 +206,35 @@ export class AppDbService {
     this.setSchemaVersion(1)
   }
 
+  private migrateV2(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS cloud_pricing_cache (
+        model_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        input_cost_per_million REAL NOT NULL,
+        output_cost_per_million REAL NOT NULL,
+        cache_read_cost_per_million REAL NOT NULL,
+        cache_creation_cost_per_million REAL NOT NULL,
+        threshold INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (model_id, threshold)
+      );
+
+      CREATE TABLE IF NOT EXISTS cloud_time_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        model_id TEXT NOT NULL,
+        start_time INTEGER NOT NULL,
+        end_time INTEGER NOT NULL,
+        input_cost_per_million REAL NOT NULL,
+        output_cost_per_million REAL NOT NULL,
+        cache_read_cost_per_million REAL NOT NULL,
+        cache_creation_cost_per_million REAL NOT NULL,
+        label TEXT DEFAULT '',
+        threshold INTEGER NOT NULL DEFAULT 0
+      );
+    `)
+    this.setSchemaVersion(2)
+  }
+
   close(): void {
     this.db.close()
   }
@@ -177,16 +251,6 @@ export class AppDbService {
       INSERT OR REPLACE INTO settings (key, value, updated_at)
       VALUES (?, ?, strftime('%s','now'))
     `).run(key, value)
-  }
-
-  // 汇率（便捷方法）
-  getExchangeRate(): number {
-    const v = this.getSetting('exchange_rate')
-    return v ? parseFloat(v) : DEFAULT_EXCHANGE_RATE
-  }
-
-  setExchangeRate(rate: number): void {
-    this.setSetting('exchange_rate', String(rate))
   }
 
   // ========== 定价覆盖 CRUD ==========
@@ -409,5 +473,164 @@ export class AppDbService {
     this.db.prepare(
       'INSERT OR REPLACE INTO session_titles (session_id, title, created_at) VALUES (?, ?, strftime(\'%s\',\'now\'))'
     ).run(sessionId, title)
+  }
+
+  // ========== 云端定价缓存 ==========
+
+  saveCloudPricing(data: CloudPricingData): void {
+    const tx = this.db.transaction(() => {
+      this.db.exec('DELETE FROM cloud_pricing_cache')
+      this.db.exec('DELETE FROM cloud_time_rules')
+
+      const insertBase = this.db.prepare(`
+        INSERT INTO cloud_pricing_cache
+          (model_id, display_name, input_cost_per_million, output_cost_per_million,
+           cache_read_cost_per_million, cache_creation_cost_per_million, threshold)
+        VALUES (?, ?, ?, ?, ?, ?, 0)
+      `)
+
+      const insertTier = this.db.prepare(`
+        INSERT INTO cloud_pricing_cache
+          (model_id, display_name, input_cost_per_million, output_cost_per_million,
+           cache_read_cost_per_million, cache_creation_cost_per_million, threshold)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `)
+
+      const insertTimeRule = this.db.prepare(`
+        INSERT INTO cloud_time_rules
+          (model_id, start_time, end_time,
+           input_cost_per_million, output_cost_per_million,
+           cache_read_cost_per_million, cache_creation_cost_per_million,
+           label, threshold)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+      `)
+
+      const insertTimeRuleTier = this.db.prepare(`
+        INSERT INTO cloud_time_rules
+          (model_id, start_time, end_time,
+           input_cost_per_million, output_cost_per_million,
+           cache_read_cost_per_million, cache_creation_cost_per_million,
+           label, threshold)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+
+      for (const model of data.models) {
+        insertBase.run(
+          model.modelId, model.displayName,
+          model.inputCostPerMillion, model.outputCostPerMillion,
+          model.cacheReadCostPerMillion, model.cacheCreationCostPerMillion
+        )
+        for (const tier of model.contextTiers) {
+          insertTier.run(
+            model.modelId, model.displayName,
+            tier.inputCostPerMillion, tier.outputCostPerMillion,
+            tier.cacheReadCostPerMillion, tier.cacheCreationCostPerMillion,
+            tier.threshold
+          )
+        }
+        for (const rule of model.timeRules ?? []) {
+          insertTimeRule.run(
+            model.modelId, rule.startTime, rule.endTime,
+            rule.inputCostPerMillion, rule.outputCostPerMillion,
+            rule.cacheReadCostPerMillion, rule.cacheCreationCostPerMillion,
+            rule.label
+          )
+          for (const tier of rule.contextTiers ?? []) {
+            insertTimeRuleTier.run(
+              model.modelId, rule.startTime, rule.endTime,
+              tier.inputCostPerMillion, tier.outputCostPerMillion,
+              tier.cacheReadCostPerMillion, tier.cacheCreationCostPerMillion,
+              rule.label, tier.threshold
+            )
+          }
+        }
+      }
+
+      this.db.prepare("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('cloud_pricing_version', ?, strftime('%s','now'))")
+        .run(String(data.version))
+      this.db.prepare("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('cloud_pricing_updated_at', ?, strftime('%s','now'))")
+        .run(String(data.updatedAt))
+    })
+    tx()
+  }
+
+  loadCloudPricing(): { base: ModelPricingRow[], tiers: Map<string, ContextTier[]>, cloudTimeRules: Map<string, CloudPricingTimeRule[]> } {
+    const baseRows = this.db.prepare(`
+      SELECT model_id, display_name,
+             input_cost_per_million, output_cost_per_million,
+             cache_read_cost_per_million, cache_creation_cost_per_million
+      FROM cloud_pricing_cache WHERE threshold = 0 ORDER BY model_id
+    `).all() as any[]
+
+    const base: ModelPricingRow[] = baseRows.map(r => ({
+      modelId: r.model_id,
+      displayName: r.display_name,
+      inputCostPerMillion: r.input_cost_per_million,
+      outputCostPerMillion: r.output_cost_per_million,
+      cacheReadCostPerMillion: r.cache_read_cost_per_million,
+      cacheCreationCostPerMillion: r.cache_creation_cost_per_million
+    }))
+
+    const tierRows = this.db.prepare(`
+      SELECT model_id, threshold,
+             input_cost_per_million, output_cost_per_million,
+             cache_read_cost_per_million, cache_creation_cost_per_million
+      FROM cloud_pricing_cache WHERE threshold > 0 ORDER BY model_id, threshold
+    `).all() as any[]
+
+    const tiers = new Map<string, ContextTier[]>()
+    for (const r of tierRows) {
+      if (!tiers.has(r.model_id)) tiers.set(r.model_id, [])
+      tiers.get(r.model_id)!.push({
+        threshold: r.threshold,
+        inputCostPerMillion: r.input_cost_per_million,
+        outputCostPerMillion: r.output_cost_per_million,
+        cacheReadCostPerMillion: r.cache_read_cost_per_million,
+        cacheCreationCostPerMillion: r.cache_creation_cost_per_million
+      })
+    }
+
+    // 读取云端时间规则
+    const timeRuleRows = this.db.prepare(`
+      SELECT model_id, start_time, end_time,
+             input_cost_per_million, output_cost_per_million,
+             cache_read_cost_per_million, cache_creation_cost_per_million,
+             label, threshold
+      FROM cloud_time_rules ORDER BY model_id, start_time, threshold
+    `).all() as any[]
+
+    const cloudTimeRules = new Map<string, CloudPricingTimeRule[]>()
+    const ruleMap = new Map<string, CloudPricingTimeRule>()
+    for (const r of timeRuleRows) {
+      const key = `${r.model_id}:${r.start_time}:${r.end_time}`
+      if (!ruleMap.has(key)) {
+        ruleMap.set(key, {
+          label: r.label,
+          startTime: r.start_time,
+          endTime: r.end_time,
+          inputCostPerMillion: r.input_cost_per_million,
+          outputCostPerMillion: r.output_cost_per_million,
+          cacheReadCostPerMillion: r.cache_read_cost_per_million,
+          cacheCreationCostPerMillion: r.cache_creation_cost_per_million,
+          contextTiers: []
+        })
+      }
+      if (r.threshold > 0) {
+        ruleMap.get(key)!.contextTiers.push({
+          threshold: r.threshold,
+          inputCostPerMillion: r.input_cost_per_million,
+          outputCostPerMillion: r.output_cost_per_million,
+          cacheReadCostPerMillion: r.cache_read_cost_per_million,
+          cacheCreationCostPerMillion: r.cache_creation_cost_per_million
+        })
+      }
+    }
+    for (const [key, rule] of ruleMap) {
+      const modelId = key.split(':')[0]
+      if (!cloudTimeRules.has(modelId)) cloudTimeRules.set(modelId, [])
+      cloudTimeRules.get(modelId)!.push(rule)
+    }
+
+    return { base, tiers, cloudTimeRules }
   }
 }

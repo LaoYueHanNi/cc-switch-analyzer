@@ -4,18 +4,6 @@ use crate::AppState;
 use crate::models::*;
 
 #[tauri::command]
-pub fn get_exchange_rate(state: State<AppState>) -> Result<f64, String> {
-    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    Ok(app_db.get_exchange_rate())
-}
-
-#[tauri::command]
-pub fn set_exchange_rate(rate: f64, state: State<AppState>) -> Result<(), String> {
-    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    app_db.set_exchange_rate(rate)
-}
-
-#[tauri::command]
 pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, String> {
     let pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
     let ext_db = state.external_db.lock().map_err(|e| e.to_string())?;
@@ -35,6 +23,7 @@ pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, Strin
         .map(|p| {
             let time_rules = pricing.get_time_rules(&p.model_id);
             let context_tiers = pricing.get_override_tiers(&p.model_id);
+            let cloud_time_rules = pricing.get_cloud_time_rules(&p.model_id);
             PricingData {
                 model_id: p.model_id.clone(),
                 display_name: p.display_name.clone(),
@@ -47,6 +36,7 @@ pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, Strin
                 time_rules,
                 is_used: used_models.contains(&p.model_id),
                 context_tiers,
+                cloud_time_rules,
             }
         })
         .collect())
@@ -192,8 +182,15 @@ pub fn delete_time_rule_context_tier(
 
 #[tauri::command]
 pub fn refresh_pricing(state: State<AppState>) -> Result<(), String> {
-    let ext_db = state.external_db.lock().map_err(|e| e.to_string())?;
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     let mut pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
-    pricing.refresh(&ext_db, &app_db)
+    pricing.refresh(&app_db)
+}
+
+#[tauri::command]
+pub fn fetch_cloud_pricing(state: State<AppState>) -> Result<(), String> {
+    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+    let mut pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
+    pricing.fetch_and_cache_cloud_pricing(&app_db)?;
+    pricing.refresh(&app_db)
 }

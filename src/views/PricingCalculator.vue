@@ -36,10 +36,6 @@
           <n-input-number v-model:value="simCacheCreation" size="tiny" :show-button="false" :min="0" :step="1" style="width: 52px" />
           <span class="filter-label">K</span>
         </div>
-        <div class="filter-group">
-          <span class="filter-label">汇率</span>
-          <n-input-number v-model:value="exchangeRate" size="tiny" :show-button="false" :min="0.01" :step="0.1" style="width: 52px" />
-        </div>
       </div>
     </div>
 
@@ -123,7 +119,7 @@ import { usePricingStore } from '@/stores/pricing'
 import PricingCard from '@/components/pricing/PricingCard.vue'
 import PricingEditDialog from '@/components/pricing/PricingEditDialog.vue'
 import TimePricingDialog from '@/components/pricing/TimePricingDialog.vue'
-import type { PricingData, TimePricingRule, ContextTier } from '@/types/pricing'
+import type { PricingData, TimePricingRule, CloudPricingTimeRule, ContextTier } from '@/types/pricing'
 
 const dbStore = useDatabaseStore()
 const pricingStore = usePricingStore()
@@ -133,7 +129,6 @@ const simInput = ref(1)
 const simCacheRead = ref(70)
 const simOutput = ref(1)
 const simCacheCreation = ref(0)
-const exchangeRate = ref(7.0)
 const showUnused = ref(false)
 
 // 编辑定价弹窗
@@ -212,7 +207,9 @@ const allCards = computed<CardEntry[]>(() => {
     .filter(p => !searchModel.value || p.modelId.includes(searchModel.value) || (p.displayName && p.displayName.includes(searchModel.value)))
     .map(p => {
       let inp: number, out: number, cr: number, cc: number
+      // 优先级：用户时间规则 > 云端时间规则 > 默认定价
       const rule = p.timeRules?.find(r => now >= r.startTime && now <= r.endTime)
+        || p.cloudTimeRules?.find(r => now >= r.startTime && now <= r.endTime)
       if (rule) {
         const tier = resolveTier(rule.contextTiers || [], contextSize)
         if (tier) {
@@ -270,27 +267,6 @@ function onOpenEditDialog(card: CardEntry): void {
   editContextTiers.value = card.contextTiers ? [...card.contextTiers.map(t => ({ ...t }))] : []
   showEditDialog.value = true
 }
-
-// 加载汇率
-async function loadExchangeRate(): Promise<void> {
-  try {
-    const rate = await platformAdapter.getExchangeRate()
-    exchangeRate.value = rate
-    pricingStore.exchangeRate = rate
-  } catch { /* ignore */ }
-}
-
-// 汇率防抖保存（500ms）
-let rateTimer: ReturnType<typeof setTimeout>
-watch(exchangeRate, (val) => {
-  clearTimeout(rateTimer)
-  rateTimer = setTimeout(async () => {
-    await platformAdapter.setExchangeRate(val)
-    pricingStore.exchangeRate = val
-    await platformAdapter.refreshPricing()
-    await loadPricingData()
-  }, 500)
-})
 
 // 加载完整定价数据
 async function loadPricingData(): Promise<void> {
@@ -445,7 +421,6 @@ async function onDeleteTimeRule(rule: { id: number; modelId: string; startTime: 
 // 初始化
 watch(() => dbStore.hasDatabase, async (val) => {
   if (val) {
-    await loadExchangeRate()
     await loadPricingData()
   }
 }, { immediate: true })

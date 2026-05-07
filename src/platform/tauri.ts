@@ -63,12 +63,6 @@ export const platformAdapter: PlatformAdapter = {
     return invoke('query_sessions_with_cost', { params: toTauriParams(params) })
   },
   // 定价
-  async getExchangeRate() {
-    return invoke<number>('get_exchange_rate')
-  },
-  async setExchangeRate(rate: number) {
-    return invoke('set_exchange_rate', { rate })
-  },
   async getAllPricing() {
     return invoke('get_all_pricing')
   },
@@ -129,6 +123,9 @@ export const platformAdapter: PlatformAdapter = {
   },
   async deleteTimeRuleContextTier(id: number) {
     return invoke('delete_time_rule_context_tier', { id })
+  },
+  async fetchCloudPricing() {
+    return invoke('fetch_cloud_pricing')
   },
   async getSessionTitles(sessionIds: string[]) {
     return invoke<Record<string, { title: string; project: string }>>('get_session_titles', { sessionIds })

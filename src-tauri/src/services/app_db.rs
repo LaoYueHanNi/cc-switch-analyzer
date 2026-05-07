@@ -45,7 +45,10 @@ impl AppDbService {
             self.backup_before_migration(version)?;
             self.migrate_v1()?;
         }
-        // 未来版本: if version < 2 { self.backup_before_migration(1)?; self.migrate_v2()?; }
+        if version < 2 {
+            self.backup_before_migration(1)?;
+            self.migrate_v2()?;
+        }
 
         Ok(())
     }
@@ -143,6 +146,37 @@ impl AppDbService {
         Ok(())
     }
 
+    fn migrate_v2(&mut self) -> Result<(), String> {
+        self.db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS cloud_pricing_cache (
+                model_id TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                input_cost_per_million REAL NOT NULL,
+                output_cost_per_million REAL NOT NULL,
+                cache_read_cost_per_million REAL NOT NULL,
+                cache_creation_cost_per_million REAL NOT NULL,
+                threshold INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (model_id, threshold)
+            );
+
+            CREATE TABLE IF NOT EXISTS cloud_time_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_id TEXT NOT NULL,
+                start_time INTEGER NOT NULL,
+                end_time INTEGER NOT NULL,
+                input_cost_per_million REAL NOT NULL,
+                output_cost_per_million REAL NOT NULL,
+                cache_read_cost_per_million REAL NOT NULL,
+                cache_creation_cost_per_million REAL NOT NULL,
+                label TEXT DEFAULT '',
+                threshold INTEGER NOT NULL DEFAULT 0
+            );"
+        ).map_err(|e| format!("迁移 v2 (云端定价缓存) 失败: {}", e))?;
+
+        self.set_schema_version(2)?;
+        Ok(())
+    }
+
     // ========== 设置管理 ==========
 
     pub fn get_setting(&self, key: &str) -> Option<String> {
@@ -163,16 +197,6 @@ impl AppDbService {
             )
             .map_err(|e| format!("保存设置失败: {}", e))?;
         Ok(())
-    }
-
-    pub fn get_exchange_rate(&self) -> f64 {
-        self.get_setting("exchange_rate")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_EXCHANGE_RATE)
-    }
-
-    pub fn set_exchange_rate(&self, rate: f64) -> Result<(), String> {
-        self.set_setting("exchange_rate", &rate.to_string())
     }
 
     // ========== 定价覆盖 CRUD ==========
@@ -561,5 +585,240 @@ impl AppDbService {
             params![session_id, title],
         ).map_err(|e| format!("保存会话标题失败: {}", e))?;
         Ok(())
+    }
+
+    // ========== 云端定价缓存 ==========
+
+    /// 将云端定价数据写入缓存（事务替换）
+    pub fn save_cloud_pricing(&self, data: &crate::models::CloudPricingData) -> Result<(), String> {
+        let tx = self.db.unchecked_transaction().map_err(|e| format!("开启事务失败: {}", e))?;
+
+        tx.execute_batch("DELETE FROM cloud_pricing_cache")
+            .map_err(|e| format!("清空云端定价缓存失败: {}", e))?;
+        tx.execute_batch("DELETE FROM cloud_time_rules")
+            .map_err(|e| format!("清空云端时间规则缓存失败: {}", e))?;
+
+        for model in &data.models {
+            tx.execute(
+                "INSERT INTO cloud_pricing_cache
+                    (model_id, display_name, input_cost_per_million, output_cost_per_million,
+                     cache_read_cost_per_million, cache_creation_cost_per_million, threshold)
+                 VALUES (?, ?, ?, ?, ?, ?, 0)",
+                params![
+                    model.model_id,
+                    model.display_name,
+                    model.input_cost_per_million,
+                    model.output_cost_per_million,
+                    model.cache_read_cost_per_million,
+                    model.cache_creation_cost_per_million,
+                ],
+            ).map_err(|e| format!("写入云端定价缓存失败: {}", e))?;
+
+            for tier in &model.context_tiers {
+                tx.execute(
+                    "INSERT INTO cloud_pricing_cache
+                        (model_id, display_name, input_cost_per_million, output_cost_per_million,
+                         cache_read_cost_per_million, cache_creation_cost_per_million, threshold)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    params![
+                        model.model_id,
+                        model.display_name,
+                        tier.input_cost_per_million,
+                        tier.output_cost_per_million,
+                        tier.cache_read_cost_per_million,
+                        tier.cache_creation_cost_per_million,
+                        tier.threshold,
+                    ],
+                ).map_err(|e| format!("写入云端定价档位缓存失败: {}", e))?;
+            }
+
+            for rule in &model.time_rules {
+                tx.execute(
+                    "INSERT INTO cloud_time_rules
+                        (model_id, start_time, end_time,
+                         input_cost_per_million, output_cost_per_million,
+                         cache_read_cost_per_million, cache_creation_cost_per_million,
+                         label, threshold)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                    params![
+                        model.model_id,
+                        rule.start_time,
+                        rule.end_time,
+                        rule.input_cost_per_million,
+                        rule.output_cost_per_million,
+                        rule.cache_read_cost_per_million,
+                        rule.cache_creation_cost_per_million,
+                        rule.label,
+                    ],
+                ).map_err(|e| format!("写入云端时间规则缓存失败: {}", e))?;
+
+                for tier in &rule.context_tiers {
+                    tx.execute(
+                        "INSERT INTO cloud_time_rules
+                            (model_id, start_time, end_time,
+                             input_cost_per_million, output_cost_per_million,
+                             cache_read_cost_per_million, cache_creation_cost_per_million,
+                             label, threshold)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        params![
+                            model.model_id,
+                            rule.start_time,
+                            rule.end_time,
+                            tier.input_cost_per_million,
+                            tier.output_cost_per_million,
+                            tier.cache_read_cost_per_million,
+                            tier.cache_creation_cost_per_million,
+                            rule.label,
+                            tier.threshold,
+                        ],
+                    ).map_err(|e| format!("写入云端时间规则档位缓存失败: {}", e))?;
+                }
+            }
+        }
+
+        tx.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('cloud_pricing_version', ?, strftime('%s','now'))",
+            params![data.version.to_string()],
+        ).map_err(|e| format!("写入云端定价版本失败: {}", e))?;
+
+        tx.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('cloud_pricing_updated_at', ?, strftime('%s','now'))",
+            params![data.updated_at.to_string()],
+        ).map_err(|e| format!("写入云端定价更新时间失败: {}", e))?;
+
+        tx.commit().map_err(|e| format!("提交云端定价缓存失败: {}", e))?;
+        Ok(())
+    }
+
+    /// 从缓存读取云端定价（返回基础行 + 按模型分组的上下文档位 + 按 model_id 分组的云端时间规则）
+    pub fn load_cloud_pricing(&self) -> Result<(Vec<ModelPricing>, HashMap<String, Vec<ContextTier>>, HashMap<String, Vec<crate::models::CloudPricingTimeRule>>), String> {
+        // 读取基础行 (threshold = 0)
+        let mut stmt = self.db
+            .prepare(
+                "SELECT model_id, display_name,
+                        input_cost_per_million, output_cost_per_million,
+                        cache_read_cost_per_million, cache_creation_cost_per_million
+                 FROM cloud_pricing_cache WHERE threshold = 0 ORDER BY model_id"
+            )
+            .map_err(|e| format!("查询云端定价缓存失败: {}", e))?;
+
+        let base_rows = stmt.query_map([], |row| {
+            Ok(ModelPricing {
+                model_id: row.get("model_id")?,
+                display_name: row.get("display_name")?,
+                input_cost_per_million: row.get("input_cost_per_million")?,
+                output_cost_per_million: row.get("output_cost_per_million")?,
+                cache_read_cost_per_million: row.get("cache_read_cost_per_million")?,
+                cache_creation_cost_per_million: row.get("cache_creation_cost_per_million")?,
+            })
+        }).map_err(|e| format!("查询云端定价缓存失败: {}", e))?;
+
+        let mut base = Vec::new();
+        for row in base_rows {
+            base.push(row.map_err(|e| format!("读取云端定价缓存失败: {}", e))?);
+        }
+
+        // 读取档位行 (threshold > 0)
+        let mut tier_stmt = self.db
+            .prepare(
+                "SELECT model_id, threshold,
+                        input_cost_per_million, output_cost_per_million,
+                        cache_read_cost_per_million, cache_creation_cost_per_million
+                 FROM cloud_pricing_cache WHERE threshold > 0 ORDER BY model_id, threshold"
+            )
+            .map_err(|e| format!("查询云端定价档位缓存失败: {}", e))?;
+
+        let tier_rows = tier_stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>("model_id")?,
+                ContextTier {
+                    id: None,
+                    threshold: row.get("threshold")?,
+                    input_cost_per_million: row.get("input_cost_per_million")?,
+                    output_cost_per_million: row.get("output_cost_per_million")?,
+                    cache_read_cost_per_million: row.get("cache_read_cost_per_million")?,
+                    cache_creation_cost_per_million: row.get("cache_creation_cost_per_million")?,
+                },
+            ))
+        }).map_err(|e| format!("查询云端定价档位缓存失败: {}", e))?;
+
+        let mut tiers: HashMap<String, Vec<ContextTier>> = HashMap::new();
+        for row in tier_rows {
+            let (model_id, tier) = row.map_err(|e| format!("读取云端定价档位缓存失败: {}", e))?;
+            tiers.entry(model_id).or_default().push(tier);
+        }
+
+        // 读取云端时间规则
+        let cloud_time_rules = self.load_cloud_time_rules()?;
+
+        Ok((base, tiers, cloud_time_rules))
+    }
+
+    /// 从缓存读取云端时间规则（按 model_id 分组）
+    fn load_cloud_time_rules(&self) -> Result<HashMap<String, Vec<crate::models::CloudPricingTimeRule>>, String> {
+        let mut stmt = self.db
+            .prepare(
+                "SELECT model_id, start_time, end_time,
+                        input_cost_per_million, output_cost_per_million,
+                        cache_read_cost_per_million, cache_creation_cost_per_million,
+                        label, threshold
+                 FROM cloud_time_rules ORDER BY model_id, start_time, threshold"
+            )
+            .map_err(|e| format!("查询云端时间规则缓存失败: {}", e))?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>("model_id")?,
+                row.get::<_, i64>("start_time")?,
+                row.get::<_, i64>("end_time")?,
+                row.get::<_, f64>("input_cost_per_million")?,
+                row.get::<_, f64>("output_cost_per_million")?,
+                row.get::<_, f64>("cache_read_cost_per_million")?,
+                row.get::<_, f64>("cache_creation_cost_per_million")?,
+                row.get::<_, String>("label")?,
+                row.get::<_, i64>("threshold")?,
+            ))
+        }).map_err(|e| format!("查询云端时间规则缓存失败: {}", e))?;
+
+        // 先按 (model_id, start_time, end_time) 分组合并上下文档位
+        let mut group_map: HashMap<(String, i64, i64), crate::models::CloudPricingTimeRule> = HashMap::new();
+        for row in rows {
+            let (model_id, start_time, end_time, inp, out, cr, cc, label, threshold) =
+                row.map_err(|e| format!("读取云端时间规则缓存失败: {}", e))?;
+            let key = (model_id.clone(), start_time, end_time);
+            let entry = group_map.entry(key).or_insert_with(|| crate::models::CloudPricingTimeRule {
+                model_id: model_id.clone(),
+                label,
+                start_time,
+                end_time,
+                input_cost_per_million: inp,
+                output_cost_per_million: out,
+                cache_read_cost_per_million: cr,
+                cache_creation_cost_per_million: cc,
+                context_tiers: Vec::new(),
+            });
+            if threshold > 0 {
+                entry.context_tiers.push(ContextTier {
+                    id: None,
+                    threshold,
+                    input_cost_per_million: inp,
+                    output_cost_per_million: out,
+                    cache_read_cost_per_million: cr,
+                    cache_creation_cost_per_million: cc,
+                });
+            }
+        }
+
+        // 再按 model_id 分组
+        let mut result: HashMap<String, Vec<crate::models::CloudPricingTimeRule>> = HashMap::new();
+        for rule in group_map.into_values() {
+            let model_id = rule.model_id.clone();
+            result.entry(model_id).or_default().push(rule);
+        }
+        // 每个模型内按 start_time 排序
+        for rules in result.values_mut() {
+            rules.sort_by_key(|r| r.start_time);
+        }
+        Ok(result)
     }
 }

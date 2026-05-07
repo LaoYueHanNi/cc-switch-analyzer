@@ -8,8 +8,8 @@ export const APP_DB_DIR = (() => {
 
 export const APP_DB_PATH = require('path').join(APP_DB_DIR, 'pricing.db')
 
-// 默认汇率
-export const DEFAULT_EXCHANGE_RATE = 7.0
+// 云端定价文件 URL（Gitee raw 文件地址）
+export const CLOUD_PRICING_URL = 'https://gitee.com/oyw125/model-price-table/raw/master/model_pricing.json'
 
 // 查询版本号（用于防竞态）
 export const QUERY_VERSION = 1

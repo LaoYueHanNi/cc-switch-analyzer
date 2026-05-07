@@ -133,8 +133,6 @@ pub fn run() {
             // 会话标题
             commands::session_title::get_session_titles,
             // 定价操作
-            commands::pricing::get_exchange_rate,
-            commands::pricing::set_exchange_rate,
             commands::pricing::get_all_pricing,
             commands::pricing::get_pricing_overrides,
             commands::pricing::set_pricing_override,
@@ -144,6 +142,7 @@ pub fn run() {
             commands::pricing::update_time_pricing_rule,
             commands::pricing::delete_time_pricing_rule,
             commands::pricing::refresh_pricing,
+            commands::pricing::fetch_cloud_pricing,
             // 上下文定价档位
             commands::pricing::save_override_context_tier,
             commands::pricing::delete_override_context_tier,

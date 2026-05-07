@@ -47,7 +47,7 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Option<DatabaseInfo>
     {
         let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
         let mut pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
-        match pricing.refresh(&ext_db, &app_db) {
+        match pricing.refresh(&app_db) {
             Ok(()) => eprintln!("[DB] 定价引擎刷新成功, 模型数={}", pricing.size()),
             Err(e) => eprintln!("[DB] 定价引擎刷新失败: {}", e),
         }
@@ -79,7 +79,7 @@ pub fn load_database(file_path: String, state: State<AppState>) -> Result<Databa
     {
         let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
         let mut pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
-        match pricing.refresh(&ext_db, &app_db) {
+        match pricing.refresh(&app_db) {
             Ok(()) => eprintln!("[DB] 定价引擎刷新成功, 模型数={}", pricing.size()),
             Err(e) => eprintln!("[DB] 定价引擎刷新失败: {}", e),
         }

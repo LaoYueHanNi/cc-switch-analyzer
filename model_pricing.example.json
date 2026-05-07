@@ -1,0 +1,54 @@
+{
+  "version": 2,
+  "updatedAt": 0,
+  "currency": "RMB",
+  "models": [
+    {
+      "modelId": "claude-sonnet-4-20250514",
+      "displayName": "Claude Sonnet 4",
+      "inputCostPerMillion": 21.0,
+      "outputCostPerMillion": 105.0,
+      "cacheReadCostPerMillion": 2.1,
+      "cacheCreationCostPerMillion": 26.25,
+      "contextTiers": [
+        {
+          "threshold": 128000,
+          "inputCostPerMillion": 42.0,
+          "outputCostPerMillion": 210.0,
+          "cacheReadCostPerMillion": 4.2,
+          "cacheCreationCostPerMillion": 52.5
+        }
+      ]
+    },
+    {
+      "modelId": "claude-opus-4-20250514",
+      "displayName": "Claude Opus 4",
+      "inputCostPerMillion": 105.0,
+      "outputCostPerMillion": 525.0,
+      "cacheReadCostPerMillion": 10.5,
+      "cacheCreationCostPerMillion": 131.25,
+      "contextTiers": []
+    },
+    {
+      "modelId": "gpt-4o-2024-0806",
+      "displayName": "GPT-4o",
+      "inputCostPerMillion": 17.5,
+      "outputCostPerMillion": 52.5,
+      "cacheReadCostPerMillion": 8.75,
+      "cacheCreationCostPerMillion": 0,
+      "contextTiers": [],
+      "timeRules": [
+        {
+          "label": "夜间折扣",
+          "startTime": 0,
+          "endTime": 1717200000,
+          "inputCostPerMillion": 8.75,
+          "outputCostPerMillion": 26.25,
+          "cacheReadCostPerMillion": 4.375,
+          "cacheCreationCostPerMillion": 0,
+          "contextTiers": []
+        }
+      ]
+    }
+  ]
+}

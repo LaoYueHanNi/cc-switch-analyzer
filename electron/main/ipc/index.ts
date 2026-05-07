@@ -15,7 +15,12 @@ let pricingEngine: PricingEngine
 export function initIPC(): { externalDb: ExternalDbService; appDb: AppDbService; pricingEngine: PricingEngine } {
   externalDb = new ExternalDbService()
   appDb = new AppDbService()
-  pricingEngine = new PricingEngine(externalDb, appDb)
+  pricingEngine = new PricingEngine(appDb)
+
+  // 异步拉取云端定价并刷新
+  pricingEngine.fetchAndCacheCloudPricing().then(() => {
+    pricingEngine.refresh()
+  }).catch(() => {})
 
   // 注：pricingEngine.refresh() 在数据库选择后由 dialog.ipc 触发
 

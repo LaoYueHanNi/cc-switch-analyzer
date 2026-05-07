@@ -264,6 +264,8 @@ pub struct PricingData {
     pub is_used: bool,
     #[serde(default)]
     pub context_tiers: Vec<ContextTier>,
+    #[serde(default)]
+    pub cloud_time_rules: Vec<CloudPricingTimeRule>,
 }
 
 // ========== 预计算结果 ==========
@@ -347,6 +349,48 @@ pub struct SessionWithCost {
 pub struct RefreshResult {
     pub has_new: bool,
     pub record_count: Option<i64>,
+}
+
+// ========== 云端定价 ==========
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudPricingTimeRule {
+    #[serde(default)]
+    pub model_id: String,
+    pub label: String,
+    pub start_time: i64,
+    pub end_time: i64,
+    pub input_cost_per_million: f64,
+    pub output_cost_per_million: f64,
+    pub cache_read_cost_per_million: f64,
+    pub cache_creation_cost_per_million: f64,
+    #[serde(default)]
+    pub context_tiers: Vec<ContextTier>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudPricingModel {
+    pub model_id: String,
+    pub display_name: String,
+    pub input_cost_per_million: f64,
+    pub output_cost_per_million: f64,
+    pub cache_read_cost_per_million: f64,
+    pub cache_creation_cost_per_million: f64,
+    #[serde(default)]
+    pub context_tiers: Vec<ContextTier>,
+    #[serde(default)]
+    pub time_rules: Vec<CloudPricingTimeRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudPricingData {
+    pub version: i64,
+    pub updated_at: i64,
+    pub currency: String,
+    pub models: Vec<CloudPricingModel>,
 }
 
 // ========== 筛选选项 ==========

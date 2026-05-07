@@ -27,8 +27,6 @@ const api = {
   querySessionsWithCost: (params: any) => ipcRenderer.invoke('query:sessions-with-cost', params),
 
   // 定价操作
-  getExchangeRate: () => ipcRenderer.invoke('pricing:get-exchange-rate'),
-  setExchangeRate: (rate: number) => ipcRenderer.invoke('pricing:set-exchange-rate', rate),
   getAllPricing: () => ipcRenderer.invoke('pricing:get-all'),
   getPricingOverrides: () => ipcRenderer.invoke('pricing:get-overrides'),
   setPricingOverride: (data: {
@@ -63,6 +61,7 @@ const api = {
   deleteTimePricingRule: (data: { modelId: string; startTime: number; endTime: number; id: number }) =>
     ipcRenderer.invoke('pricing:delete-time-rule', data),
   refreshPricing: () => ipcRenderer.invoke('pricing:refresh'),
+  fetchCloudPricing: () => ipcRenderer.invoke('pricing:fetch-cloud'),
 
   // 上下文定价档位
   saveOverrideContextTier: (data: {

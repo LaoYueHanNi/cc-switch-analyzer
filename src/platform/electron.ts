@@ -38,12 +38,6 @@ export const platformAdapter: PlatformAdapter = {
     return window.api.querySessionsWithCost(params)
   },
   // 定价
-  async getExchangeRate() {
-    return window.api.getExchangeRate()
-  },
-  async setExchangeRate(rate: number) {
-    return window.api.setExchangeRate(rate)
-  },
   async getAllPricing() {
     return window.api.getAllPricing()
   },
@@ -80,6 +74,9 @@ export const platformAdapter: PlatformAdapter = {
   },
   async deleteTimeRuleContextTier(id: number) {
     return window.api.deleteTimeRuleContextTier(id)
+  },
+  async fetchCloudPricing() {
+    return window.api.fetchCloudPricing()
   },
   async getSessionTitles(sessionIds: string[]) {
     return window.api.getSessionTitles(sessionIds)

@@ -23,9 +23,6 @@ export const SUMMARY_ITEMS = [
   { key: 'totalTokens', label: '总Token', color: COLORS.GREEN }
 ] as const
 
-// 默认汇率
-export const DEFAULT_EXCHANGE_RATE = 7.0
-
 // 自动刷新间隔选项
 export const REFRESH_INTERVAL_OPTIONS = [
   { label: '手动', value: 'manual' },

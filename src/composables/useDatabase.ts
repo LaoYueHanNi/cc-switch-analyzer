@@ -35,6 +35,10 @@ export function useDatabase() {
 
       await loadPricing()
       queryStore.reset()
+
+      // 异步拉取云端定价（不阻塞启动）
+      platformAdapter.fetchCloudPricing().catch(() => {})
+
       return true
     } catch (err: any) {
       console.error('[useDatabase] 自动加载异常:', err)
@@ -73,6 +77,10 @@ export function useDatabase() {
 
       await loadPricing()
       queryStore.reset()
+
+      // 异步拉取云端定价（不阻塞启动）
+      platformAdapter.fetchCloudPricing().catch(() => {})
+
       return true
     } catch (err: any) {
       console.error('[useDatabase] 异常:', err)
@@ -97,11 +105,7 @@ export function useDatabase() {
   // 加载定价数据
   async function loadPricing(): Promise<void> {
     try {
-      const [exchangeRate, pricing] = await Promise.all([
-        platformAdapter.getExchangeRate(),
-        platformAdapter.getAllPricing()
-      ])
-      pricingStore.exchangeRate = exchangeRate
+      const pricing = await platformAdapter.getAllPricing()
       pricingStore.pricingData = pricing
       console.log('[useDatabase] 定价加载完成, 数量:', pricing.length)
     } catch (err: any) {

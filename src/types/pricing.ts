@@ -45,6 +45,17 @@ export interface TimePricingRule {
   contextTiers: ContextTier[]
 }
 
+export interface CloudPricingTimeRule {
+  label: string
+  startTime: number
+  endTime: number
+  inputCostPerMillion: number
+  outputCostPerMillion: number
+  cacheReadCostPerMillion: number
+  cacheCreationCostPerMillion: number
+  contextTiers: ContextTier[]
+}
+
 export interface PricingData {
   modelId: string
   displayName: string
@@ -55,6 +66,7 @@ export interface PricingData {
   isOverride: boolean
   hasTimePricing: boolean
   timeRules: TimePricingRule[]
+  cloudTimeRules: CloudPricingTimeRule[]
   isUsed: boolean
   contextTiers: ContextTier[]
 }

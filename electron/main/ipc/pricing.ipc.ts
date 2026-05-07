@@ -4,16 +4,6 @@ import type { PricingEngine } from '../services/pricing-engine'
 
 // 注册定价相关 IPC handler
 export function registerPricingIPC(appDb: AppDbService, pricingEngine: PricingEngine, getExternalDb: () => any): void {
-  // 获取汇率
-  ipcMain.handle('pricing:get-exchange-rate', () => {
-    return appDb.getExchangeRate()
-  })
-
-  // 设置汇率
-  ipcMain.handle('pricing:set-exchange-rate', (_event, rate: number) => {
-    appDb.setExchangeRate(rate)
-  })
-
   // 获取所有定价覆盖
   ipcMain.handle('pricing:get-overrides', () => {
     return appDb.getAllOverrides()
@@ -154,6 +144,12 @@ export function registerPricingIPC(appDb: AppDbService, pricingEngine: PricingEn
     pricingEngine.refresh()
   })
 
+  // 拉取云端定价并刷新
+  ipcMain.handle('pricing:fetch-cloud', async () => {
+    await pricingEngine.fetchAndCacheCloudPricing()
+    pricingEngine.refresh()
+  })
+
   // 获取全部定价数据（合并后的，含 isUsed 标记）
   ipcMain.handle('pricing:get-all', () => {
     const all = pricingEngine.getAllPricing()
@@ -177,7 +173,8 @@ export function registerPricingIPC(appDb: AppDbService, pricingEngine: PricingEn
       hasTimePricing: pricingEngine.hasTimePricing(p.modelId),
       timeRules: pricingEngine.getTimeRules(p.modelId),
       isUsed: usedModels.has(p.modelId),
-      contextTiers: pricingEngine.getOverrideTiers(p.modelId)
+      contextTiers: pricingEngine.getOverrideTiers(p.modelId),
+      cloudTimeRules: pricingEngine.getCloudTimeRules(p.modelId)
     }))
   })
 }
