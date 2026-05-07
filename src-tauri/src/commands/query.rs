@@ -169,16 +169,22 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
     let mut precomputed = precompute_costs(&daily_trend, &provider_model_tokens, &pricing);
     precomputed.cache_durations = cache_durations;
 
-    // 全局上下文档位计费比例
+    // Per-model 上下文档位计费比例
     let all_requests = ext_db.get_all_request_tokens(&params)?;
-    let tier_costs = compute_global_context_tier_costs(&all_requests, &pricing);
-    let mut tier_vec: Vec<ContextTierCost> = tier_costs
+    let model_tiers = compute_model_context_tier_costs(&all_requests, &pricing);
+    let model_tier_costs: HashMap<String, Vec<ContextTierCost>> = model_tiers
         .into_iter()
-        .filter(|(_, c)| *c > 0.0)
-        .map(|(threshold, cost)| ContextTierCost { threshold, cost })
+        .map(|(model, tiers)| {
+            let mut vec: Vec<ContextTierCost> = tiers
+                .into_iter()
+                .filter(|(_, c)| *c > 0.0)
+                .map(|(threshold, cost)| ContextTierCost { threshold, cost })
+                .collect();
+            vec.sort_by_key(|t| t.threshold);
+            (model, vec)
+        })
         .collect();
-    tier_vec.sort_by_key(|t| t.threshold);
-    precomputed.context_tier_costs = tier_vec;
+    precomputed.model_context_tier_costs = model_tier_costs;
 
     drop(ext_db);
 

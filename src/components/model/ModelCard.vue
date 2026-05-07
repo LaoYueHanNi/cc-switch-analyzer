@@ -72,6 +72,11 @@
         <span class="stat-item clickable" @click="onCacheClick" title="点击查看缓存窗口详情">缓存 {{ avgCacheDuration }}</span>
       </div>
 
+      <!-- 上下文档位占比 -->
+      <div v-if="tierLabel" class="stats-row">
+        <span class="stat-item">{{ tierLabel }}</span>
+      </div>
+
       <!-- 费用分解网格 -->
       <PricingGrid
         :input-tokens="modelData?.inputTokens"
@@ -109,6 +114,7 @@ const props = defineProps<{
   cacheDurationSec: number
   hasTimePricing: boolean
   timeRules: TimePricingRule[]
+  contextTierCosts?: Array<{ threshold: number; cost: number }>
 }>()
 
 defineEmits<{
@@ -136,6 +142,18 @@ const cacheHitRate = computed(() => {
 })
 
 const avgCacheDuration = computed(() => formatDuration(props.cacheDurationSec))
+
+const tierLabel = computed(() => {
+  const tiers = props.contextTierCosts
+  if (!tiers || !tiers.some(t => t.threshold > 0)) return ''
+  const total = tiers.reduce((s, t) => s + t.cost, 0)
+  if (total <= 0) return ''
+  return tiers.map(t => {
+    const pct = Math.round(t.cost / total * 100)
+    const name = t.threshold === 0 ? '基础' : `≥${Math.round(t.threshold / 1000)}K`
+    return `${name} ${pct}%`
+  }).join(' ')
+})
 
 const timeBadgeText = computed(() => {
   const labels = props.timeRules.map(r => r.label).filter(Boolean)
@@ -375,7 +393,8 @@ async function onCacheClick(): Promise<void> {
 
 .stats-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: hidden;
   gap: 4px 8px;
   margin-bottom: 4px;
   font-size: 10px;

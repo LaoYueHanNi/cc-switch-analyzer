@@ -23,6 +23,7 @@
         :cache-duration-sec="card.cacheDurationSec"
         :has-time-pricing="card.hasTimePricing"
         :time-rules="card.timeRules"
+        :context-tier-costs="card.contextTierCosts"
         @compare="onCompare"
         @set-pricing="onSetPricing"
       />
@@ -69,6 +70,7 @@ interface ModelCardData {
   cacheDurationSec: number
   hasTimePricing: boolean
   timeRules: TimePricingRule[]
+  contextTierCosts: Array<{ threshold: number; cost: number }>
 }
 
 const modelCards = computed<ModelCardData[]>(() => {
@@ -86,6 +88,7 @@ const modelCards = computed<ModelCardData[]>(() => {
 
   // 构建 cacheDurations Map
   const cacheDurations = pre?.cacheDurations || {}
+  const modelTierCosts: Record<string, Array<{ threshold: number; cost: number }>> = pre?.modelContextTierCosts || {}
 
   return breakdown.map(mb => {
     const pricing = pricingMap.get(mb.model) || null
@@ -94,6 +97,7 @@ const modelCards = computed<ModelCardData[]>(() => {
     const cacheDurationSec = cacheDurations[mb.model] || 0
     const hasTimePricing = pricing?.hasTimePricing || false
     const timeRules = pricing?.timeRules || []
+    const contextTierCosts = modelTierCosts[mb.model] || []
 
     return {
       modelData: mb,
@@ -102,7 +106,8 @@ const modelCards = computed<ModelCardData[]>(() => {
       totalCost,
       cacheDurationSec,
       hasTimePricing,
-      timeRules
+      timeRules,
+      contextTierCosts
     }
   })
 })

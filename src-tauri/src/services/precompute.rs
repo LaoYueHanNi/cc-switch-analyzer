@@ -99,7 +99,7 @@ pub fn precompute_costs(
         day_latency_count,
         daily_by_model,
         cache_durations: HashMap::new(),
-        context_tier_costs: Vec::new(),
+        model_context_tier_costs: HashMap::new(),
     }
 }
 
@@ -200,12 +200,12 @@ pub struct SessionModelCostData {
     pub tier_costs: HashMap<i64, f64>,
 }
 
-/// 全局上下文档位费用聚合（threshold → cost）
-pub fn compute_global_context_tier_costs(
+/// Per-model 上下文档位费用聚合
+pub fn compute_model_context_tier_costs(
     requests: &[SessionRequestToken],
     ps: &PricingEngine,
-) -> HashMap<i64, f64> {
-    let mut tier_costs: HashMap<i64, f64> = HashMap::new();
+) -> HashMap<String, HashMap<i64, f64>> {
+    let mut result: HashMap<String, HashMap<i64, f64>> = HashMap::new();
     for req in requests {
         let context_size = req.input_tokens + req.cache_read;
         let pricing = match ps.get_pricing_at_with_context(&req.model, req.created_at, context_size) {
@@ -222,7 +222,11 @@ pub fn compute_global_context_tier_costs(
         let tier_key = ps
             .get_matched_tier_threshold(&req.model, req.created_at, context_size)
             .unwrap_or(0);
-        *tier_costs.entry(tier_key).or_insert(0.0) += cost;
+        *result
+            .entry(req.model.clone())
+            .or_default()
+            .entry(tier_key)
+            .or_insert(0.0) += cost;
     }
-    tier_costs
+    result
 }

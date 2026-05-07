@@ -32,8 +32,8 @@
     />
 
     <!-- 上下文定价档位 -->
-    <div v-if="contextTiers.length > 0" class="context-tiers">
-      <div v-for="tier in contextTiers" :key="tier.threshold" class="context-tier">
+    <div v-if="displayTiers.length > 0" class="context-tiers">
+      <div v-for="tier in displayTiers" :key="tier.threshold" class="context-tier">
         <span class="tier-threshold">>= {{ Math.round(tier.threshold / 1000) }}K</span>
         <span class="tier-rates">
           <span class="tier-rate" :style="{ color: COLORS.PURPLE }">{{ formatRate(tier.inputCostPerMillion) }}</span>
@@ -53,7 +53,10 @@
         :class="{ 'time-rule-active': isActive(rule) }"
       >
         <n-icon size="10"><time-outline /></n-icon>
-        <span class="time-rule-label">{{ rule.label || `${formatDate(rule.startTime)} ~ ${formatDate(rule.endTime)}` }}</span>
+        <div class="time-rule-info">
+          <span class="time-rule-label">{{ rule.label || '时段定价' }}</span>
+          <span class="time-rule-date">{{ formatDate(rule.startTime) }} ~ {{ formatDate(rule.endTime) }}</span>
+        </div>
         <n-button size="tiny" quaternary class="rule-icon-btn" @click="$emit('editTimeRule', rule)">
           <template #icon><n-icon size="11"><create-outline /></n-icon></template>
         </n-button>
@@ -119,22 +122,28 @@ function resolveTier(tiers: ContextTier[], contextSize: number): ContextTier | n
   return best
 }
 
-// 获取有效单价（优先级：时间规则档位 → 时间规则 → 覆盖档位 → 覆盖 → 默认）
+// 获取基础单价（不解析上下文档位）
 type RateField = 'inputCostPerMillion' | 'outputCostPerMillion' | 'cacheReadCostPerMillion' | 'cacheCreationCostPerMillion'
 function getRate(field: RateField): number {
-  const contextSize = props.simTokens.input + props.simTokens.cacheRead
-  // 1. 时间规则 + 其档位
+  // 1. 时间规则基础定价
   if (activeRule.value) {
-    const tier = resolveTier(activeRule.value.contextTiers || [], contextSize)
-    if (tier) return tier[field]
     return activeRule.value[field]
   }
-  // 2. 用户覆盖 + 其档位
-  const overrideTier = resolveTier(props.contextTiers, contextSize)
-  if (overrideTier) return overrideTier[field]
+  // 2. 用户覆盖基础定价
+  if (props.pricing?.isOverride) {
+    return props.pricing[field] || 0
+  }
   // 3. 默认定价
   return props.pricing?.[field] || 0
 }
+
+// 展示用的上下文档位：命中时间规则时用时间规则的档位，否则用覆盖/默认档位
+const displayTiers = computed(() => {
+  if (activeRule.value && activeRule.value.contextTiers?.length > 0) {
+    return activeRule.value.contextTiers
+  }
+  return props.contextTiers
+})
 
 // 根据 simTokens 和有效定价计算每项费用
 const inputCostComputed = computed(() =>
@@ -279,13 +288,25 @@ function formatDate(ts: number): string {
   padding: 2px 4px;
 }
 
-.time-rule-label {
+.time-rule-info {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.time-rule-label {
   color: var(--text-muted);
   font-size: 10px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.time-rule-date {
+  font-size: 9px;
+  color: var(--color-amber);
+  opacity: 0.7;
 }
 
 .time-rule-active .time-rule-label {

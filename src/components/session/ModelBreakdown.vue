@@ -69,7 +69,7 @@ function cacheHitRate(item: { inputTokens: number; cacheRead: number }): string 
 
 function contextTierLabel(item: { contextTierCosts?: Array<{ threshold: number; cost: number }> }): string | null {
   const tiers = item.contextTierCosts
-  if (!tiers || tiers.length < 2) return null
+  if (!tiers || !tiers.some(t => t.threshold > 0)) return null
   const total = tiers.reduce((s, t) => s + t.cost, 0)
   if (total <= 0) return null
   const labels = tiers.map(t => {

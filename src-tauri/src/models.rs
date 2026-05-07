@@ -282,8 +282,8 @@ pub struct PrecomputedResult {
     pub day_latency_count: std::collections::HashMap<String, i64>,
     pub daily_by_model: std::collections::HashMap<String, Vec<DailyTrendRow>>,
     pub cache_durations: std::collections::HashMap<String, i64>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub context_tier_costs: Vec<ContextTierCost>,
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub model_context_tier_costs: std::collections::HashMap<String, Vec<ContextTierCost>>,
 }
 
 // ========== 组合查询结果 ==========

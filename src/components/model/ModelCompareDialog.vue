@@ -27,8 +27,8 @@
               <span class="cost-label-text">{{ targetModel }} 费用</span>
               <span class="cost-num">{{ formatCost(comparisonResult.targetCost) }}</span>
             </div>
-            <div class="cost-diff" :class="comparisonResult.diffPercent >= 0 ? 'increase' : 'decrease'">
-              {{ comparisonResult.diffPercent >= 0 ? '+' : '' }}{{ comparisonResult.diffPercent.toFixed(1) }}%
+            <div class="cost-diff" :class="comparisonResult.ratio >= 1 ? 'increase' : 'decrease'">
+              {{ comparisonResult.ratio.toFixed(2) }}x
             </div>
           </div>
 
@@ -57,8 +57,8 @@
               <span class="compare-arrow">→</span>
               <span class="compare-rate-target">{{ formatRate(item.targetRate) }}/M</span>
               <span class="compare-cost-compare">{{ formatCost(item.targetCost) }}</span>
-              <span class="compare-diff-small" :class="item.diff >= 0 ? 'increase' : 'decrease'">
-                {{ item.diff >= 0 ? '+' : '' }}{{ item.diff.toFixed(1) }}%
+              <span class="compare-diff-small" :class="item.ratio >= 1 ? 'increase' : 'decrease'">
+                {{ item.ratio.toFixed(2) }}x
               </span>
             </div>
           </div>
@@ -149,9 +149,7 @@ const comparisonResult = computed(() => {
   const targetCosts = fields.map((f, i) => tokens[tokenKeys[i]] * getActiveRate(targetPricing, f, contextSize) / 1_000_000)
   const targetCost = targetCosts.reduce((a, b) => a + b, 0)
 
-  const diffPercent = props.sourceCost > 0
-    ? ((targetCost - props.sourceCost) / props.sourceCost) * 100
-    : 0
+  const ratio = props.sourceCost > 0 ? targetCost / props.sourceCost : 0
 
   const bd = props.sourceCostBreakdown
   const labels = ['输入', '输出', '缓存读取', '缓存写入']
@@ -164,10 +162,10 @@ const comparisonResult = computed(() => {
     sourceRate: getActiveRate(sourcePricing, fields[i], contextSize),
     targetRate: getActiveRate(targetPricing, fields[i], contextSize),
     color: colors[i],
-    diff: bd[i] > 0 ? ((targetCosts[i] - bd[i]) / bd[i]) * 100 : 0
+    ratio: bd[i] > 0 ? targetCosts[i] / bd[i] : 0
   }))
 
-  return { targetCost, diffPercent, items }
+  return { targetCost, ratio, items }
 })
 
 // 关闭时重置

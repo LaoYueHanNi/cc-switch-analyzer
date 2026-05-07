@@ -49,7 +49,7 @@
           <span class="sh-project" v-if="getProject(group.sessionId)" :title="getProject(group.sessionId)">{{ getProject(group.sessionId) }}</span>
           <span class="sh-id">{{ shortSession(group.sessionId) }}</span>
           <span class="sh-title" v-if="getTitle(group.sessionId)" :title="getTitle(group.sessionId)">{{ getTitle(group.sessionId) }}</span>
-          <span class="sh-count">{{ group.rows.length }} 次</span>
+          <span class="sh-count">{{ group.rows.length }} 次<template v-if="groupTierLabel(group)">（{{ groupTierLabel(group) }}）</template></span>
           <span class="sh-cost">{{ formatCost(group.cost) }}</span>
           <span class="sh-time">{{ formatTime(group.rows[group.rows.length - 1].createdAt) }} ~ {{ formatTime(group.rows[0].createdAt) }}</span>
         </div>
@@ -191,6 +191,23 @@ function formatTime(epoch: number): string {
   return `${mm}/${dd} ${hh}:${mi}`
 }
 
+function groupTierLabel(group: SessionGroup): string {
+  const tiers = new Map<number, number>()
+  for (const r of group.rows) {
+    const key = r.contextTierThreshold || 0
+    tiers.set(key, (tiers.get(key) || 0) + r.totalCost)
+  }
+  if (!Array.from(tiers.keys()).some(k => k > 0)) return ''
+  const total = Array.from(tiers.values()).reduce((s, v) => s + v, 0)
+  if (total <= 0) return ''
+  const sorted = Array.from(tiers.entries()).sort((a, b) => a[0] - b[0])
+  return sorted.map(([threshold, cost]) => {
+    const pct = Math.round(cost / total * 100)
+    const name = threshold === 0 ? '基础' : `≥${Math.round(threshold / 1000)}K`
+    return `${name} ${pct}%`
+  }).join(' ')
+}
+
 function shortSession(sessionId: string): string {
   const parts = sessionId.split('-')
   return parts[0] || sessionId.slice(0, 8)
@@ -298,7 +315,7 @@ watch(() => dbStore.hasDatabase, (val) => {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .sh-count {
-  width: 45px; flex-shrink: 0; text-align: right;
+  width: auto; min-width: 45px; flex-shrink: 0; text-align: right;
   font-size: 10px; color: var(--text-muted);
 }
 .sh-cost {

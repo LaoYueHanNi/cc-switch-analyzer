@@ -7,13 +7,8 @@
       :style="{ borderLeftColor: item.color }"
     >
       <div class="summary-label">{{ item.label }}</div>
-      <div class="summary-row">
-        <div class="summary-value" :style="{ color: item.color }">
-          {{ item.displayValue }}
-        </div>
-        <div v-if="item.tiers?.length" class="summary-tiers">
-          <span v-for="t in item.tiers" :key="t.name" class="tier-item">{{ t.name }} {{ t.pct }}%</span>
-        </div>
+      <div class="summary-value" :style="{ color: item.color }">
+        {{ item.displayValue }}
       </div>
     </div>
   </div>
@@ -29,7 +24,6 @@ const queryStore = useQueryStore()
 
 const items = computed(() => {
   const s = queryStore.summary
-  const pre = queryStore.precomputed
 
   return SUMMARY_ITEMS.map(item => {
     let rawValue: number | string = '-'
@@ -71,18 +65,7 @@ const items = computed(() => {
       displayValue = '-'
     }
 
-    let tiers: Array<{ name: string; pct: number }> | undefined
-    if (item.key === 'totalCost' && pre?.contextTierCosts?.length >= 2) {
-      const total = pre.contextTierCosts.reduce((sum, t) => sum + t.cost, 0)
-      if (total > 0) {
-        tiers = pre.contextTierCosts.map(t => ({
-          name: t.threshold === 0 ? '基础' : `≥${Math.round(t.threshold / 1000)}K`,
-          pct: Math.round(t.cost / total * 100)
-        }))
-      }
-    }
-
-    return { ...item, rawValue, displayValue, tiers }
+    return { ...item, displayValue }
   })
 })
 </script>
@@ -111,30 +94,9 @@ const items = computed(() => {
   white-space: nowrap;
 }
 
-.summary-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin-top: 2px;
-}
-
 .summary-value {
   font-size: 14px;
   font-weight: 600;
-  white-space: nowrap;
-}
-
-.summary-tiers {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  font-size: 9px;
-  color: var(--text-muted);
-  line-height: 1.2;
-  margin-top: -1px;
-}
-
-.tier-item {
-  white-space: nowrap;
+  margin-top: 2px;
 }
 </style>
