@@ -12,16 +12,15 @@ export const COLORS = {
   DARK_ORANGE: '#d35400'
 } as const
 
-// 摘要统计条 8 项指标配置
+// 摘要统计条指标配置
 export const SUMMARY_ITEMS = [
   { key: 'totalRequests', label: '总请求数', color: COLORS.PRIMARY_BLUE },
-  { key: 'successCount', label: '成功请求数', color: COLORS.GREEN },
   { key: 'totalCost', label: '总费用（¥）', color: COLORS.COST_RED },
-  { key: 'totalInput', label: '输入 Token', color: COLORS.PURPLE },
-  { key: 'totalOutput', label: '输出 Token', color: COLORS.ORANGE },
-  { key: 'avgLatency', label: '平均延迟(ms)', color: COLORS.TEAL },
-  { key: 'totalCacheRead', label: '缓存命中 Token', color: COLORS.BLUE },
-  { key: 'totalCacheCreation', label: '缓存写入 Token', color: COLORS.DARK_ORANGE }
+  { key: 'totalInput', label: '输入', color: COLORS.PURPLE },
+  { key: 'totalOutput', label: '输出', color: COLORS.ORANGE },
+  { key: 'totalCacheRead', label: '缓存命中', color: COLORS.BLUE },
+  { key: 'totalCacheCreation', label: '缓存写入', color: COLORS.DARK_ORANGE },
+  { key: 'totalTokens', label: '总Token', color: COLORS.GREEN }
 ] as const
 
 // 默认汇率

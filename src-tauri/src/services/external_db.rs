@@ -677,6 +677,46 @@ impl ExternalDbService {
         Ok(result)
     }
 
+    /// 获取所有请求级 Token 数据（用于全局上下文档位计费）
+    pub fn get_all_request_tokens(&self, params: &FilterParams) -> Result<Vec<SessionRequestToken>, String> {
+        let db = self.db()?;
+        let (where_sql, binds) = Self::build_where_clause(params, true);
+        let sql = format!(
+            "SELECT
+                COALESCE(session_id, ''),
+                l.model,
+                l.created_at,
+                l.input_tokens,
+                l.output_tokens,
+                l.cache_read_tokens,
+                l.cache_creation_tokens
+             FROM proxy_request_logs l
+             {}",
+            where_sql
+        );
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询全局请求Token失败: {}", e))?;
+        let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+        let rows = stmt
+            .query_map(refs.as_slice(), |row| {
+                Ok(SessionRequestToken {
+                    session_id: row.get(0)?,
+                    model: row.get(1)?,
+                    created_at: row.get(2)?,
+                    input_tokens: row.get(3)?,
+                    output_tokens: row.get(4)?,
+                    cache_read: row.get(5)?,
+                    cache_creation: row.get(6)?,
+                })
+            })
+            .map_err(|e| format!("查询全局请求Token失败: {}", e))?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row.map_err(|e| format!("读取全局请求Token失败: {}", e))?);
+        }
+        Ok(result)
+    }
+
     pub fn get_session_timestamps(&self, session_ids: &[String]) -> Result<HashMap<String, Vec<i64>>, String> {
         if session_ids.is_empty() {
             return Ok(HashMap::new());

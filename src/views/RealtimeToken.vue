@@ -51,7 +51,7 @@
           <span class="sh-title" v-if="getTitle(group.sessionId)" :title="getTitle(group.sessionId)">{{ getTitle(group.sessionId) }}</span>
           <span class="sh-count">{{ group.rows.length }} 次</span>
           <span class="sh-cost">{{ formatCost(group.cost) }}</span>
-          <span class="sh-time">{{ formatTime(group.rows[0].createdAt) }} ~ {{ formatTime(group.rows[group.rows.length - 1].createdAt).split(' ').pop() }}</span>
+          <span class="sh-time">{{ formatTime(group.rows[group.rows.length - 1].createdAt) }} ~ {{ formatTime(group.rows[0].createdAt) }}</span>
         </div>
         <template v-if="!collapsedSessions.has(group.sessionId)">
         <div class="session-body">
@@ -306,7 +306,7 @@ watch(() => dbStore.hasDatabase, (val) => {
   font-size: 11px; font-weight: 600; color: var(--color-cost);
 }
 .sh-time {
-  width: 120px; flex-shrink: 0; text-align: right;
+  width: 145px; flex-shrink: 0; text-align: right;
   font-size: 10px; color: var(--text-faint);
 }
 

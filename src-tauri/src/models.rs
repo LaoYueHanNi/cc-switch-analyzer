@@ -282,6 +282,8 @@ pub struct PrecomputedResult {
     pub day_latency_count: std::collections::HashMap<String, i64>,
     pub daily_by_model: std::collections::HashMap<String, Vec<DailyTrendRow>>,
     pub cache_durations: std::collections::HashMap<String, i64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub context_tier_costs: Vec<ContextTierCost>,
 }
 
 // ========== 组合查询结果 ==========
@@ -299,6 +301,13 @@ pub struct PrecomputeQueryResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ContextTierCost {
+    pub threshold: i64,
+    pub cost: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionModelCostEntry {
     pub session_id: String,
     pub model: String,
@@ -311,6 +320,8 @@ pub struct SessionModelCostEntry {
     pub output_cost: f64,
     pub cache_read_cost: f64,
     pub cache_creation_cost: f64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub context_tier_costs: Vec<ContextTierCost>,
 }
 
 #[derive(Debug, Clone, Serialize)]

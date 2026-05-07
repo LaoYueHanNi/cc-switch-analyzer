@@ -19,6 +19,7 @@
         </template>
       </div>
       <div v-if="cacheHitRate(item) !== null" class="mb-cache">缓存 {{ cacheHitRate(item) }}</div>
+      <div v-if="contextTierLabel(item)" class="mb-tier">{{ contextTierLabel(item) }}</div>
     </div>
   </div>
 </template>
@@ -40,6 +41,7 @@ defineProps<{
     cacheCreationCost?: number
     totalCost?: number
     totalTokens?: number
+    contextTierCosts?: Array<{ threshold: number; cost: number }>
   }>
 }>()
 
@@ -63,6 +65,19 @@ function cacheHitRate(item: { inputTokens: number; cacheRead: number }): string 
   const total = item.inputTokens + item.cacheRead
   if (total <= 0) return null
   return formatPercent(item.cacheRead / total)
+}
+
+function contextTierLabel(item: { contextTierCosts?: Array<{ threshold: number; cost: number }> }): string | null {
+  const tiers = item.contextTierCosts
+  if (!tiers || tiers.length < 2) return null
+  const total = tiers.reduce((s, t) => s + t.cost, 0)
+  if (total <= 0) return null
+  const labels = tiers.map(t => {
+    const pct = Math.round(t.cost / total * 100)
+    const name = t.threshold === 0 ? '基础' : `≥${Math.round(t.threshold / 1000)}K`
+    return `${name} ${pct}%`
+  })
+  return labels.join(' ')
 }
 </script>
 
@@ -149,5 +164,12 @@ function cacheHitRate(item: { inputTokens: number; cacheRead: number }): string 
   color: var(--text-muted);
   text-align: right;
   margin-top: 2px;
+}
+
+.mb-tier {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-align: right;
+  margin-top: 1px;
 }
 </style>

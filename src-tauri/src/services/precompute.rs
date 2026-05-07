@@ -99,6 +99,7 @@ pub fn precompute_costs(
         day_latency_count,
         daily_by_model,
         cache_durations: HashMap::new(),
+        context_tier_costs: Vec::new(),
     }
 }
 
@@ -148,6 +149,7 @@ pub fn compute_session_model_costs(
                     output_tokens: smt.output_tokens,
                     cache_read: smt.cache_read,
                     cache_creation: smt.cache_creation,
+                    tier_costs: HashMap::new(),
                 },
             );
     }
@@ -168,6 +170,11 @@ pub fn compute_session_model_costs(
         );
         let req_cost = req_breakdown[0] + req_breakdown[1] + req_breakdown[2] + req_breakdown[3];
 
+        // 获取匹配的上下文档位 threshold（无匹配为 0）
+        let tier_key = ps
+            .get_matched_tier_threshold(&req.model, req.created_at, context_size)
+            .unwrap_or(0);
+
         if let Some(session_map) = result.get_mut(&req.session_id) {
             if let Some(entry) = session_map.get_mut(&req.model) {
                 entry.cost += req_cost;
@@ -175,6 +182,7 @@ pub fn compute_session_model_costs(
                 entry.breakdown[1] += req_breakdown[1];
                 entry.breakdown[2] += req_breakdown[2];
                 entry.breakdown[3] += req_breakdown[3];
+                *entry.tier_costs.entry(tier_key).or_insert(0.0) += req_cost;
             }
         }
     }
@@ -189,4 +197,32 @@ pub struct SessionModelCostData {
     pub output_tokens: i64,
     pub cache_read: i64,
     pub cache_creation: i64,
+    pub tier_costs: HashMap<i64, f64>,
+}
+
+/// 全局上下文档位费用聚合（threshold → cost）
+pub fn compute_global_context_tier_costs(
+    requests: &[SessionRequestToken],
+    ps: &PricingEngine,
+) -> HashMap<i64, f64> {
+    let mut tier_costs: HashMap<i64, f64> = HashMap::new();
+    for req in requests {
+        let context_size = req.input_tokens + req.cache_read;
+        let pricing = match ps.get_pricing_at_with_context(&req.model, req.created_at, context_size) {
+            Some(p) => p,
+            None => continue,
+        };
+        let cost = ps.calculate_cost(
+            &pricing,
+            req.input_tokens,
+            req.output_tokens,
+            req.cache_read,
+            req.cache_creation,
+        );
+        let tier_key = ps
+            .get_matched_tier_threshold(&req.model, req.created_at, context_size)
+            .unwrap_or(0);
+        *tier_costs.entry(tier_key).or_insert(0.0) += cost;
+    }
+    tier_costs
 }

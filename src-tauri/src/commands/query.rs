@@ -169,6 +169,19 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
     let mut precomputed = precompute_costs(&daily_trend, &provider_model_tokens, &pricing);
     precomputed.cache_durations = cache_durations;
 
+    // 全局上下文档位计费比例
+    let all_requests = ext_db.get_all_request_tokens(&params)?;
+    let tier_costs = compute_global_context_tier_costs(&all_requests, &pricing);
+    let mut tier_vec: Vec<ContextTierCost> = tier_costs
+        .into_iter()
+        .filter(|(_, c)| *c > 0.0)
+        .map(|(threshold, cost)| ContextTierCost { threshold, cost })
+        .collect();
+    tier_vec.sort_by_key(|t| t.threshold);
+    precomputed.context_tier_costs = tier_vec;
+
+    drop(ext_db);
+
     Ok(PrecomputeQueryResult {
         summary,
         model_breakdown,
@@ -210,18 +223,33 @@ pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) ->
             let model_breakdown: Vec<SessionModelCostEntry> = model_costs
                 .map(|mc| {
                     mc.iter()
-                        .map(|(model, data)| SessionModelCostEntry {
-                            session_id: s.session_id.clone(),
-                            model: model.clone(),
-                            cost: data.cost,
-                            input_tokens: data.input_tokens,
-                            output_tokens: data.output_tokens,
-                            cache_read_tokens: data.cache_read,
-                            cache_creation_tokens: data.cache_creation,
-                            input_cost: data.breakdown[0],
-                            output_cost: data.breakdown[1],
-                            cache_read_cost: data.breakdown[2],
-                            cache_creation_cost: data.breakdown[3],
+                        .map(|(model, data)| {
+                            // 将 tier_costs HashMap 转为排序后的 Vec，过滤零值
+                            let mut tier_vec: Vec<ContextTierCost> = data
+                                .tier_costs
+                                .iter()
+                                .filter(|(_, c)| **c > 0.0)
+                                .map(|(threshold, cost)| ContextTierCost {
+                                    threshold: *threshold,
+                                    cost: *cost,
+                                })
+                                .collect();
+                            tier_vec.sort_by_key(|t| t.threshold);
+
+                            SessionModelCostEntry {
+                                session_id: s.session_id.clone(),
+                                model: model.clone(),
+                                cost: data.cost,
+                                input_tokens: data.input_tokens,
+                                output_tokens: data.output_tokens,
+                                cache_read_tokens: data.cache_read,
+                                cache_creation_tokens: data.cache_creation,
+                                input_cost: data.breakdown[0],
+                                output_cost: data.breakdown[1],
+                                cache_read_cost: data.breakdown[2],
+                                cache_creation_cost: data.breakdown[3],
+                                context_tier_costs: tier_vec,
+                            }
                         })
                         .collect()
                 })
