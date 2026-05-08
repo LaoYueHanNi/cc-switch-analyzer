@@ -92,7 +92,9 @@ const modelCards = computed<ModelCardData[]>(() => {
   const cacheDurations = pre?.cacheDurations || {}
   const modelTierCosts: Record<string, Array<{ threshold: number; cost: number }>> = pre?.modelContextTierCosts || {}
 
-  return breakdown.map(mb => {
+  return breakdown.filter(mb =>
+    mb.inputTokens > 0 || mb.outputTokens > 0 || mb.cacheRead > 0 || mb.cacheCreation > 0
+  ).map(mb => {
     const pricing = pricingMap.get(mb.model) || null
     const costBreakdown: [number, number, number, number] = pre?.modelCostBreakdown?.[mb.model] || [0, 0, 0, 0]
     const totalCost = pre?.modelCosts?.[mb.model] || 0
