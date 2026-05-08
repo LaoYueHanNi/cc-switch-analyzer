@@ -1,6 +1,6 @@
 {
   "name": "cc-switch-analyzer",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "CC-Switch 使用分析器",
   "type": "module",
   "main": "./out/main/index.js",
@@ -12,7 +12,10 @@
     "dev:electron": "electron-vite dev",
     "build:electron": "electron-vite build",
     "preview:electron": "electron-vite preview",
-    "postinstall": "electron-rebuild -f -w better-sqlite3"
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:rust": "cd src-tauri && cargo test"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -34,11 +37,18 @@
     "@vitejs/plugin-vue": "^5.0.0",
     "electron": "^33.0.0",
     "electron-vite": "^2.3.0",
+    "sql.js": "^1.14.1",
     "typescript": "^5.5.0",
     "vite": "^5.4.0",
+    "vitest": "^2.1.9",
     "vue-tsc": "^2.0.0"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["better-sqlite3", "electron", "esbuild", "vue-demi"]
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "electron",
+      "esbuild",
+      "vue-demi"
+    ]
   }
 }
