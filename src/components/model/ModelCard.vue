@@ -104,7 +104,7 @@ import { formatNum, formatRate, formatCost, formatPercent, formatDuration, epoch
 import { platformAdapter } from '@/platform'
 import PricingGrid from '@/components/common/PricingGrid.vue'
 import type { ModelBreakdown } from '@/types/database'
-import type { PricingData, TimePricingRule } from '@/types/pricing'
+import type { PricingData, TimePricingRule, CloudPricingTimeRule } from '@/types/pricing'
 
 const props = defineProps<{
   modelData: ModelBreakdown
@@ -114,6 +114,7 @@ const props = defineProps<{
   cacheDurationSec: number
   hasTimePricing: boolean
   timeRules: TimePricingRule[]
+  cloudTimeRules?: CloudPricingTimeRule[]
   contextTierCosts?: Array<{ threshold: number; cost: number }>
 }>()
 
@@ -155,14 +156,19 @@ const tierLabel = computed(() => {
   }).join(' ')
 })
 
+const allDisplayTimeRules = computed(() => [
+  ...props.timeRules.map(r => ({ label: r.label, startTime: r.startTime, endTime: r.endTime })),
+  ...(props.cloudTimeRules || []).map(r => ({ label: r.label, startTime: r.startTime, endTime: r.endTime }))
+])
+
 const timeBadgeText = computed(() => {
-  const labels = props.timeRules.map(r => r.label).filter(Boolean)
+  const labels = allDisplayTimeRules.value.map(r => r.label).filter(Boolean)
   return labels.length > 0 ? labels.join('、') : '时段定价'
 })
 
 const timeBadgeTitle = computed(() => {
-  if (props.timeRules.length === 0) return '包含时段定价'
-  return props.timeRules.map(r => r.label || `${epochToDateStr(r.startTime)} ~ ${epochToDateStr(r.endTime)}`).join('\n')
+  if (allDisplayTimeRules.value.length === 0) return '包含时段定价'
+  return allDisplayTimeRules.value.map(r => r.label || `${epochToDateStr(r.startTime)} ~ ${epochToDateStr(r.endTime)}`).join('\n')
 })
 
 type RateField = 'inputCostPerMillion' | 'outputCostPerMillion' | 'cacheReadCostPerMillion' | 'cacheCreationCostPerMillion'

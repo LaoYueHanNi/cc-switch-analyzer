@@ -23,6 +23,7 @@
         :cache-duration-sec="card.cacheDurationSec"
         :has-time-pricing="card.hasTimePricing"
         :time-rules="card.timeRules"
+        :cloud-time-rules="card.cloudTimeRules"
         :context-tier-costs="card.contextTierCosts"
         @compare="onCompare"
         @set-pricing="onSetPricing"
@@ -52,7 +53,7 @@ import { usePricingStore } from '@/stores/pricing'
 import ModelCard from '@/components/model/ModelCard.vue'
 import ModelCompareDialog from '@/components/model/ModelCompareDialog.vue'
 import type { ModelBreakdown } from '@/types/database'
-import type { PricingData, TimePricingRule } from '@/types/pricing'
+import type { PricingData, TimePricingRule, CloudPricingTimeRule } from '@/types/pricing'
 
 const dbStore = useDatabaseStore()
 const filterStore = useFilterStore()
@@ -70,6 +71,7 @@ interface ModelCardData {
   cacheDurationSec: number
   hasTimePricing: boolean
   timeRules: TimePricingRule[]
+  cloudTimeRules: CloudPricingTimeRule[]
   contextTierCosts: Array<{ threshold: number; cost: number }>
 }
 
@@ -97,6 +99,7 @@ const modelCards = computed<ModelCardData[]>(() => {
     const cacheDurationSec = cacheDurations[mb.model] || 0
     const hasTimePricing = pricing?.hasTimePricing || false
     const timeRules = pricing?.timeRules || []
+    const cloudTimeRules = pricing?.cloudTimeRules || []
     const contextTierCosts = modelTierCosts[mb.model] || []
 
     return {
@@ -107,6 +110,7 @@ const modelCards = computed<ModelCardData[]>(() => {
       cacheDurationSec,
       hasTimePricing,
       timeRules,
+      cloudTimeRules,
       contextTierCosts
     }
   })
