@@ -398,3 +398,168 @@ impl PricingEngine {
         self.merged.len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::app_db::AppDbService;
+
+    fn create_test_engine() -> (PricingEngine, AppDbService) {
+        let app_db = AppDbService::new_in_memory().unwrap();
+        // 插入云端基础定价
+        app_db.save_cloud_pricing(&CloudPricingData {
+            version: 1,
+            updated_at: 1700000000,
+            currency: "RMB".to_string(),
+            models: vec![
+                CloudPricingModel {
+                    model_id: "claude-sonnet-4".to_string(),
+                    display_name: "Claude Sonnet 4".to_string(),
+                    input_cost_per_million: 21.0,
+                    output_cost_per_million: 105.0,
+                    cache_read_cost_per_million: 2.1,
+                    cache_creation_cost_per_million: 26.25,
+                    context_tiers: vec![ContextTier {
+                        id: None,
+                        threshold: 10000,
+                        input_cost_per_million: 31.5,
+                        output_cost_per_million: 157.5,
+                        cache_read_cost_per_million: 3.15,
+                        cache_creation_cost_per_million: 39.375,
+                    }],
+                    time_rules: vec![],
+                },
+                CloudPricingModel {
+                    model_id: "claude-haiku-4".to_string(),
+                    display_name: "Claude Haiku 4.5".to_string(),
+                    input_cost_per_million: 4.2,
+                    output_cost_per_million: 21.0,
+                    cache_read_cost_per_million: 0.42,
+                    cache_creation_cost_per_million: 5.25,
+                    context_tiers: vec![],
+                    time_rules: vec![],
+                },
+            ],
+        }).unwrap();
+        let mut engine = PricingEngine::new();
+        engine.refresh(&app_db).unwrap();
+        (engine, app_db)
+    }
+
+    #[test]
+    fn test_calculate_cost() {
+        let (engine, _) = create_test_engine();
+        let pricing = engine.get_pricing("claude-sonnet-4").unwrap();
+        let cost = engine.calculate_cost(pricing, 1_000_000, 0, 0, 0);
+        assert!((cost - 21.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calculate_cost_all_dims() {
+        let (engine, _) = create_test_engine();
+        let pricing = engine.get_pricing("claude-sonnet-4").unwrap();
+        let cost = engine.calculate_cost(pricing, 1_000_000, 500_000, 200_000, 100_000);
+        let expected = (1_000_000.0 * 21.0 + 500_000.0 * 105.0 + 200_000.0 * 2.1 + 100_000.0 * 26.25) / 1_000_000.0;
+        assert!((cost - expected).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calculate_cost_zero() {
+        let (engine, _) = create_test_engine();
+        let pricing = engine.get_pricing("claude-sonnet-4").unwrap();
+        let cost = engine.calculate_cost(pricing, 0, 0, 0, 0);
+        assert!((cost - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calculate_cost_breakdown() {
+        let (engine, _) = create_test_engine();
+        let pricing = engine.get_pricing("claude-sonnet-4").unwrap();
+        let bd = engine.calculate_cost_breakdown(pricing, 1_000_000, 0, 0, 0);
+        assert!((bd[0] - 21.0).abs() < 0.001);
+        assert!((bd[1] - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_get_pricing_cloud_base() {
+        let (engine, _) = create_test_engine();
+        let p = engine.get_pricing("claude-sonnet-4").unwrap();
+        assert_eq!(p.model_id, "claude-sonnet-4");
+        assert!(!p.is_override);
+        assert!((p.input_cost_per_million - 21.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_get_pricing_unknown() {
+        let (engine, _) = create_test_engine();
+        assert!(engine.get_pricing("unknown").is_none());
+    }
+
+    #[test]
+    fn test_get_pricing_at_with_user_time_rule() {
+        let (mut engine, app_db) = create_test_engine();
+        // 添加用户时间规则
+        app_db.add_time_override(
+            "claude-sonnet-4", 1700000000, 1700086400,
+            10.5, 52.5, 1.05, 13.125, "折扣"
+        ).unwrap();
+        engine.refresh(&app_db).unwrap();
+
+        let p = engine.get_pricing_at("claude-sonnet-4", 1700043200).unwrap();
+        assert!(p.is_override);
+        assert!((p.input_cost_per_million - 10.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_get_pricing_at_fallback() {
+        let (engine, _) = create_test_engine();
+        let p = engine.get_pricing_at("claude-sonnet-4", 9999999999).unwrap();
+        assert!(!p.is_override);
+        assert!((p.input_cost_per_million - 21.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_get_pricing_at_with_context_tier() {
+        let (engine, _) = create_test_engine();
+        // 云端基础有 tier at threshold=10000
+        let p = engine.get_pricing_at_with_context("claude-sonnet-4", 9999999999, 30000).unwrap();
+        assert!(p.is_override);
+        assert!((p.input_cost_per_million - 31.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_get_pricing_at_with_context_below_tier() {
+        let (engine, _) = create_test_engine();
+        let p = engine.get_pricing_at_with_context("claude-sonnet-4", 9999999999, 5000).unwrap();
+        assert!(!p.is_override);
+        assert!((p.input_cost_per_million - 21.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_resolve_tier_empty() {
+        let result = PricingEngine::resolve_tier(&[], 1000);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_has_time_pricing() {
+        let (engine, _) = create_test_engine();
+        assert!(!engine.has_time_pricing("claude-sonnet-4"));
+    }
+
+    #[test]
+    fn test_size() {
+        let (engine, _) = create_test_engine();
+        assert_eq!(engine.size(), 2);
+    }
+
+    #[test]
+    fn test_user_override_replaces_cloud() {
+        let (mut engine, app_db) = create_test_engine();
+        app_db.save_override("claude-sonnet-4", 30.0, 150.0, 3.0, 37.5).unwrap();
+        engine.refresh(&app_db).unwrap();
+        let p = engine.get_pricing("claude-sonnet-4").unwrap();
+        assert!(p.is_override);
+        assert!((p.input_cost_per_million - 30.0).abs() < 0.001);
+    }
+}

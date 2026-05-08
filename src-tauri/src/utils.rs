@@ -59,3 +59,50 @@ pub fn get_default_db_path() -> std::path::PathBuf {
 pub fn now_epoch_seconds() -> i64 {
     chrono::Utc::now().timestamp()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_date_str_to_epoch() {
+        assert_eq!(date_str_to_epoch("1970-01-01"), 0);
+        assert_eq!(date_str_to_epoch("2024-01-01"), 1704067200);
+        assert_eq!(date_str_to_epoch("2024-06-15"), 1718409600);
+    }
+
+    #[test]
+    fn test_date_str_to_epoch_invalid() {
+        assert_eq!(date_str_to_epoch(""), 0);
+        assert_eq!(date_str_to_epoch("invalid"), 0);
+        assert_eq!(date_str_to_epoch("2024"), 0);
+        assert_eq!(date_str_to_epoch("2024-13-01"), 0);
+    }
+
+    #[test]
+    fn test_to_epoch_seconds() {
+        assert_eq!(to_epoch_seconds("2024-01-01"), 1704067200);
+    }
+
+    #[test]
+    fn test_to_exclusive_end_epoch() {
+        assert_eq!(to_exclusive_end_epoch("2024-01-01"), 1704067200 + 86400);  // 2024-01-02
+        assert_eq!(to_exclusive_end_epoch("2024-12-31"), date_str_to_epoch("2025-01-01"));  // 2025-01-01
+    }
+
+    #[test]
+    fn test_to_exclusive_end_epoch_invalid() {
+        assert_eq!(to_exclusive_end_epoch(""), 0);
+        assert_eq!(to_exclusive_end_epoch("invalid"), 0);
+    }
+
+    #[test]
+    fn test_roundtrip() {
+        let epoch = date_str_to_epoch("2024-06-15");
+        let date_str = {
+            let dt = chrono::DateTime::from_timestamp(epoch, 0).unwrap();
+            dt.format("%Y-%m-%d").to_string()
+        };
+        assert_eq!(date_str, "2024-06-15");
+    }
+}

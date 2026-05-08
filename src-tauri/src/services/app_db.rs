@@ -822,3 +822,236 @@ impl AppDbService {
         Ok(result)
     }
 }
+
+#[cfg(test)]
+impl AppDbService {
+    pub fn new_in_memory() -> Result<Self, String> {
+        let conn = Connection::open_in_memory()
+            .map_err(|e| format!("打开内存数据库失败: {}", e))?;
+        let mut svc = Self { db: conn };
+        svc.init_schema_in_memory()?;
+        Ok(svc)
+    }
+
+    fn init_schema_in_memory(&mut self) -> Result<(), String> {
+        self.db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at INTEGER DEFAULT (strftime('%s','now'))
+            );
+            CREATE TABLE IF NOT EXISTS session_titles (
+                session_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                created_at INTEGER DEFAULT (strftime('%s','now'))
+            );
+            CREATE TABLE IF NOT EXISTS pricing_overrides (
+                model_id TEXT NOT NULL,
+                threshold INTEGER NOT NULL DEFAULT 0,
+                input_cost_per_million REAL NOT NULL,
+                output_cost_per_million REAL NOT NULL,
+                cache_read_cost_per_million REAL NOT NULL,
+                cache_creation_cost_per_million REAL NOT NULL,
+                updated_at INTEGER DEFAULT (strftime('%s','now')),
+                PRIMARY KEY (model_id, threshold)
+            );
+            CREATE TABLE IF NOT EXISTS time_pricing_overrides (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_id TEXT NOT NULL,
+                start_time INTEGER NOT NULL,
+                end_time INTEGER NOT NULL,
+                input_cost_per_million REAL NOT NULL,
+                output_cost_per_million REAL NOT NULL,
+                cache_read_cost_per_million REAL NOT NULL,
+                cache_creation_cost_per_million REAL NOT NULL,
+                label TEXT DEFAULT '',
+                threshold INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS cloud_pricing_cache (
+                model_id TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                input_cost_per_million REAL NOT NULL,
+                output_cost_per_million REAL NOT NULL,
+                cache_read_cost_per_million REAL NOT NULL,
+                cache_creation_cost_per_million REAL NOT NULL,
+                threshold INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (model_id, threshold)
+            );
+            CREATE TABLE IF NOT EXISTS cloud_time_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_id TEXT NOT NULL,
+                start_time INTEGER NOT NULL,
+                end_time INTEGER NOT NULL,
+                input_cost_per_million REAL NOT NULL,
+                output_cost_per_million REAL NOT NULL,
+                cache_read_cost_per_million REAL NOT NULL,
+                cache_creation_cost_per_million REAL NOT NULL,
+                label TEXT DEFAULT '',
+                threshold INTEGER NOT NULL DEFAULT 0
+            );"
+        ).map_err(|e| format!("初始化内存表失败: {}", e))?;
+        self.set_setting("schema_version", "2")?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_db() -> AppDbService {
+        AppDbService::new_in_memory().unwrap()
+    }
+
+    #[test]
+    fn test_settings_crud() {
+        let db = create_db();
+        assert!(db.get_setting("nonexistent").is_none());
+        db.set_setting("key1", "value1").unwrap();
+        assert_eq!(db.get_setting("key1").unwrap(), "value1");
+        db.set_setting("key1", "value2").unwrap();
+        assert_eq!(db.get_setting("key1").unwrap(), "value2");
+    }
+
+    #[test]
+    fn test_schema_version() {
+        let db = create_db();
+        assert_eq!(db.get_setting("schema_version").unwrap(), "2");
+    }
+
+    #[test]
+    fn test_save_and_get_override() {
+        let db = create_db();
+        db.save_override("model-a", 10.0, 20.0, 1.0, 5.0).unwrap();
+        let overrides = db.get_all_overrides().unwrap();
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].model_id, "model-a");
+        assert!((overrides[0].input_cost_per_million - 10.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_save_override_tier() {
+        let db = create_db();
+        db.save_override("model-a", 10.0, 20.0, 1.0, 5.0).unwrap();
+        db.save_override_tier("model-a", 5000, 15.0, 30.0, 1.5, 7.5).unwrap();
+        let overrides = db.get_all_overrides().unwrap();
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].context_tiers.len(), 1);
+        assert_eq!(overrides[0].context_tiers[0].threshold, 5000);
+    }
+
+    #[test]
+    fn test_delete_override() {
+        let db = create_db();
+        db.save_override("model-a", 10.0, 20.0, 1.0, 5.0).unwrap();
+        db.delete_override("model-a").unwrap();
+        assert!(db.get_all_overrides().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_time_override_crud() {
+        let db = create_db();
+        let id = db.add_time_override("model-a", 100, 200, 10.0, 20.0, 1.0, 5.0, "test").unwrap();
+        assert!(id > 0);
+        let rules = db.get_all_time_overrides().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].model_id, "model-a");
+        assert_eq!(rules[0].label, "test");
+
+        db.update_time_override(id, 100, 300, 15.0, 25.0, 1.5, 6.0, "updated").unwrap();
+        let rules = db.get_all_time_overrides().unwrap();
+        assert_eq!(rules[0].label, "updated");
+        assert_eq!(rules[0].end_time, 300);
+    }
+
+    #[test]
+    fn test_time_override_tier() {
+        let db = create_db();
+        db.add_time_override("model-a", 100, 200, 10.0, 20.0, 1.0, 5.0, "test").unwrap();
+        db.add_time_override_tier("model-a", 100, 200, 5000, 15.0, 30.0, 1.5, 7.5).unwrap();
+        let rules = db.get_all_time_overrides().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].context_tiers.len(), 1);
+        assert_eq!(rules[0].context_tiers[0].threshold, 5000);
+    }
+
+    #[test]
+    fn test_delete_time_override_group() {
+        let db = create_db();
+        db.add_time_override("model-a", 100, 200, 10.0, 20.0, 1.0, 5.0, "test").unwrap();
+        db.delete_time_override_group("model-a", 100, 200).unwrap();
+        assert!(db.get_all_time_overrides().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_session_titles() {
+        let db = create_db();
+        assert!(db.get_session_titles(&[]).unwrap().is_empty());
+        db.save_session_title("sess-1", "title-1").unwrap();
+        let titles = db.get_session_titles(&["sess-1".to_string()]).unwrap();
+        assert_eq!(titles.get("sess-1").unwrap(), "title-1");
+        assert!(titles.get("sess-2").is_none());
+    }
+
+    #[test]
+    fn test_cloud_pricing_roundtrip() {
+        let db = create_db();
+        let data = crate::models::CloudPricingData {
+            version: 3,
+            updated_at: 1700000000,
+            currency: "RMB".to_string(),
+            models: vec![
+                crate::models::CloudPricingModel {
+                    model_id: "model-a".to_string(),
+                    display_name: "Model A".to_string(),
+                    input_cost_per_million: 10.0,
+                    output_cost_per_million: 20.0,
+                    cache_read_cost_per_million: 1.0,
+                    cache_creation_cost_per_million: 5.0,
+                    context_tiers: vec![crate::models::ContextTier {
+                        id: None,
+                        threshold: 5000,
+                        input_cost_per_million: 15.0,
+                        output_cost_per_million: 30.0,
+                        cache_read_cost_per_million: 1.5,
+                        cache_creation_cost_per_million: 7.5,
+                    }],
+                    time_rules: vec![crate::models::CloudPricingTimeRule {
+                        model_id: "model-a".to_string(),
+                        label: "折扣".to_string(),
+                        start_time: 100,
+                        end_time: 200,
+                        input_cost_per_million: 5.0,
+                        output_cost_per_million: 10.0,
+                        cache_read_cost_per_million: 0.5,
+                        cache_creation_cost_per_million: 2.5,
+                        context_tiers: vec![],
+                    }],
+                },
+            ],
+        };
+        db.save_cloud_pricing(&data).unwrap();
+        let (base, tiers, cloud_time_rules) = db.load_cloud_pricing().unwrap();
+        assert_eq!(base.len(), 1);
+        assert_eq!(base[0].model_id, "model-a");
+        assert!(tiers.contains_key("model-a"));
+        assert_eq!(tiers["model-a"].len(), 1);
+        assert_eq!(tiers["model-a"][0].threshold, 5000);
+        assert!(cloud_time_rules.contains_key("model-a"));
+        assert_eq!(cloud_time_rules["model-a"].len(), 1);
+        assert_eq!(cloud_time_rules["model-a"][0].label, "折扣");
+    }
+
+    #[test]
+    fn test_cloud_pricing_version() {
+        let db = create_db();
+        let data = crate::models::CloudPricingData {
+            version: 5,
+            updated_at: 1700000000,
+            currency: "RMB".to_string(),
+            models: vec![],
+        };
+        db.save_cloud_pricing(&data).unwrap();
+        assert_eq!(db.get_setting("cloud_pricing_version").unwrap(), "5");
+    }
+}
