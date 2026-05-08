@@ -51,6 +51,7 @@
           :computed-cost="card.computedCost"
           :is-override="card?.isOverride || false"
           :time-rules="card?.timeRules || []"
+          :cloud-time-rules="card?.cloudTimeRules || []"
           :context-tiers="card?.contextTiers || []"
           :sim-tokens="simTokens"
           @edit="onOpenEditDialog(card)"
@@ -76,6 +77,7 @@
           :computed-cost="card.computedCost"
           :is-override="card?.isOverride || false"
           :time-rules="card?.timeRules || []"
+          :cloud-time-rules="card?.cloudTimeRules || []"
           :context-tiers="card?.contextTiers || []"
           :sim-tokens="simTokens"
           @edit="onOpenEditDialog(card)"
@@ -120,6 +122,7 @@ import PricingCard from '@/components/pricing/PricingCard.vue'
 import PricingEditDialog from '@/components/pricing/PricingEditDialog.vue'
 import TimePricingDialog from '@/components/pricing/TimePricingDialog.vue'
 import type { PricingData, TimePricingRule, CloudPricingTimeRule, ContextTier } from '@/types/pricing'
+import { epochToDateStr } from '@/utils/format'
 
 const dbStore = useDatabaseStore()
 const pricingStore = usePricingStore()
@@ -335,6 +338,27 @@ function onEditTimeRule(rule: TimePricingRule): void {
 
 async function onConfirmTimeRule(data: { label: string; startTime: number; endTime: number; input: number; output: number; cacheRead: number; cacheCreation: number }, tiers: ContextTier[]): Promise<void> {
   const modelId = currentTimeRuleModelId.value
+
+  // 检查时间冲突：云端规则 + 其他用户规则
+  const cloudRules = pricingStore.pricingData.find(p => p.modelId === modelId)?.cloudTimeRules || []
+  const userRules = pricingStore.pricingData.find(p => p.modelId === modelId)?.timeRules || []
+
+  const cloudConflict = cloudRules.find(r => data.startTime < r.endTime && data.endTime > r.startTime)
+  if (cloudConflict) {
+    alert(`时间区间与云端规则「${cloudConflict.label || '时段定价'}」（${epochToDateStr(cloudConflict.startTime)} ~ ${epochToDateStr(cloudConflict.endTime)}）冲突，请调整时间范围`)
+    return
+  }
+
+  // 编辑时排除自身，新增时检查全部
+  const otherUserRules = editingTimeRule.value
+    ? userRules.filter(r => r.id !== editingTimeRule.value.id)
+    : userRules
+  const userConflict = otherUserRules.find(r => data.startTime < r.endTime && data.endTime > r.startTime)
+  if (userConflict) {
+    alert(`时间区间与已有规则「${userConflict.label || '时段定价'}」（${epochToDateStr(userConflict.startTime)} ~ ${epochToDateStr(userConflict.endTime)}）冲突，请调整时间范围`)
+    return
+  }
+
   if (editingTimeRule.value) {
     await platformAdapter.updateTimePricingRule({
       id: editingTimeRule.value.id,

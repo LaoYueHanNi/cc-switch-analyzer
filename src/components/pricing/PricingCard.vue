@@ -45,10 +45,10 @@
     </div>
 
     <!-- 时间定价规则 -->
-    <div v-if="timeRules.length > 0" class="time-rules">
+    <div v-if="allTimeRules.length > 0" class="time-rules">
       <div
-        v-for="rule in timeRules"
-        :key="rule.id"
+        v-for="(rule, idx) in allTimeRules"
+        :key="idx"
         class="time-rule"
         :class="{ 'time-rule-active': isActive(rule) }"
       >
@@ -57,12 +57,14 @@
           <span class="time-rule-label">{{ rule.label || '时段定价' }}</span>
           <span class="time-rule-date">{{ formatDate(rule.startTime) }} ~ {{ formatDate(rule.endTime) }}</span>
         </div>
-        <n-button size="tiny" quaternary class="rule-icon-btn" @click="$emit('editTimeRule', rule)">
-          <template #icon><n-icon size="11"><create-outline /></n-icon></template>
-        </n-button>
-        <n-button size="tiny" quaternary class="rule-icon-btn" @click="$emit('deleteTimeRule', rule)">
-          <template #icon><n-icon size="11"><trash-outline /></n-icon></template>
-        </n-button>
+        <template v-if="!rule.readonly">
+          <n-button size="tiny" quaternary class="rule-icon-btn" @click="$emit('editTimeRule', timeRules[idx])">
+            <template #icon><n-icon size="11"><create-outline /></n-icon></template>
+          </n-button>
+          <n-button size="tiny" quaternary class="rule-icon-btn" @click="$emit('deleteTimeRule', timeRules[idx])">
+            <template #icon><n-icon size="11"><trash-outline /></n-icon></template>
+          </n-button>
+        </template>
       </div>
     </div>
 
@@ -81,17 +83,32 @@ import { formatRate } from '@/utils/format'
 import { epochToDateStr } from '@/utils/format'
 import { COLORS } from '@/utils/constants'
 import PricingGrid from '@/components/common/PricingGrid.vue'
-import type { PricingData, TimePricingRule, ContextTier } from '@/types/pricing'
+import type { PricingData, TimePricingRule, CloudPricingTimeRule, ContextTier } from '@/types/pricing'
 
-const props = defineProps<{
+interface DisplayTimeRule {
+  label: string
+  startTime: number
+  endTime: number
+  inputCostPerMillion: number
+  outputCostPerMillion: number
+  cacheReadCostPerMillion: number
+  cacheCreationCostPerMillion: number
+  contextTiers: ContextTier[]
+  readonly: boolean
+}
+
+const props = withDefaults(defineProps<{
   pricing: PricingData | null
   displayName: string
   computedCost: number
   isOverride: boolean
   timeRules: TimePricingRule[]
+  cloudTimeRules: CloudPricingTimeRule[]
   contextTiers: ContextTier[]
   simTokens: { input: number; output: number; cacheRead: number; cacheCreation: number }
-}>()
+}>(), {
+  cloudTimeRules: () => []
+})
 
 defineEmits<{
   edit: []
@@ -100,13 +117,40 @@ defineEmits<{
   deleteTimeRule: [rule: TimePricingRule]
 }>()
 
+// 合并用户 + 云端时间规则
+const allTimeRules = computed<DisplayTimeRule[]>(() => {
+  const user: DisplayTimeRule[] = props.timeRules.map(r => ({
+    label: r.label,
+    startTime: r.startTime,
+    endTime: r.endTime,
+    inputCostPerMillion: r.inputCostPerMillion,
+    outputCostPerMillion: r.outputCostPerMillion,
+    cacheReadCostPerMillion: r.cacheReadCostPerMillion,
+    cacheCreationCostPerMillion: r.cacheCreationCostPerMillion,
+    contextTiers: r.contextTiers || [],
+    readonly: false
+  }))
+  const cloud: DisplayTimeRule[] = props.cloudTimeRules.map(r => ({
+    label: r.label,
+    startTime: r.startTime,
+    endTime: r.endTime,
+    inputCostPerMillion: r.inputCostPerMillion,
+    outputCostPerMillion: r.outputCostPerMillion,
+    cacheReadCostPerMillion: r.cacheReadCostPerMillion,
+    cacheCreationCostPerMillion: r.cacheCreationCostPerMillion,
+    contextTiers: r.contextTiers || [],
+    readonly: true
+  }))
+  return [...user, ...cloud]
+})
+
 // 当前时间命中时间定价规则
 const activeRule = computed(() => {
   const now = Math.floor(Date.now() / 1000)
-  return props.timeRules.find(r => now >= r.startTime && now <= r.endTime) || null
+  return allTimeRules.value.find(r => now >= r.startTime && now <= r.endTime) || null
 })
 
-function isActive(rule: TimePricingRule): boolean {
+function isActive(rule: DisplayTimeRule): boolean {
   const now = Math.floor(Date.now() / 1000)
   return now >= rule.startTime && now <= rule.endTime
 }
