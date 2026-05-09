@@ -60,6 +60,7 @@ export interface CloudPricingModel {
   cacheCreationCostPerMillion: number
   contextTiers: ContextTier[]
   timeRules: CloudPricingTimeRule[]
+  aliases: string[]
 }
 
 // 云端定价数据
@@ -73,11 +74,11 @@ export interface CloudPricingData {
 // 缓存读取的基础定价行
 export interface ModelPricingRow {
   modelId: string
-  displayName: string
   inputCostPerMillion: number
   outputCostPerMillion: number
   cacheReadCostPerMillion: number
   cacheCreationCostPerMillion: number
+  aliases: string[]
 }
 
 // 应用自有数据库服务
@@ -121,6 +122,10 @@ export class AppDbService {
     if (version < 2) {
       this.backupBeforeMigration(1)
       this.migrateV2()
+    }
+    if (version < 3) {
+      this.backupBeforeMigration(2)
+      this.migrateV3()
     }
   }
 
@@ -235,8 +240,61 @@ export class AppDbService {
     this.setSchemaVersion(2)
   }
 
+  private migrateV3(): void {
+    // cloud_pricing_cache 加 aliases 列
+    const cloudCols = this.db.pragma('table_info(cloud_pricing_cache)') as { name: string }[]
+    if (!cloudCols.some(c => c.name === 'aliases')) {
+      this.db.exec('ALTER TABLE cloud_pricing_cache ADD COLUMN aliases TEXT NOT NULL DEFAULT \'\'')
+    }
+    // pricing_overrides 加 user_aliases 列
+    const overrideCols = this.db.pragma('table_info(pricing_overrides)') as { name: string }[]
+    if (!overrideCols.some(c => c.name === 'user_aliases')) {
+      this.db.exec('ALTER TABLE pricing_overrides ADD COLUMN user_aliases TEXT NOT NULL DEFAULT \'\'')
+    }
+    this.setSchemaVersion(3)
+  }
+
   close(): void {
     this.db.close()
+  }
+
+  // ========== 用户自定义别名 ==========
+
+  getUserAliases(): Map<string, string[]> {
+    const rows = this.db.prepare('SELECT model_id, user_aliases FROM pricing_overrides WHERE threshold = 0').all() as any[]
+    const map = new Map<string, string[]>()
+    for (const r of rows) {
+      const aliases = (r.user_aliases as string || '').split(',').filter((a: string) => a.length > 0)
+      if (aliases.length > 0) map.set(r.model_id, aliases)
+    }
+    return map
+  }
+
+  addUserAlias(modelId: string, alias: string): void {
+    // 确保有 base 行
+    const row = this.db.prepare('SELECT user_aliases FROM pricing_overrides WHERE model_id = ? AND threshold = 0').get(modelId) as { user_aliases: string } | undefined
+    const existing = row ? (row.user_aliases || '').split(',').filter((a: string) => a.length > 0) : []
+    if (!existing.includes(alias)) {
+      existing.push(alias)
+      const updated = existing.join(',')
+      if (row) {
+        this.db.prepare('UPDATE pricing_overrides SET user_aliases = ? WHERE model_id = ? AND threshold = 0').run(updated, modelId)
+      } else {
+        // 没有 override 行则创建一个（价格设为 0，后续用户可覆盖）
+        this.db.prepare(`
+          INSERT INTO pricing_overrides (model_id, threshold, input_cost_per_million, output_cost_per_million, cache_read_cost_per_million, cache_creation_cost_per_million, user_aliases)
+          VALUES (?, 0, 0, 0, 0, 0, ?)
+        `).run(modelId, updated)
+      }
+    }
+  }
+
+  removeUserAlias(modelId: string, alias: string): void {
+    const row = this.db.prepare('SELECT user_aliases FROM pricing_overrides WHERE model_id = ? AND threshold = 0').get(modelId) as { user_aliases: string } | undefined
+    if (!row) return
+    const existing = (row.user_aliases || '').split(',').filter((a: string) => a.length > 0 && a !== alias)
+    const updated = existing.join(',')
+    this.db.prepare('UPDATE pricing_overrides SET user_aliases = ? WHERE model_id = ? AND threshold = 0').run(updated, modelId)
   }
 
   // ========== 设置管理 ==========
@@ -485,8 +543,8 @@ export class AppDbService {
       const insertBase = this.db.prepare(`
         INSERT INTO cloud_pricing_cache
           (model_id, display_name, input_cost_per_million, output_cost_per_million,
-           cache_read_cost_per_million, cache_creation_cost_per_million, threshold)
-        VALUES (?, ?, ?, ?, ?, ?, 0)
+           cache_read_cost_per_million, cache_creation_cost_per_million, threshold, aliases)
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?)
       `)
 
       const insertTier = this.db.prepare(`
@@ -515,14 +573,16 @@ export class AppDbService {
       `)
 
       for (const model of data.models) {
+        const aliasesStr = (model.aliases ?? []).join(',')
         insertBase.run(
-          model.modelId, model.displayName,
+          model.modelId, model.modelId,
           model.inputCostPerMillion, model.outputCostPerMillion,
-          model.cacheReadCostPerMillion, model.cacheCreationCostPerMillion
+          model.cacheReadCostPerMillion, model.cacheCreationCostPerMillion,
+          aliasesStr
         )
         for (const tier of model.contextTiers) {
           insertTier.run(
-            model.modelId, model.displayName,
+            model.modelId, model.modelId,
             tier.inputCostPerMillion, tier.outputCostPerMillion,
             tier.cacheReadCostPerMillion, tier.cacheCreationCostPerMillion,
             tier.threshold
@@ -554,22 +614,28 @@ export class AppDbService {
     tx()
   }
 
-  loadCloudPricing(): { base: ModelPricingRow[], tiers: Map<string, ContextTier[]>, cloudTimeRules: Map<string, CloudPricingTimeRule[]> } {
+  loadCloudPricing(): { base: ModelPricingRow[], tiers: Map<string, ContextTier[]>, cloudTimeRules: Map<string, CloudPricingTimeRule[]>, cloudAliases: Map<string, string[]> } {
     const baseRows = this.db.prepare(`
-      SELECT model_id, display_name,
+      SELECT model_id,
              input_cost_per_million, output_cost_per_million,
-             cache_read_cost_per_million, cache_creation_cost_per_million
+             cache_read_cost_per_million, cache_creation_cost_per_million,
+             aliases
       FROM cloud_pricing_cache WHERE threshold = 0 ORDER BY model_id
     `).all() as any[]
 
-    const base: ModelPricingRow[] = baseRows.map(r => ({
-      modelId: r.model_id,
-      displayName: r.display_name,
-      inputCostPerMillion: r.input_cost_per_million,
-      outputCostPerMillion: r.output_cost_per_million,
-      cacheReadCostPerMillion: r.cache_read_cost_per_million,
-      cacheCreationCostPerMillion: r.cache_creation_cost_per_million
-    }))
+    const cloudAliases = new Map<string, string[]>()
+    const base: ModelPricingRow[] = baseRows.map(r => {
+      const aliases = (r.aliases as string || '').split(',').filter((a: string) => a.length > 0)
+      cloudAliases.set(r.model_id, aliases)
+      return {
+        modelId: r.model_id,
+        inputCostPerMillion: r.input_cost_per_million,
+        outputCostPerMillion: r.output_cost_per_million,
+        cacheReadCostPerMillion: r.cache_read_cost_per_million,
+        cacheCreationCostPerMillion: r.cache_creation_cost_per_million,
+        aliases
+      }
+    })
 
     const tierRows = this.db.prepare(`
       SELECT model_id, threshold,
@@ -631,6 +697,6 @@ export class AppDbService {
       cloudTimeRules.get(modelId)!.push(rule)
     }
 
-    return { base, tiers, cloudTimeRules }
+    return { base, tiers, cloudTimeRules, cloudAliases }
   }
 }

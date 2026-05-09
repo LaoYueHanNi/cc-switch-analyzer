@@ -16,27 +16,31 @@ pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, Strin
         }
     }
 
+    let mut resolved_used_model_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for m in &used_models {
+        if let Some(resolved) = pricing.resolve_model_id(m) {
+            resolved_used_model_ids.insert(resolved);
+        }
+    }
+
     let all = pricing.get_all_pricing();
     eprintln!("[PRICING] 返回定价数据: {} 条", all.len());
     Ok(all
         .iter()
         .map(|p| {
-            let time_rules = pricing.get_time_rules(&p.model_id);
-            let context_tiers = pricing.get_override_tiers(&p.model_id);
-            let cloud_time_rules = pricing.get_cloud_time_rules(&p.model_id);
             PricingData {
                 model_id: p.model_id.clone(),
-                display_name: p.display_name.clone(),
                 input_cost_per_million: p.input_cost_per_million,
                 output_cost_per_million: p.output_cost_per_million,
                 cache_read_cost_per_million: p.cache_read_cost_per_million,
                 cache_creation_cost_per_million: p.cache_creation_cost_per_million,
                 is_override: p.is_override,
                 has_time_pricing: pricing.has_time_pricing(&p.model_id),
-                time_rules,
-                is_used: used_models.contains(&p.model_id),
-                context_tiers,
-                cloud_time_rules,
+                time_rules: pricing.get_time_rules(&p.model_id),
+                is_used: resolved_used_model_ids.contains(&p.model_id),
+                context_tiers: pricing.get_override_tiers(&p.model_id),
+                cloud_time_rules: pricing.get_cloud_time_rules(&p.model_id),
+                aliases: pricing.get_aliases(&p.model_id),
             }
         })
         .collect())
@@ -192,5 +196,21 @@ pub fn fetch_cloud_pricing(state: State<AppState>) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     let mut pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
     pricing.fetch_and_cache_cloud_pricing(&app_db)?;
+    pricing.refresh(&app_db)
+}
+
+#[tauri::command]
+pub fn add_user_alias(model_id: String, alias: String, state: State<AppState>) -> Result<(), String> {
+    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+    let mut pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
+    app_db.add_user_alias(&model_id, &alias)?;
+    pricing.refresh(&app_db)
+}
+
+#[tauri::command]
+pub fn remove_user_alias(model_id: String, alias: String, state: State<AppState>) -> Result<(), String> {
+    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+    let mut pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
+    app_db.remove_user_alias(&model_id, &alias)?;
     pricing.refresh(&app_db)
 }

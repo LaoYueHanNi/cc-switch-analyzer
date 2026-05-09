@@ -78,6 +78,12 @@ export const platformAdapter: PlatformAdapter = {
   async fetchCloudPricing() {
     return window.api.fetchCloudPricing()
   },
+  async addUserAlias(modelId: string, alias: string) {
+    return window.api.addUserAlias(modelId, alias)
+  },
+  async removeUserAlias(modelId: string, alias: string) {
+    return window.api.removeUserAlias(modelId, alias)
+  },
   async getSessionTitles(sessionIds: string[]) {
     return window.api.getSessionTitles(sessionIds)
   }

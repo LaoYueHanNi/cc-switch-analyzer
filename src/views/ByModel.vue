@@ -128,7 +128,7 @@ const compareModelData = ref<ModelBreakdown | null>(null)
 function onCompare(modelId: string): void {
   const card = modelCards.value.find(c => c.modelData.model === modelId)
   if (!card) return
-  compareSourceModel.value = card.pricing?.displayName || modelId
+  compareSourceModel.value = modelId
   compareSourceCost.value = card.totalCost
   compareCostBreakdown.value = card.costBreakdown
   compareModelData.value = card.modelData

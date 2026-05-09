@@ -36,6 +36,7 @@ export function parseCloudPricing(data: any): CloudPricingData {
       outputCostPerMillion: Number(m.outputCostPerMillion),
       cacheReadCostPerMillion: Number(m.cacheReadCostPerMillion),
       cacheCreationCostPerMillion: Number(m.cacheCreationCostPerMillion),
+      aliases: Array.isArray(m.aliases) ? m.aliases.map((a: any) => String(a)) : [],
       contextTiers: Array.isArray(m.contextTiers)
         ? m.contextTiers.map((t: any) => ({
             threshold: Number(t.threshold),

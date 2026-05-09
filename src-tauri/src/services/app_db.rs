@@ -49,6 +49,10 @@ impl AppDbService {
             self.backup_before_migration(1)?;
             self.migrate_v2()?;
         }
+        if version < 3 {
+            self.backup_before_migration(2)?;
+            self.migrate_v3()?;
+        }
 
         Ok(())
     }
@@ -174,6 +178,30 @@ impl AppDbService {
         ).map_err(|e| format!("迁移 v2 (云端定价缓存) 失败: {}", e))?;
 
         self.set_schema_version(2)?;
+        Ok(())
+    }
+
+    fn migrate_v3(&mut self) -> Result<(), String> {
+        // cloud_pricing_cache 加 aliases 列
+        let has_cloud_aliases = self.db
+            .prepare("SELECT aliases FROM cloud_pricing_cache LIMIT 0")
+            .is_ok();
+        if !has_cloud_aliases {
+            self.db.execute_batch(
+                "ALTER TABLE cloud_pricing_cache ADD COLUMN aliases TEXT NOT NULL DEFAULT '';"
+            ).map_err(|e| format!("迁移 v3 (cloud aliases) 失败: {}", e))?;
+        }
+        // pricing_overrides 加 user_aliases 列
+        let has_user_aliases = self.db
+            .prepare("SELECT user_aliases FROM pricing_overrides LIMIT 0")
+            .is_ok();
+        if !has_user_aliases {
+            self.db.execute_batch(
+                "ALTER TABLE pricing_overrides ADD COLUMN user_aliases TEXT NOT NULL DEFAULT '';"
+            ).map_err(|e| format!("迁移 v3 (user aliases) 失败: {}", e))?;
+        }
+
+        self.set_schema_version(3)?;
         Ok(())
     }
 
@@ -599,18 +627,20 @@ impl AppDbService {
             .map_err(|e| format!("清空云端时间规则缓存失败: {}", e))?;
 
         for model in &data.models {
+            let aliases_str = model.aliases.join(",");
             tx.execute(
                 "INSERT INTO cloud_pricing_cache
                     (model_id, display_name, input_cost_per_million, output_cost_per_million,
-                     cache_read_cost_per_million, cache_creation_cost_per_million, threshold)
-                 VALUES (?, ?, ?, ?, ?, ?, 0)",
+                     cache_read_cost_per_million, cache_creation_cost_per_million, threshold, aliases)
+                 VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
                 params![
                     model.model_id,
-                    model.display_name,
+                    model.model_id,
                     model.input_cost_per_million,
                     model.output_cost_per_million,
                     model.cache_read_cost_per_million,
                     model.cache_creation_cost_per_million,
+                    aliases_str,
                 ],
             ).map_err(|e| format!("写入云端定价缓存失败: {}", e))?;
 
@@ -690,32 +720,43 @@ impl AppDbService {
         Ok(())
     }
 
-    /// 从缓存读取云端定价（返回基础行 + 按模型分组的上下文档位 + 按 model_id 分组的云端时间规则）
-    pub fn load_cloud_pricing(&self) -> Result<(Vec<ModelPricing>, HashMap<String, Vec<ContextTier>>, HashMap<String, Vec<crate::models::CloudPricingTimeRule>>), String> {
+    /// 从缓存读取云端定价（返回基础行 + 按模型分组的上下文档位 + 按 model_id 分组的云端时间规则 + 云端别名）
+    pub fn load_cloud_pricing(&self) -> Result<(Vec<ModelPricing>, HashMap<String, Vec<ContextTier>>, HashMap<String, Vec<crate::models::CloudPricingTimeRule>>, HashMap<String, Vec<String>>), String> {
         // 读取基础行 (threshold = 0)
         let mut stmt = self.db
             .prepare(
-                "SELECT model_id, display_name,
+                "SELECT model_id,
                         input_cost_per_million, output_cost_per_million,
-                        cache_read_cost_per_million, cache_creation_cost_per_million
+                        cache_read_cost_per_million, cache_creation_cost_per_million,
+                        aliases
                  FROM cloud_pricing_cache WHERE threshold = 0 ORDER BY model_id"
             )
             .map_err(|e| format!("查询云端定价缓存失败: {}", e))?;
 
         let base_rows = stmt.query_map([], |row| {
-            Ok(ModelPricing {
-                model_id: row.get("model_id")?,
-                display_name: row.get("display_name")?,
-                input_cost_per_million: row.get("input_cost_per_million")?,
-                output_cost_per_million: row.get("output_cost_per_million")?,
-                cache_read_cost_per_million: row.get("cache_read_cost_per_million")?,
-                cache_creation_cost_per_million: row.get("cache_creation_cost_per_million")?,
-            })
+            Ok((
+                ModelPricing {
+                    model_id: row.get("model_id")?,
+                    input_cost_per_million: row.get("input_cost_per_million")?,
+                    output_cost_per_million: row.get("output_cost_per_million")?,
+                    cache_read_cost_per_million: row.get("cache_read_cost_per_million")?,
+                    cache_creation_cost_per_million: row.get("cache_creation_cost_per_million")?,
+                },
+                row.get::<_, String>("aliases")?,
+            ))
         }).map_err(|e| format!("查询云端定价缓存失败: {}", e))?;
 
         let mut base = Vec::new();
+        let mut cloud_aliases: HashMap<String, Vec<String>> = HashMap::new();
         for row in base_rows {
-            base.push(row.map_err(|e| format!("读取云端定价缓存失败: {}", e))?);
+            let (pricing, aliases_str) = row.map_err(|e| format!("读取云端定价缓存失败: {}", e))?;
+            let aliases: Vec<String> = if aliases_str.is_empty() {
+                Vec::new()
+            } else {
+                aliases_str.split(',').map(|s| s.to_string()).collect()
+            };
+            cloud_aliases.insert(pricing.model_id.clone(), aliases);
+            base.push(pricing);
         }
 
         // 读取档位行 (threshold > 0)
@@ -751,7 +792,7 @@ impl AppDbService {
         // 读取云端时间规则
         let cloud_time_rules = self.load_cloud_time_rules()?;
 
-        Ok((base, tiers, cloud_time_rules))
+        Ok((base, tiers, cloud_time_rules, cloud_aliases))
     }
 
     /// 从缓存读取云端时间规则（按 model_id 分组）
@@ -821,6 +862,89 @@ impl AppDbService {
         }
         Ok(result)
     }
+
+    // ========== 用户自定义别名 ==========
+
+    pub fn get_user_aliases(&self) -> Result<HashMap<String, Vec<String>>, String> {
+        let mut stmt = self.db
+            .prepare("SELECT model_id, user_aliases FROM pricing_overrides WHERE threshold = 0")
+            .map_err(|e| format!("查询用户别名失败: {}", e))?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>("model_id")?,
+                row.get::<_, String>("user_aliases")?,
+            ))
+        }).map_err(|e| format!("查询用户别名失败: {}", e))?;
+
+        let mut result: HashMap<String, Vec<String>> = HashMap::new();
+        for row in rows {
+            let (model_id, aliases_str) = row.map_err(|e| format!("读取用户别名失败: {}", e))?;
+            let aliases: Vec<String> = if aliases_str.is_empty() {
+                Vec::new()
+            } else {
+                aliases_str.split(',').map(|s| s.to_string()).filter(|s| !s.is_empty()).collect()
+            };
+            if !aliases.is_empty() {
+                result.insert(model_id, aliases);
+            }
+        }
+        Ok(result)
+    }
+
+    pub fn add_user_alias(&self, model_id: &str, alias: &str) -> Result<(), String> {
+        let existing: Option<String> = self.db
+            .query_row(
+                "SELECT user_aliases FROM pricing_overrides WHERE model_id = ? AND threshold = 0",
+                params![model_id],
+                |row| row.get(0),
+            ).ok();
+
+        let mut aliases: Vec<String> = match &existing {
+            Some(s) if !s.is_empty() => s.split(',').map(|s| s.to_string()).filter(|s| !s.is_empty()).collect(),
+            _ => Vec::new(),
+        };
+
+        if aliases.iter().any(|a| a == alias) {
+            return Ok(());
+        }
+        aliases.push(alias.to_string());
+        let updated = aliases.join(",");
+
+        if existing.is_some() {
+            self.db.execute(
+                "UPDATE pricing_overrides SET user_aliases = ? WHERE model_id = ? AND threshold = 0",
+                params![updated, model_id],
+            ).map_err(|e| format!("更新用户别名失败: {}", e))?;
+        } else {
+            self.db.execute(
+                "INSERT INTO pricing_overrides (model_id, threshold, input_cost_per_million, output_cost_per_million, cache_read_cost_per_million, cache_creation_cost_per_million, user_aliases) VALUES (?, 0, 0, 0, 0, 0, ?)",
+                params![model_id, updated],
+            ).map_err(|e| format!("插入用户别名失败: {}", e))?;
+        }
+        Ok(())
+    }
+
+    pub fn remove_user_alias(&self, model_id: &str, alias: &str) -> Result<(), String> {
+        let existing: Option<String> = self.db
+            .query_row(
+                "SELECT user_aliases FROM pricing_overrides WHERE model_id = ? AND threshold = 0",
+                params![model_id],
+                |row| row.get(0),
+            ).ok().flatten();
+
+        let aliases: Vec<String> = match existing {
+            Some(s) if !s.is_empty() => s.split(',').map(|s| s.to_string()).filter(|a| !a.is_empty() && a != alias).collect(),
+            _ => return Ok(()),
+        };
+
+        let updated = aliases.join(",");
+        self.db.execute(
+            "UPDATE pricing_overrides SET user_aliases = ? WHERE model_id = ? AND threshold = 0",
+            params![updated, model_id],
+        ).map_err(|e| format!("删除用户别名失败: {}", e))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -853,6 +977,7 @@ impl AppDbService {
                 cache_read_cost_per_million REAL NOT NULL,
                 cache_creation_cost_per_million REAL NOT NULL,
                 updated_at INTEGER DEFAULT (strftime('%s','now')),
+                user_aliases TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (model_id, threshold)
             );
             CREATE TABLE IF NOT EXISTS time_pricing_overrides (
@@ -875,6 +1000,7 @@ impl AppDbService {
                 cache_read_cost_per_million REAL NOT NULL,
                 cache_creation_cost_per_million REAL NOT NULL,
                 threshold INTEGER NOT NULL DEFAULT 0,
+                aliases TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (model_id, threshold)
             );
             CREATE TABLE IF NOT EXISTS cloud_time_rules (
@@ -890,7 +1016,7 @@ impl AppDbService {
                 threshold INTEGER NOT NULL DEFAULT 0
             );"
         ).map_err(|e| format!("初始化内存表失败: {}", e))?;
-        self.set_setting("schema_version", "2")?;
+        self.set_setting("schema_version", "3")?;
         Ok(())
     }
 }
@@ -916,7 +1042,7 @@ mod tests {
     #[test]
     fn test_schema_version() {
         let db = create_db();
-        assert_eq!(db.get_setting("schema_version").unwrap(), "2");
+        assert_eq!(db.get_setting("schema_version").unwrap(), "3");
     }
 
     #[test]
@@ -1027,11 +1153,12 @@ mod tests {
                         cache_creation_cost_per_million: 2.5,
                         context_tiers: vec![],
                     }],
+                    aliases: vec!["model-a-alias".to_string()],
                 },
             ],
         };
         db.save_cloud_pricing(&data).unwrap();
-        let (base, tiers, cloud_time_rules) = db.load_cloud_pricing().unwrap();
+        let (base, tiers, cloud_time_rules, cloud_aliases) = db.load_cloud_pricing().unwrap();
         assert_eq!(base.len(), 1);
         assert_eq!(base[0].model_id, "model-a");
         assert!(tiers.contains_key("model-a"));

@@ -41,7 +41,6 @@ pub struct DatabaseInfo {
 #[serde(rename_all = "camelCase")]
 pub struct ModelPricing {
     pub model_id: String,
-    pub display_name: String,
     pub input_cost_per_million: f64,
     pub output_cost_per_million: f64,
     pub cache_read_cost_per_million: f64,
@@ -212,7 +211,6 @@ pub struct ContextTier {
 #[serde(rename_all = "camelCase")]
 pub struct MergedPricing {
     pub model_id: String,
-    pub display_name: String,
     pub input_cost_per_million: f64,
     pub output_cost_per_million: f64,
     pub cache_read_cost_per_million: f64,
@@ -253,7 +251,6 @@ pub struct TimePricingRule {
 #[serde(rename_all = "camelCase")]
 pub struct PricingData {
     pub model_id: String,
-    pub display_name: String,
     pub input_cost_per_million: f64,
     pub output_cost_per_million: f64,
     pub cache_read_cost_per_million: f64,
@@ -266,6 +263,8 @@ pub struct PricingData {
     pub context_tiers: Vec<ContextTier>,
     #[serde(default)]
     pub cloud_time_rules: Vec<CloudPricingTimeRule>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 // ========== 预计算结果 ==========
@@ -373,6 +372,7 @@ pub struct CloudPricingTimeRule {
 #[serde(rename_all = "camelCase")]
 pub struct CloudPricingModel {
     pub model_id: String,
+    #[serde(default)]
     pub display_name: String,
     pub input_cost_per_million: f64,
     pub output_cost_per_million: f64,
@@ -382,6 +382,8 @@ pub struct CloudPricingModel {
     pub context_tiers: Vec<ContextTier>,
     #[serde(default)]
     pub time_rules: Vec<CloudPricingTimeRule>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

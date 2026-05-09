@@ -98,7 +98,7 @@ const targetModel = ref<string | null>(null)
 const modelOptions = computed(() =>
   props.allModels
     .filter(m => m.modelId !== props.sourceModel)
-    .map(m => ({ label: m.displayName || m.modelId, value: m.modelId }))
+    .map(m => ({ label: m.modelId, value: m.modelId }))
 )
 
 type RateField = 'inputCostPerMillion' | 'outputCostPerMillion' | 'cacheReadCostPerMillion' | 'cacheCreationCostPerMillion'

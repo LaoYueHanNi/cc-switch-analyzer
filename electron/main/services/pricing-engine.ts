@@ -5,7 +5,6 @@ import { fetchCloudPricing } from './cloud-pricing'
 // 合并后的定价（包含 isOverride 标记）
 export interface MergedPricing {
   modelId: string
-  displayName: string
   inputCostPerMillion: number     // RMB
   outputCostPerMillion: number
   cacheReadCostPerMillion: number
@@ -30,6 +29,8 @@ export class PricingEngine {
   private overrideTiers: Map<string, ContextTier[]> = new Map()
   private timeRuleTiers: Map<number, ContextTier[]> = new Map()
   private cloudTimeRuleTiers: Map<string, ContextTier[]> = new Map()
+  private aliasToModelId: Map<string, string> = new Map()
+  private modelAliases: Map<string, string[]> = new Map()
 
   private appDb: AppDbService
 
@@ -45,10 +46,9 @@ export class PricingEngine {
     return best
   }
 
-  private tierToMerged(modelId: string, tier: ContextTier, displayName: string): MergedPricing {
+  private tierToMerged(modelId: string, tier: ContextTier): MergedPricing {
     return {
       modelId,
-      displayName,
       inputCostPerMillion: tier.inputCostPerMillion,
       outputCostPerMillion: tier.outputCostPerMillion,
       cacheReadCostPerMillion: tier.cacheReadCostPerMillion,
@@ -64,15 +64,35 @@ export class PricingEngine {
   // 刷新全部定价数据：云端基础 → 用户覆盖 → 云端时间规则 → 用户时间规则
   refresh(): void {
     // 1. 加载云端定价
-    const { base, cloudTiers, cloudTimeRules } = this.loadCloudBase()
+    const { base, cloudTiers, cloudTimeRules, cloudAliases } = this.loadCloudBase()
 
-    // 2. 加载用户覆盖
+    // 2. 先构建别名映射（统一小写 key），供 merge 和 resolve 使用
+    this.aliasToModelId = new Map()
+    this.modelAliases = new Map()
+    for (const [modelId, aliases] of cloudAliases) {
+      // modelId 本身也加入映射（大小写不敏感）
+      this.aliasToModelId.set(modelId.toLowerCase(), modelId)
+      this.modelAliases.set(modelId, [...aliases])
+      for (const alias of aliases) {
+        this.aliasToModelId.set(alias.toLowerCase(), modelId)
+      }
+    }
+    const userAliases = this.appDb.getUserAliases()
+    for (const [modelId, aliases] of userAliases) {
+      const existing = this.modelAliases.get(modelId) || []
+      this.modelAliases.set(modelId, [...existing, ...aliases])
+      for (const alias of aliases) {
+        this.aliasToModelId.set(alias.toLowerCase(), modelId)
+      }
+    }
+
+    // 3. 加载用户覆盖
     const overrides = this.loadOverrides()
 
-    // 3. 合并
+    // 4. 合并（override modelId 通过别名映射解析）
     this.merged = this.merge(base, cloudTiers, overrides)
 
-    // 4. 加载云端时间规则
+    // 5. 加载云端时间规则
     this.cloudTimeRuleTiers = new Map()
     this.cloudTimeRulesByModel = new Map()
     for (const [modelId, rules] of cloudTimeRules) {
@@ -101,7 +121,7 @@ export class PricingEngine {
   }
 
   // 加载云端基础定价：优先在线拉取，失败则读缓存
-  private loadCloudBase(): { base: ModelPricingRow[], cloudTiers: Map<string, ContextTier[]>, cloudTimeRules: Map<string, CloudPricingTimeRule[]> } {
+  private loadCloudBase(): { base: ModelPricingRow[], cloudTiers: Map<string, ContextTier[]>, cloudTimeRules: Map<string, CloudPricingTimeRule[]>, cloudAliases: Map<string, string[]> } {
     try {
       const cached = this.appDb.loadCloudPricing()
       console.log(`[PRICING] 从缓存加载云端定价: ${cached.base.length} 个模型`)
@@ -110,10 +130,10 @@ export class PricingEngine {
         const sorted = [...tiers].sort((a, b) => a.threshold - b.threshold)
         cloudTiers.set(modelId, sorted)
       }
-      return { base: cached.base, cloudTiers, cloudTimeRules: cached.cloudTimeRules }
+      return { base: cached.base, cloudTiers, cloudTimeRules: cached.cloudTimeRules, cloudAliases: cached.cloudAliases }
     } catch (e) {
       console.log('[PRICING] 读取云端定价缓存失败:', e)
-      return { base: [], cloudTiers: new Map(), cloudTimeRules: new Map() }
+      return { base: [], cloudTiers: new Map(), cloudTimeRules: new Map(), cloudAliases: new Map() }
     }
   }
 
@@ -143,11 +163,11 @@ export class PricingEngine {
       const baseEntry = this.merged.get(ov.modelId)
       if (ov.contextTiers?.length > 0) {
         const sorted = [...ov.contextTiers].sort((a: any, b: any) => a.threshold - b.threshold)
-        this.overrideTiers.set(ov.modelId, sorted)
+        const resolved = this.resolveModelId(ov.modelId) || ov.modelId
+        this.overrideTiers.set(resolved, sorted)
       }
       map.set(ov.modelId, {
         modelId: ov.modelId,
-        displayName: baseEntry?.displayName || ov.modelId,
         inputCostPerMillion: ov.inputCostPerMillion,
         outputCostPerMillion: ov.outputCostPerMillion,
         cacheReadCostPerMillion: ov.cacheReadCostPerMillion,
@@ -170,7 +190,6 @@ export class PricingEngine {
     for (const bp of base) {
       result.set(bp.modelId, {
         modelId: bp.modelId,
-        displayName: bp.displayName || bp.modelId,
         inputCostPerMillion: bp.inputCostPerMillion,
         outputCostPerMillion: bp.outputCostPerMillion,
         cacheReadCostPerMillion: bp.cacheReadCostPerMillion,
@@ -187,12 +206,12 @@ export class PricingEngine {
       }
     }
 
-    // 用户覆盖替换
+    // 用户覆盖替换（通过别名映射解析旧 modelId）
     for (const [modelId, ov] of overrides) {
-      const baseEntry = result.get(modelId)
-      result.set(modelId, {
+      const resolved = this.resolveModelId(modelId) || modelId
+      result.set(resolved, {
         ...ov,
-        displayName: baseEntry?.displayName || ov.modelId,
+        modelId: resolved,
         isOverride: true
       })
     }
@@ -202,20 +221,23 @@ export class PricingEngine {
 
   // 获取固定合并定价（忽略时间规则）
   getPricing(modelId: string): MergedPricing | null {
-    return this.merged.get(modelId) || null
+    const resolved = this.resolveModelId(modelId)
+    if (!resolved) return null
+    return this.merged.get(resolved) || null
   }
 
   // 时间感知定价查询：用户时间规则 → 云端时间规则 → 固定定价
   getPricingAt(modelId: string, epochSeconds: number): MergedPricing | null {
+    const resolved = this.resolveModelId(modelId)
+    if (!resolved) return null
+
     // 1. 用户自定义时间规则
-    const rules = this.timeOverridesByModel.get(modelId)
+    const rules = this.timeOverridesByModel.get(resolved)
     if (rules) {
       for (const rule of rules) {
         if (rule.startTime <= epochSeconds && epochSeconds <= rule.endTime) {
-          const baseEntry = this.merged.get(modelId)
           return {
-            modelId,
-            displayName: baseEntry?.displayName || modelId,
+            modelId: resolved,
             inputCostPerMillion: rule.inputCostPerMillion,
             outputCostPerMillion: rule.outputCostPerMillion,
             cacheReadCostPerMillion: rule.cacheReadCostPerMillion,
@@ -226,14 +248,12 @@ export class PricingEngine {
       }
     }
     // 2. 云端时间规则
-    const cloudRules = this.cloudTimeRulesByModel.get(modelId)
+    const cloudRules = this.cloudTimeRulesByModel.get(resolved)
     if (cloudRules) {
       for (const rule of cloudRules) {
         if (rule.startTime <= epochSeconds && epochSeconds <= rule.endTime) {
-          const baseEntry = this.merged.get(modelId)
           return {
-            modelId,
-            displayName: baseEntry?.displayName || modelId,
+            modelId: resolved,
             inputCostPerMillion: rule.inputCostPerMillion,
             outputCostPerMillion: rule.outputCostPerMillion,
             cacheReadCostPerMillion: rule.cacheReadCostPerMillion,
@@ -244,26 +264,26 @@ export class PricingEngine {
       }
     }
     // 回退到固定定价
-    return this.merged.get(modelId) || null
+    return this.merged.get(resolved) || null
   }
 
   // 上下文感知定价查询：用户时间规则 → 云端时间规则 → 覆盖档位 → 固定定价
   getPricingAtWithContext(modelId: string, epochSeconds: number, contextSize: number): MergedPricing | null {
-    const displayName = this.merged.get(modelId)?.displayName || modelId
+    const resolved = this.resolveModelId(modelId)
+    if (!resolved) return null
 
     // 1. 用户自定义时间规则
-    const rules = this.timeOverridesByModel.get(modelId)
+    const rules = this.timeOverridesByModel.get(resolved)
     if (rules) {
       for (const rule of rules) {
         if (rule.startTime <= epochSeconds && epochSeconds <= rule.endTime) {
           const tiers = this.timeRuleTiers.get(rule.id)
           if (tiers) {
             const tier = this.resolveTier(tiers, contextSize)
-            if (tier) return this.tierToMerged(modelId, tier, displayName)
+            if (tier) return this.tierToMerged(resolved, tier)
           }
           return {
-            modelId,
-            displayName,
+            modelId: resolved,
             inputCostPerMillion: rule.inputCostPerMillion,
             outputCostPerMillion: rule.outputCostPerMillion,
             cacheReadCostPerMillion: rule.cacheReadCostPerMillion,
@@ -275,19 +295,18 @@ export class PricingEngine {
     }
 
     // 2. 云端时间规则
-    const cloudRules = this.cloudTimeRulesByModel.get(modelId)
+    const cloudRules = this.cloudTimeRulesByModel.get(resolved)
     if (cloudRules) {
       for (const rule of cloudRules) {
         if (rule.startTime <= epochSeconds && epochSeconds <= rule.endTime) {
-          const key = `${modelId}:${rule.startTime}:${rule.endTime}`
+          const key = `${resolved}:${rule.startTime}:${rule.endTime}`
           const tiers = this.cloudTimeRuleTiers.get(key)
           if (tiers) {
             const tier = this.resolveTier(tiers, contextSize)
-            if (tier) return this.tierToMerged(modelId, tier, displayName)
+            if (tier) return this.tierToMerged(resolved, tier)
           }
           return {
-            modelId,
-            displayName,
+            modelId: resolved,
             inputCostPerMillion: rule.inputCostPerMillion,
             outputCostPerMillion: rule.outputCostPerMillion,
             cacheReadCostPerMillion: rule.cacheReadCostPerMillion,
@@ -299,14 +318,14 @@ export class PricingEngine {
     }
 
     // 3. 覆盖上下文档位
-    const overrideTiers = this.overrideTiers.get(modelId)
+    const overrideTiers = this.overrideTiers.get(resolved)
     if (overrideTiers) {
       const tier = this.resolveTier(overrideTiers, contextSize)
-      if (tier) return this.tierToMerged(modelId, tier, displayName)
+      if (tier) return this.tierToMerged(resolved, tier)
     }
 
     // 4. 固定定价
-    return this.merged.get(modelId) || null
+    return this.merged.get(resolved) || null
   }
 
   // 费用计算
@@ -336,18 +355,25 @@ export class PricingEngine {
 
   // 获取某模型的时间规则
   getTimeRules(modelId: string): TimePricingRule[] {
-    return this.timeOverridesByModel.get(modelId) || []
+    const resolved = this.resolveModelId(modelId)
+    if (!resolved) return []
+    return this.timeOverridesByModel.get(resolved) || []
   }
 
   // 获取某模型的覆盖上下文档位
   getOverrideTiers(modelId: string): ContextTier[] {
-    return this.overrideTiers.get(modelId) || []
+    const resolved = this.resolveModelId(modelId)
+    if (!resolved) return []
+    return this.overrideTiers.get(resolved) || []
   }
 
   // 返回命中的上下文档位 threshold，无命中返回 null
   getMatchedTierThreshold(modelId: string, epochSeconds: number, contextSize: number): number | null {
+    const resolved = this.resolveModelId(modelId)
+    if (!resolved) return null
+
     // 1. 用户时间规则的档位
-    const rules = this.timeOverridesByModel.get(modelId)
+    const rules = this.timeOverridesByModel.get(resolved)
     if (rules) {
       for (const rule of rules) {
         if (rule.startTime <= epochSeconds && epochSeconds <= rule.endTime) {
@@ -361,11 +387,11 @@ export class PricingEngine {
       }
     }
     // 2. 云端时间规则的档位
-    const cloudRules = this.cloudTimeRulesByModel.get(modelId)
+    const cloudRules = this.cloudTimeRulesByModel.get(resolved)
     if (cloudRules) {
       for (const rule of cloudRules) {
         if (rule.startTime <= epochSeconds && epochSeconds <= rule.endTime) {
-          const key = `${modelId}:${rule.startTime}:${rule.endTime}`
+          const key = `${resolved}:${rule.startTime}:${rule.endTime}`
           const tiers = this.cloudTimeRuleTiers.get(key)
           if (tiers) {
             const tier = PricingEngine.resolveTierStatic(tiers, contextSize)
@@ -376,7 +402,7 @@ export class PricingEngine {
       }
     }
     // 3. 覆盖档位
-    const overrideTiers = this.overrideTiers.get(modelId)
+    const overrideTiers = this.overrideTiers.get(resolved)
     if (overrideTiers) {
       const tier = PricingEngine.resolveTierStatic(overrideTiers, contextSize)
       if (tier) return tier.threshold
@@ -398,15 +424,29 @@ export class PricingEngine {
 
   // 检查是否有时间定价（用户规则或云端规则）
   hasTimePricing(modelId: string): boolean {
-    const rules = this.timeOverridesByModel.get(modelId)
+    const resolved = this.resolveModelId(modelId)
+    if (!resolved) return false
+    const rules = this.timeOverridesByModel.get(resolved)
     if (rules && rules.length > 0) return true
-    const cloudRules = this.cloudTimeRulesByModel.get(modelId)
+    const cloudRules = this.cloudTimeRulesByModel.get(resolved)
     return cloudRules !== undefined && cloudRules.length > 0
   }
 
   // 获取某模型的云端时间规则
   getCloudTimeRules(modelId: string): CloudPricingTimeRule[] {
-    return this.cloudTimeRulesByModel.get(modelId) || []
+    const resolved = this.resolveModelId(modelId)
+    if (!resolved) return []
+    return this.cloudTimeRulesByModel.get(resolved) || []
+  }
+
+  // 别名/modelId → modelId 解析（大小写不敏感）
+  resolveModelId(rawModelId: string): string | null {
+    return this.aliasToModelId.get(rawModelId.toLowerCase()) || null
+  }
+
+  // 获取某模型的所有别名（云端 + 用户）
+  getAliases(modelId: string): string[] {
+    return this.modelAliases.get(modelId) || []
   }
 
   // 获取合并映射大小

@@ -127,6 +127,12 @@ export const platformAdapter: PlatformAdapter = {
   async fetchCloudPricing() {
     return invoke('fetch_cloud_pricing')
   },
+  async addUserAlias(modelId: string, alias: string) {
+    return invoke('add_user_alias', { modelId, alias })
+  },
+  async removeUserAlias(modelId: string, alias: string) {
+    return invoke('remove_user_alias', { modelId, alias })
+  },
   async getSessionTitles(sessionIds: string[]) {
     return invoke<Record<string, { title: string; project: string }>>('get_session_titles', { sessionIds })
   }

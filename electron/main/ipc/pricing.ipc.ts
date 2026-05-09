@@ -162,9 +162,15 @@ export function registerPricingIPC(appDb: AppDbService, pricingEngine: PricingEn
       usedModels = new Set(models)
     }
 
+    // 将 usedModels 中的别名也解析为 modelId
+    const resolvedUsedModelIds: Set<string> = new Set()
+    for (const m of usedModels) {
+      const resolved = pricingEngine.resolveModelId(m)
+      if (resolved) resolvedUsedModelIds.add(resolved)
+    }
+
     return all.map(p => ({
       modelId: p.modelId,
-      displayName: p.displayName,
       inputCostPerMillion: p.inputCostPerMillion,
       outputCostPerMillion: p.outputCostPerMillion,
       cacheReadCostPerMillion: p.cacheReadCostPerMillion,
@@ -172,9 +178,22 @@ export function registerPricingIPC(appDb: AppDbService, pricingEngine: PricingEn
       isOverride: p.isOverride,
       hasTimePricing: pricingEngine.hasTimePricing(p.modelId),
       timeRules: pricingEngine.getTimeRules(p.modelId),
-      isUsed: usedModels.has(p.modelId),
+      isUsed: resolvedUsedModelIds.has(p.modelId),
       contextTiers: pricingEngine.getOverrideTiers(p.modelId),
-      cloudTimeRules: pricingEngine.getCloudTimeRules(p.modelId)
+      cloudTimeRules: pricingEngine.getCloudTimeRules(p.modelId),
+      aliases: pricingEngine.getAliases(p.modelId)
     }))
+  })
+
+  // 添加用户别名
+  ipcMain.handle('pricing:add-user-alias', (_event, data: { modelId: string, alias: string }) => {
+    appDb.addUserAlias(data.modelId, data.alias)
+    pricingEngine.refresh()
+  })
+
+  // 删除用户别名
+  ipcMain.handle('pricing:remove-user-alias', (_event, data: { modelId: string, alias: string }) => {
+    appDb.removeUserAlias(data.modelId, data.alias)
+    pricingEngine.refresh()
   })
 }

@@ -191,11 +191,6 @@ impl ExternalDbService {
             .query_map([], |row| {
                 Ok(ModelPricing {
                     model_id: row.get("model_id")?,
-                    display_name: row
-                        .get::<_, Option<String>>("display_name")
-                        .ok()
-                        .flatten()
-                        .unwrap_or_default(),
                     input_cost_per_million: row.get("input_cost_per_million")?,
                     output_cost_per_million: row.get("output_cost_per_million")?,
                     cache_read_cost_per_million: row.get("cache_read_cost_per_million")?,
@@ -206,10 +201,7 @@ impl ExternalDbService {
 
         let mut result = Vec::new();
         for row in rows {
-            let mut p = row.map_err(|e| format!("读取定价失败: {}", e))?;
-            if p.display_name.is_empty() {
-                p.display_name = p.model_id.clone();
-            }
+            let p = row.map_err(|e| format!("读取定价失败: {}", e))?;
             result.push(p);
         }
         Ok(result)

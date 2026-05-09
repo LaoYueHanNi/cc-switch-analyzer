@@ -93,6 +93,10 @@ const api = {
   }) => ipcRenderer.invoke('pricing:update-time-rule-tier', data),
   deleteTimeRuleContextTier: (id: number) =>
     ipcRenderer.invoke('pricing:delete-time-rule-tier', id),
+  addUserAlias: (modelId: string, alias: string) =>
+    ipcRenderer.invoke('pricing:add-user-alias', { modelId, alias }),
+  removeUserAlias: (modelId: string, alias: string) =>
+    ipcRenderer.invoke('pricing:remove-user-alias', { modelId, alias }),
   getSessionTitles: (sessionIds: string[]) => ipcRenderer.invoke('session-title:get-titles', sessionIds),
 
   // 对话框

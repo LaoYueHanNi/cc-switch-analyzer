@@ -47,7 +47,7 @@
           v-for="card in usedCards"
           :key="card.modelId"
           :pricing="card"
-          :display-name="card.displayName"
+          :display-name="card.modelId"
           :computed-cost="card.computedCost"
           :is-override="card?.isOverride || false"
           :time-rules="card?.timeRules || []"
@@ -73,7 +73,7 @@
           v-for="card in unusedCards"
           :key="card.modelId"
           :pricing="card"
-          :display-name="card.displayName"
+          :display-name="card.modelId"
           :computed-cost="card.computedCost"
           :is-override="card?.isOverride || false"
           :time-rules="card?.timeRules || []"
@@ -191,7 +191,7 @@ const simTokens = computed(() => ({
 // 模型选项
 const modelOptions = computed(() =>
   pricingStore.pricingData.map(p => ({
-    label: p.displayName || p.modelId,
+    label: p.modelId,
     value: p.modelId
   }))
 )
@@ -207,7 +207,7 @@ const allCards = computed<CardEntry[]>(() => {
   const now = Math.floor(Date.now() / 1000)
   const contextSize = st.input + st.cacheRead
   return pricingStore.pricingData
-    .filter(p => !searchModel.value || p.modelId.includes(searchModel.value) || (p.displayName && p.displayName.includes(searchModel.value)))
+    .filter(p => !searchModel.value || p.modelId.includes(searchModel.value) || (p.aliases && p.aliases.some((a: string) => a.includes(searchModel.value))))
     .map(p => {
       let inp: number, out: number, cr: number, cc: number
       // 优先级：用户时间规则 > 云端时间规则 > 默认定价
@@ -236,7 +236,7 @@ const allCards = computed<CardEntry[]>(() => {
         + cr * st.cacheRead / 1_000_000 + cc * st.cacheCreation / 1_000_000
       return {
         ...p,
-        displayName: p.displayName || p.modelId,
+        displayName: p.modelId,
         computedCost: cost
       }
     })
@@ -259,7 +259,7 @@ const unusedCards = computed(() => allCards.value.filter(c => !c.isUsed))
 // 打开编辑弹窗
 function onOpenEditDialog(card: CardEntry): void {
   editModelId.value = card.modelId
-  editModelName.value = card.displayName
+  editModelName.value = card.modelId
   editCurrentPricing.value = {
     input: card.inputCostPerMillion || 0,
     output: card.outputCostPerMillion || 0,

@@ -11,14 +11,19 @@ export interface ContextTier {
 
 export interface ModelPricing {
   modelId: string
-  displayName: string
   inputCostPerMillion: number
   outputCostPerMillion: number
   cacheReadCostPerMillion: number
   cacheCreationCostPerMillion: number
+  aliases: string[]
 }
 
-export interface MergedPricing extends ModelPricing {
+export interface MergedPricing {
+  modelId: string
+  inputCostPerMillion: number
+  outputCostPerMillion: number
+  cacheReadCostPerMillion: number
+  cacheCreationCostPerMillion: number
   isOverride: boolean
 }
 
@@ -58,7 +63,6 @@ export interface CloudPricingTimeRule {
 
 export interface PricingData {
   modelId: string
-  displayName: string
   inputCostPerMillion: number
   outputCostPerMillion: number
   cacheReadCostPerMillion: number
@@ -69,6 +73,7 @@ export interface PricingData {
   cloudTimeRules: CloudPricingTimeRule[]
   isUsed: boolean
   contextTiers: ContextTier[]
+  aliases: string[]
 }
 
 export interface TokenDimensions {

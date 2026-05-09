@@ -149,6 +149,9 @@ pub fn run() {
             commands::pricing::save_time_rule_context_tier,
             commands::pricing::update_time_rule_context_tier,
             commands::pricing::delete_time_rule_context_tier,
+            // 用户别名
+            commands::pricing::add_user_alias,
+            commands::pricing::remove_user_alias,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

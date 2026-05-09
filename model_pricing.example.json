@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "updatedAt": 0,
   "currency": "RMB",
   "models": [
@@ -18,7 +18,8 @@
           "cacheReadCostPerMillion": 4.2,
           "cacheCreationCostPerMillion": 52.5
         }
-      ]
+      ],
+      "aliases": ["claude-sonnet-4"]
     },
     {
       "modelId": "claude-opus-4-20250514",
@@ -27,7 +28,8 @@
       "outputCostPerMillion": 525.0,
       "cacheReadCostPerMillion": 10.5,
       "cacheCreationCostPerMillion": 131.25,
-      "contextTiers": []
+      "contextTiers": [],
+      "aliases": ["claude-opus-4"]
     },
     {
       "modelId": "gpt-4o-2024-0806",
@@ -48,7 +50,8 @@
           "cacheCreationCostPerMillion": 0,
           "contextTiers": []
         }
-      ]
+      ],
+      "aliases": ["gpt-4o"]
     }
   ]
 }

@@ -105,5 +105,8 @@ export interface PlatformAdapter {
   deleteTimeRuleContextTier(id: number): Promise<void>
   // 云端定价
   fetchCloudPricing(): Promise<void>
+  // 用户别名
+  addUserAlias(modelId: string, alias: string): Promise<void>
+  removeUserAlias(modelId: string, alias: string): Promise<void>
   getSessionTitles(sessionIds: string[]): Promise<Record<string, { title: string; project: string }>>
 }

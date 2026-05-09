@@ -124,7 +124,7 @@ defineEmits<{
 }>()
 
 const modelId = computed(() => props.modelData.model)
-const displayName = computed(() => props.pricing?.displayName || props.modelData.model)
+const displayName = computed(() => props.modelData.model)
 const hasPricing = computed(() => props.pricing !== null)
 const totalTokens = computed(() =>
   props.modelData.inputTokens + props.modelData.outputTokens +
