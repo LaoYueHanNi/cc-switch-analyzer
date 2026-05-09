@@ -2,7 +2,7 @@
   <div class="pricing-card">
     <div class="pricing-header">
       <div class="pricing-header-left">
-        <span class="pricing-name">{{ displayName }}</span>
+        <span class="pricing-name">{{ modelName }}</span>
         <n-button size="tiny" text @click="$emit('edit')">编辑</n-button>
       </div>
       <div v-if="isOverride || activeRule" class="pricing-badges">
@@ -99,7 +99,7 @@ interface DisplayTimeRule {
 
 const props = withDefaults(defineProps<{
   pricing: PricingData | null
-  displayName: string
+  modelName: string
   computedCost: number
   isOverride: boolean
   timeRules: TimePricingRule[]

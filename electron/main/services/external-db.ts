@@ -19,7 +19,6 @@ export interface Provider {
 
 export interface ModelPricing {
   modelId: string
-  displayName: string
   inputCostPerMillion: number
   outputCostPerMillion: number
   cacheReadCostPerMillion: number
@@ -234,7 +233,6 @@ export class ExternalDbService {
   getBasePricing(): ModelPricing[] {
     return this.getDb().prepare('SELECT * FROM model_pricing ORDER BY model_id').all().map((r: any) => ({
       modelId: r.model_id,
-      displayName: r.display_name || r.model_id,
       inputCostPerMillion: r.input_cost_per_million,
       outputCostPerMillion: r.output_cost_per_million,
       cacheReadCostPerMillion: r.cache_read_cost_per_million,

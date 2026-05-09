@@ -47,7 +47,7 @@
           v-for="card in usedCards"
           :key="card.modelId"
           :pricing="card"
-          :display-name="card.modelId"
+          :model-name="card.modelId"
           :computed-cost="card.computedCost"
           :is-override="card?.isOverride || false"
           :time-rules="card?.timeRules || []"
@@ -73,7 +73,7 @@
           v-for="card in unusedCards"
           :key="card.modelId"
           :pricing="card"
-          :display-name="card.modelId"
+          :model-name="card.modelId"
           :computed-cost="card.computedCost"
           :is-override="card?.isOverride || false"
           :time-rules="card?.timeRules || []"
@@ -198,7 +198,7 @@ const modelOptions = computed(() =>
 
 // 卡片数据（含模拟费用计算）
 interface CardEntry extends PricingData {
-  displayName: string
+  modelName: string
   computedCost: number
 }
 
@@ -236,7 +236,7 @@ const allCards = computed<CardEntry[]>(() => {
         + cr * st.cacheRead / 1_000_000 + cc * st.cacheCreation / 1_000_000
       return {
         ...p,
-        displayName: p.modelId,
+        modelName: p.modelId,
         computedCost: cost
       }
     })

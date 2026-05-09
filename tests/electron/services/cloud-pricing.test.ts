@@ -18,7 +18,6 @@ describe('parseCloudPricing', () => {
     // 第一个模型 — Sonnet 4
     const sonnet = result.models[0]
     expect(sonnet.modelId).toBe('claude-sonnet-4-20250514')
-    expect(sonnet.displayName).toBe('Claude Sonnet 4')
     expect(sonnet.inputCostPerMillion).toBe(21)
     expect(sonnet.outputCostPerMillion).toBe(105)
     expect(sonnet.cacheReadCostPerMillion).toBe(2.1)
@@ -32,7 +31,6 @@ describe('parseCloudPricing', () => {
     // 第二个模型 — Haiku 4.5
     const haiku = result.models[1]
     expect(haiku.modelId).toBe('claude-haiku-4-5-20251001')
-    expect(haiku.displayName).toBe('Claude Haiku 4.5')
     expect(haiku.inputCostPerMillion).toBe(4.2)
     expect(haiku.outputCostPerMillion).toBe(21)
     expect(haiku.contextTiers).toHaveLength(0)
@@ -65,20 +63,7 @@ describe('parseCloudPricing', () => {
     expect(result.models[0].timeRules).toEqual([])
   })
 
-  // 4. 缺失 displayName — 应回退到 modelId
-  it('缺失 displayName 时回退到 modelId', () => {
-    const data = {
-      models: [{
-        modelId: 'my-model-id',
-        inputCostPerMillion: 5,
-        outputCostPerMillion: 15
-      }]
-    }
-    const result = parseCloudPricing(data)
-    expect(result.models[0].displayName).toBe('my-model-id')
-  })
-
-  // 5. 缺失 version — 默认为 1
+  // 4. 缺失 version — 默认为 1
   it('缺失 version 时默认为 1', () => {
     const data = {
       models: [{ modelId: 'm', inputCostPerMillion: 1, outputCostPerMillion: 2 }]

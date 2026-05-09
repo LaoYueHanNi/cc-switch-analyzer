@@ -31,7 +31,6 @@ export function parseCloudPricing(data: any): CloudPricingData {
     currency: String(data.currency || 'RMB'),
     models: data.models.map((m: any) => ({
       modelId: String(m.modelId),
-      displayName: String(m.displayName || m.modelId),
       inputCostPerMillion: Number(m.inputCostPerMillion),
       outputCostPerMillion: Number(m.outputCostPerMillion),
       cacheReadCostPerMillion: Number(m.cacheReadCostPerMillion),

@@ -632,9 +632,9 @@ describe('PricingEngine — resolveTier 档位匹配逻辑', () => {
 describe('PricingEngine — getter 方法', () => {
   function createPopulatedEngine() {
     const cloudBase = [
-      makeModelPricingRow({ modelId: 'model-a', displayName: 'Model A' }),
-      makeModelPricingRow({ modelId: 'model-b', displayName: 'Model B' }),
-      makeModelPricingRow({ modelId: MODEL_ID, displayName: 'Claude Sonnet 4' }),
+      makeModelPricingRow({ modelId: 'model-a' }),
+      makeModelPricingRow({ modelId: 'model-b' }),
+      makeModelPricingRow({ modelId: MODEL_ID }),
     ]
     const timeOverride = makeTimeRule({ modelId: MODEL_ID })
     const cloudTimeRule = makeCloudTimeRule()
@@ -737,6 +737,7 @@ describe('PricingEngine — 边界与防御性', () => {
       loadCloudPricing: () => { throw new Error('DB corrupted') },
       getAllOverrides: () => [],
       getAllTimeOverrides: () => [],
+      getUserAliases: () => new Map(),
       getSetting: () => null,
     }
     const engine = new PricingEngine(brokenDb as any)

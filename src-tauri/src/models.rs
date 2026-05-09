@@ -372,8 +372,6 @@ pub struct CloudPricingTimeRule {
 #[serde(rename_all = "camelCase")]
 pub struct CloudPricingModel {
     pub model_id: String,
-    #[serde(default)]
-    pub display_name: String,
     pub input_cost_per_million: f64,
     pub output_cost_per_million: f64,
     pub cache_read_cost_per_million: f64,

@@ -36,7 +36,7 @@
 
     <!-- 模型名称 -->
     <div class="card-header">
-      <span class="model-name">{{ displayName }}</span>
+      <span class="model-name">{{ modelId }}</span>
       <span v-if="hasTimePricing" class="time-badge" :title="timeBadgeTitle">
         <n-icon size="14"><time-outline /></n-icon>
         {{ timeBadgeText }}
@@ -124,7 +124,6 @@ defineEmits<{
 }>()
 
 const modelId = computed(() => props.modelData.model)
-const displayName = computed(() => props.modelData.model)
 const hasPricing = computed(() => props.pricing !== null)
 const totalTokens = computed(() =>
   props.modelData.inputTokens + props.modelData.outputTokens +

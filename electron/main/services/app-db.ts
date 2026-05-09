@@ -53,7 +53,6 @@ export interface CloudPricingTimeRule {
 // 云端定价模型
 export interface CloudPricingModel {
   modelId: string
-  displayName: string
   inputCostPerMillion: number
   outputCostPerMillion: number
   cacheReadCostPerMillion: number

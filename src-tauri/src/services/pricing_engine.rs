@@ -459,7 +459,6 @@ mod tests {
             models: vec![
                 CloudPricingModel {
                     model_id: "claude-sonnet-4".to_string(),
-                    display_name: "Claude Sonnet 4".to_string(),
                     input_cost_per_million: 21.0,
                     output_cost_per_million: 105.0,
                     cache_read_cost_per_million: 2.1,
@@ -477,7 +476,6 @@ mod tests {
                 },
                 CloudPricingModel {
                     model_id: "claude-haiku-4".to_string(),
-                    display_name: "Claude Haiku 4.5".to_string(),
                     input_cost_per_million: 4.2,
                     output_cost_per_million: 21.0,
                     cache_read_cost_per_million: 0.42,

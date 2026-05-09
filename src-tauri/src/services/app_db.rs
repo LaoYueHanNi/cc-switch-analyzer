@@ -652,7 +652,7 @@ impl AppDbService {
                      VALUES (?, ?, ?, ?, ?, ?, ?)",
                     params![
                         model.model_id,
-                        model.display_name,
+                        model.model_id,
                         tier.input_cost_per_million,
                         tier.output_cost_per_million,
                         tier.cache_read_cost_per_million,
@@ -1129,7 +1129,6 @@ mod tests {
             models: vec![
                 crate::models::CloudPricingModel {
                     model_id: "model-a".to_string(),
-                    display_name: "Model A".to_string(),
                     input_cost_per_million: 10.0,
                     output_cost_per_million: 20.0,
                     cache_read_cost_per_million: 1.0,

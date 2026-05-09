@@ -178,7 +178,7 @@ impl ExternalDbService {
         let db = self.db()?;
         let mut stmt = db
             .prepare(
-                "SELECT model_id, display_name,
+                "SELECT model_id,
                     CAST(input_cost_per_million AS REAL) AS input_cost_per_million,
                     CAST(output_cost_per_million AS REAL) AS output_cost_per_million,
                     CAST(cache_read_cost_per_million AS REAL) AS cache_read_cost_per_million,

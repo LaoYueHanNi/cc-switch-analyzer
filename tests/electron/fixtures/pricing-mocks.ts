@@ -6,7 +6,6 @@ import type { MergedPricing, TokenDimensions } from '../../electron/main/service
 export function makeMergedPricing(overrides: Partial<MergedPricing> = {}): MergedPricing {
   return {
     modelId: 'claude-sonnet-4-20250514',
-    displayName: 'Claude Sonnet 4',
     inputCostPerMillion: 21,
     outputCostPerMillion: 105,
     cacheReadCostPerMillion: 2.1,
@@ -34,11 +33,11 @@ export function makeContextTier(overrides: Partial<ContextTier> = {}): ContextTi
 export function makeModelPricingRow(overrides: Partial<ModelPricingRow> = {}): ModelPricingRow {
   return {
     modelId: 'claude-sonnet-4-20250514',
-    displayName: 'Claude Sonnet 4',
     inputCostPerMillion: 21,
     outputCostPerMillion: 105,
     cacheReadCostPerMillion: 2.1,
     cacheCreationCostPerMillion: 26.25,
+    aliases: [],
     ...overrides
   }
 }
@@ -119,13 +118,22 @@ export function makeAppDbMock(config: AppDbMockConfig = {}) {
   const settings = new Map(Object.entries(config.settings || {}))
 
   return {
-    loadCloudPricing: () => ({
-      base: config.cloudBase || [],
-      tiers: config.cloudTiers || new Map(),
-      cloudTimeRules: config.cloudTimeRules || new Map()
-    }),
+    loadCloudPricing: () => {
+      const base = config.cloudBase || []
+      const cloudAliases = new Map<string, string[]>()
+      for (const row of base) {
+        cloudAliases.set(row.modelId, row.aliases || [])
+      }
+      return {
+        base,
+        tiers: config.cloudTiers || new Map(),
+        cloudTimeRules: config.cloudTimeRules || new Map(),
+        cloudAliases
+      }
+    },
     getAllOverrides: () => config.overrides || [],
     getAllTimeOverrides: () => config.timeOverrides || [],
+    getUserAliases: () => new Map<string, string[]>(),
     getSetting: (key: string) => settings.get(key) ?? null
   }
 }

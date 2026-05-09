@@ -28,7 +28,6 @@ const CLOUD_DATA: CloudPricingData = {
   models: [
     {
       modelId: 'claude-sonnet-4',
-      displayName: 'Claude Sonnet 4',
       inputCostPerMillion: 21,
       outputCostPerMillion: 105,
       cacheReadCostPerMillion: 2.1,
@@ -42,7 +41,6 @@ const CLOUD_DATA: CloudPricingData = {
     },
     {
       modelId: 'claude-haiku-4',
-      displayName: 'Claude Haiku 4.5',
       inputCostPerMillion: 4.2,
       outputCostPerMillion: 21,
       cacheReadCostPerMillion: 0.42,
