@@ -98,7 +98,6 @@ pub fn precompute_costs(
         day_latency_sum,
         day_latency_count,
         daily_by_model,
-        cache_durations: HashMap::new(),
         model_context_tier_costs: HashMap::new(),
     }
 }

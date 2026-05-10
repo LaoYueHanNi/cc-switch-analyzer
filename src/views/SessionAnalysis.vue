@@ -52,7 +52,7 @@ const sortOptions = [
   { label: '费用', value: 'totalCost' },
   { label: 'Token 数量', value: 'totalTokens' },
   { label: '请求数', value: 'requestCount' },
-  { label: '上下文大小', value: 'maxContextWidth' },
+  { label: '最大上下文', value: 'maxContextWidth' },
   { label: '缓存命中率', value: 'cacheHitRate' }
 ]
 

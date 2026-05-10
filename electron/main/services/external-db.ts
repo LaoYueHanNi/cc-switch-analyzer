@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import type { Statement } from 'better-sqlite3'
 import { toEpochSeconds, toExclusiveEndEpoch } from '../utils/format'
-import { CACHE_WINDOW_DAYS, SESSION_TOP_N, REALTIME_WINDOW_SEC } from '../utils/constants'
+import { SESSION_TOP_N, REALTIME_WINDOW_SEC } from '../utils/constants'
 
 // 筛选参数类型
 export interface FilterParams {
@@ -127,13 +127,6 @@ export interface SessionRequestToken {
   outputTokens: number
   cacheRead: number
   cacheCreation: number
-}
-
-export interface CacheWindow {
-  startTs: number
-  endTs: number
-  durationSec: number
-  hits: number
 }
 
 // 外部 CC-Switch 数据库服务（只读）
@@ -342,85 +335,6 @@ export class ExternalDbService {
     `).all(...binds) as DailyTrendRow[]
   }
 
-  // 各模型平均缓存时长（复杂 CTE 查询）
-  getCacheNonDecayDuration(params: FilterParams): Map<string, number> {
-    const thirtyDaysAgo = Math.floor(Date.now() / 1000) - CACHE_WINDOW_DAYS * 86400
-    const { sql, binds } = this.buildWhereClause(params, true)
-
-    const rows = this.getDb().prepare(`
-      WITH marked AS (
-        SELECT l.session_id, l.model, l.created_at, l.cache_read_tokens,
-          CASE WHEN l.cache_read_tokens = 0 THEN 1 ELSE 0 END AS window_break
-        FROM proxy_request_logs l
-        ${sql} AND l.created_at >= ?
-      ),
-      grouped AS (
-        SELECT session_id, model, created_at, cache_read_tokens,
-          SUM(window_break) OVER (
-            PARTITION BY session_id, model ORDER BY created_at
-          ) AS grp
-        FROM marked
-      ),
-      window_durations AS (
-        SELECT model, grp,
-          MAX(created_at) - MIN(created_at) AS duration_sec,
-          MAX(created_at) AS end_ts
-        FROM grouped
-        WHERE cache_read_tokens > 0
-        GROUP BY session_id, model, grp
-        HAVING COUNT(*) > 1
-      ),
-      ranked AS (
-        SELECT model, duration_sec,
-          ROW_NUMBER() OVER (PARTITION BY model ORDER BY end_ts DESC) AS rn
-        FROM window_durations
-      )
-      SELECT model, AVG(duration_sec) AS avg_duration_sec
-      FROM ranked WHERE rn <= 10 GROUP BY model
-    `).all(...binds, thirtyDaysAgo) as { model: string; avg_duration_sec: number }[]
-
-    const result = new Map<string, number>()
-    for (const row of rows) {
-      result.set(row.model, Math.round(row.avg_duration_sec))
-    }
-    return result
-  }
-
-  // 单模型缓存窗口详情
-  getRecentCacheWindows(modelId: string): CacheWindow[] {
-    const thirtyDaysAgo = Math.floor(Date.now() / 1000) - CACHE_WINDOW_DAYS * 86400
-    return this.getDb().prepare(`
-      WITH marked AS (
-        SELECT l.session_id, l.created_at, l.cache_read_tokens,
-          CASE WHEN l.cache_read_tokens = 0 THEN 1 ELSE 0 END AS window_break
-        FROM proxy_request_logs l
-        WHERE l.model = ? AND l.created_at >= ?
-      ),
-      grouped AS (
-        SELECT session_id, created_at, cache_read_tokens,
-          SUM(window_break) OVER (
-            PARTITION BY session_id ORDER BY created_at
-          ) AS grp
-        FROM marked
-      ),
-      window_durations AS (
-        SELECT session_id, grp,
-          MIN(created_at) AS start_ts,
-          MAX(created_at) AS end_ts,
-          MAX(created_at) - MIN(created_at) AS duration_sec,
-          COUNT(*) AS hits
-        FROM grouped
-        WHERE cache_read_tokens > 0
-        GROUP BY session_id, grp
-        HAVING COUNT(*) > 1
-      )
-      SELECT start_ts, end_ts, duration_sec, hits
-      FROM window_durations
-      ORDER BY end_ts DESC
-      LIMIT 10
-    `).all(modelId, thirtyDaysAgo) as CacheWindow[]
-  }
-
   // 会话统计（Top 50）
   getSessionBreakdown(params: FilterParams): SessionBreakdown[] {
     const { sql, binds } = this.buildWhereClause(params, true)
@@ -428,12 +342,11 @@ export class ExternalDbService {
       SELECT
         l.session_id AS sessionId,
         COUNT(*) AS requests,
-        (SELECT l2.input_tokens + l2.cache_read_tokens
+        (SELECT MAX(l2.input_tokens + l2.cache_read_tokens)
          FROM proxy_request_logs l2
          WHERE l2.session_id = l.session_id
            AND l2.session_id IS NOT NULL AND l2.session_id != ''
-           AND l2.input_tokens + l2.cache_read_tokens > 0
-         ORDER BY l2.created_at DESC LIMIT 1) AS maxContextWidth,
+           AND l2.input_tokens + l2.cache_read_tokens > 0) AS maxContextWidth,
         SUM(l.input_tokens) AS inputTokens,
         SUM(l.output_tokens) AS outputTokens,
         SUM(l.cache_read_tokens) AS cacheRead,

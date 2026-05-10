@@ -49,6 +49,7 @@
           <span class="sh-project" v-if="getProject(group.sessionId)" :title="getProject(group.sessionId)">{{ getProject(group.sessionId) }}</span>
           <span class="sh-id">{{ shortSession(group.sessionId) }}</span>
           <span class="sh-title" v-if="getTitle(group.sessionId)" :title="getTitle(group.sessionId)">{{ getTitle(group.sessionId) }}</span>
+          <span class="sh-ctx">ctx {{ formatNum(group.maxContextWidth) }}</span>
           <span class="sh-count">{{ group.rows.length }} 次<template v-if="groupTierLabel(group)">（{{ groupTierLabel(group) }}）</template></span>
           <span class="sh-cost">{{ formatCost(group.cost) }}</span>
           <span class="sh-time">{{ formatTime(group.rows[group.rows.length - 1].createdAt) }} ~ {{ formatTime(group.rows[0].createdAt) }}</span>
@@ -158,6 +159,7 @@ interface SessionGroup {
   sessionId: string
   rows: RealtimeRequestLog[]
   cost: number
+  maxContextWidth: number
 }
 
 const sessionGroups = computed<SessionGroup[]>(() => {
@@ -174,7 +176,8 @@ const sessionGroups = computed<SessionGroup[]>(() => {
     groups.push({
       sessionId,
       rows,
-      cost: rows.reduce((s, r) => s + r.totalCost, 0)
+      cost: rows.reduce((s, r) => s + r.totalCost, 0),
+      maxContextWidth: Math.max(0, ...rows.map(r => r.inputTokens + r.cacheReadTokens))
     })
   }
   // 按组内最新时间倒序
@@ -313,6 +316,10 @@ watch(() => dbStore.hasDatabase, (val) => {
   flex: 1; min-width: 0;
   font-size: 11px; color: var(--text-secondary); font-weight: 500;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sh-ctx {
+  width: auto; min-width: 40px; flex-shrink: 0; text-align: right;
+  font-size: 10px; color: var(--text-muted);
 }
 .sh-count {
   width: auto; min-width: 45px; flex-shrink: 0; text-align: right;

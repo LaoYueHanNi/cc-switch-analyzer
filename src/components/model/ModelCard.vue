@@ -1,39 +1,5 @@
 <template>
   <div class="model-card">
-    <!-- 缓存窗口覆盖层 -->
-    <div v-if="showCache" class="cache-overlay-card">
-      <div class="cache-header">
-        <span class="cache-title">最近缓存窗口</span>
-        <span class="cache-close" @click="showCache = false">✕</span>
-      </div>
-      <div v-if="cacheLoading" class="cache-loading">加载中...</div>
-      <template v-else-if="cacheWindows.length > 0">
-        <table class="cache-table cache-table-head">
-          <thead>
-            <tr>
-              <th>开始</th>
-              <th>结束</th>
-              <th>时长</th>
-              <th>命中</th>
-            </tr>
-          </thead>
-        </table>
-        <div class="cache-body-scroll">
-          <table class="cache-table">
-            <tbody>
-              <tr v-for="(w, i) in cacheWindows" :key="i">
-                <td>{{ w.startTime }}</td>
-                <td>{{ w.endTime }}</td>
-                <td class="dur">{{ w.duration }}</td>
-                <td class="hits">{{ w.hits }}次</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </template>
-      <div v-else class="cache-empty">暂无缓存数据</div>
-    </div>
-
     <!-- 模型名称 -->
     <div class="card-header">
       <span class="model-name">{{ modelId }}</span>
@@ -69,7 +35,6 @@
       <div class="stats-row">
         <span class="stat-item">单次 ¥{{ formatRate(costPerRequest) }}</span>
         <span class="stat-item">命中率 {{ formatPercent(cacheHitRate) }}</span>
-        <span class="stat-item clickable" @click="onCacheClick" title="点击查看缓存窗口详情">缓存 {{ avgCacheDuration }}</span>
       </div>
 
       <!-- 上下文档位占比 -->
@@ -97,11 +62,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { NButton, NIcon } from 'naive-ui'
 import { TimeOutline } from '@vicons/ionicons5'
-import { formatNum, formatRate, formatCost, formatPercent, formatDuration, epochToDateStr, epochToDateTimeStr } from '@/utils/format'
-import { platformAdapter } from '@/platform'
+import { formatNum, formatRate, formatCost, formatPercent, epochToDateStr } from '@/utils/format'
 import PricingGrid from '@/components/common/PricingGrid.vue'
 import type { ModelBreakdown } from '@/types/database'
 import type { PricingData, TimePricingRule, CloudPricingTimeRule } from '@/types/pricing'
@@ -111,7 +75,6 @@ const props = defineProps<{
   pricing: PricingData | null
   costBreakdown: [number, number, number, number]
   totalCost: number
-  cacheDurationSec: number
   hasTimePricing: boolean
   timeRules: TimePricingRule[]
   cloudTimeRules?: CloudPricingTimeRule[]
@@ -140,8 +103,6 @@ const cacheHitRate = computed(() => {
   const cacheRead = props.modelData.cacheRead
   return (input + cacheRead) > 0 ? cacheRead / (input + cacheRead) : 0
 })
-
-const avgCacheDuration = computed(() => formatDuration(props.cacheDurationSec))
 
 const tierLabel = computed(() => {
   const tiers = props.contextTierCosts
@@ -181,43 +142,6 @@ function getRateStr(field: RateField): string {
   return formatRate((props.pricing?.[field] as number) || 0) + '/M'
 }
 
-// ===== 缓存窗口 =====
-interface CacheWindow {
-  startTime: string
-  endTime: string
-  duration: string
-  hits: number
-}
-
-const showCache = ref(false)
-const cacheLoading = ref(false)
-const cacheWindows = ref<CacheWindow[]>([])
-
-async function onCacheClick(): Promise<void> {
-  if (showCache.value) {
-    showCache.value = false
-    return
-  }
-  showCache.value = true
-  cacheLoading.value = true
-  try {
-    const result = await platformAdapter.queryCacheWindows(props.modelData.model)
-    cacheWindows.value = (result || []).map((w: any) => ({
-      startTime: epochToDateTimeStr(w.start_ts || w.startTs).split(' ')[1]
-        ? epochToDateTimeStr(w.start_ts || w.startTs).replace(/^\d{2}\//, '')
-        : '',
-      endTime: epochToDateTimeStr(w.end_ts || w.endTs).split(' ')[1]
-        ? epochToDateTimeStr(w.end_ts || w.endTs).replace(/^\d{2}\//, '')
-        : '',
-      duration: formatDuration(w.duration_sec || w.durationSec),
-      hits: w.hits
-    }))
-  } catch (err) {
-    console.error('缓存窗口加载失败:', err)
-  } finally {
-    cacheLoading.value = false
-  }
-}
 </script>
 
 <style scoped>
@@ -234,89 +158,6 @@ async function onCacheClick(): Promise<void> {
 
 .model-card:hover {
   box-shadow: 0 2px 6px rgba(0,0,0,0.06);
-}
-
-/* 缓存窗口覆盖层 */
-.cache-overlay-card {
-  position: absolute;
-  inset: 0;
-  z-index: 10;
-  background: var(--bg-card);
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.cache-table-head {
-  flex-shrink: 0;
-}
-
-.cache-body-scroll {
-  flex: 1;
-  overflow-y: auto;
-  min-height: 0;
-}
-
-.cache-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 4px;
-}
-
-.cache-title {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.cache-close {
-  font-size: 12px;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 0 4px;
-  line-height: 1;
-}
-
-.cache-close:hover {
-  color: var(--text-primary);
-}
-
-.cache-loading, .cache-empty {
-  font-size: 11px;
-  color: var(--text-muted);
-  padding: 8px 0;
-}
-
-.cache-table {
-  border-collapse: collapse;
-  font-size: 10px;
-}
-
-.cache-table th {
-  text-align: left;
-  color: var(--text-muted);
-  font-weight: 500;
-  padding: 2px 6px 2px 0;
-  border-bottom: 1px solid var(--border-faint);
-  font-size: 9px;
-}
-
-.cache-table td {
-  padding: 2px 6px 2px 0;
-  color: var(--text-primary);
-  border-bottom: 1px solid var(--bg-base);
-  white-space: nowrap;
-}
-
-.dur {
-  color: var(--color-green);
-  font-weight: 500;
-}
-
-.hits {
-  text-align: right;
 }
 
 .card-header {
@@ -408,17 +249,6 @@ async function onCacheClick(): Promise<void> {
 .stat-item {
   color: var(--text-tertiary);
   white-space: nowrap;
-}
-
-.stat-item.clickable {
-  cursor: pointer;
-  text-decoration: underline;
-  text-decoration-style: dotted;
-  text-underline-offset: 3px;
-}
-
-.stat-item.clickable:hover {
-  opacity: 0.7;
 }
 
 .request-count {

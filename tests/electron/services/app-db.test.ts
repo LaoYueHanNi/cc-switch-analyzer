@@ -12,7 +12,6 @@ vi.mock('../../../electron/main/utils/constants', () => {
     APP_DB_PATH: join(testDir, 'test-pricing.db'),
     CLOUD_PRICING_URL: 'http://localhost/test',
     QUERY_VERSION: 1,
-    CACHE_WINDOW_DAYS: 30,
     SESSION_TOP_N: 50,
     REALTIME_WINDOW_SEC: 3600,
   }

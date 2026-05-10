@@ -14,9 +14,6 @@ export const CLOUD_PRICING_URL = 'https://gitee.com/oyw125/model-price-table/raw
 // 查询版本号（用于防竞态）
 export const QUERY_VERSION = 1
 
-// 缓存窗口历史范围（秒）
-export const CACHE_WINDOW_DAYS = 30
-
 // 会话分析 Top N
 export const SESSION_TOP_N = 50
 

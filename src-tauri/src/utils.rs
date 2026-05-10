@@ -3,9 +3,6 @@
 /// 云端定价文件 URL（Gitee raw 文件地址）
 pub const CLOUD_PRICING_URL: &str = "https://gitee.com/oyw125/model-price-table/raw/master/model_pricing.json";
 
-/// 缓存窗口历史范围（天）
-pub const CACHE_WINDOW_DAYS: i64 = 30;
-
 /// 会话分析 Top N
 pub const SESSION_TOP_N: i64 = 50;
 

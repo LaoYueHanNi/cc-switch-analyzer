@@ -57,20 +57,6 @@ pub fn query_daily_trend(params: FilterParams, state: State<AppState>) -> Result
 }
 
 #[tauri::command]
-pub fn query_cache_durations(params: FilterParams, state: State<AppState>) -> Result<HashMap<String, i64>, String> {
-    let ext_db = state.external_db.lock().map_err(|e| e.to_string())?;
-    require_db!(ext_db);
-    ext_db.get_cache_non_decay_duration(&params)
-}
-
-#[tauri::command]
-pub fn query_cache_windows(model_id: String, state: State<AppState>) -> Result<Vec<CacheWindow>, String> {
-    let ext_db = state.external_db.lock().map_err(|e| e.to_string())?;
-    require_db!(ext_db);
-    ext_db.get_recent_cache_windows(&model_id)
-}
-
-#[tauri::command]
 pub fn query_sessions(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionBreakdown>, String> {
     let ext_db = state.external_db.lock().map_err(|e| e.to_string())?;
     require_db!(ext_db);
@@ -163,11 +149,9 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
     let provider_breakdown = ext_db.get_provider_breakdown(&params)?;
     let daily_trend = ext_db.get_daily_trend(&params)?;
     let provider_model_tokens = ext_db.get_provider_model_tokens(&params)?;
-    let cache_durations = ext_db.get_cache_non_decay_duration(&params)?;
     eprintln!("[QUERY] summary.requests={}, models={}, providers={}, days={}", summary.total_requests, model_breakdown.len(), provider_breakdown.len(), daily_trend.len());
 
     let mut precomputed = precompute_costs(&daily_trend, &provider_model_tokens, &pricing);
-    precomputed.cache_durations = cache_durations;
 
     // Per-model 上下文档位计费比例
     let all_requests = ext_db.get_all_request_tokens(&params)?;

@@ -14,7 +14,7 @@
         {{ formatRange(startTime, endTime) }}
       </div>
       <div class="session-context">
-        上下文: {{ formatNum(maxContextWidth) }}
+        最大上下文: {{ formatNum(maxContextWidth) }}
       </div>
       <div class="session-cache">
         缓存命中率: {{ formatPercent(cacheHitRate) }}

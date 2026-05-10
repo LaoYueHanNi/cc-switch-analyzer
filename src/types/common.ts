@@ -11,13 +11,6 @@ export interface PrecomputedResult {
   dailyByModel: Map<string, DailyTrendRow[]>
 }
 
-export interface CacheWindow {
-  startTime: number
-  endTime: number
-  durationSec: number
-  hitCount: number
-}
-
 export interface SessionStat {
   sessionId: string
   requestCount: number

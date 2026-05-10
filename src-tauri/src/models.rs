@@ -182,17 +182,6 @@ pub struct SessionRequestToken {
     pub cache_creation: i64,
 }
 
-// ========== 缓存窗口 ==========
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CacheWindow {
-    pub start_ts: i64,
-    pub end_ts: i64,
-    pub duration_sec: i64,
-    pub hits: i64,
-}
-
 // ========== 定价相关 ==========
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -282,7 +271,6 @@ pub struct PrecomputedResult {
     pub day_latency_sum: std::collections::HashMap<String, f64>,
     pub day_latency_count: std::collections::HashMap<String, i64>,
     pub daily_by_model: std::collections::HashMap<String, Vec<DailyTrendRow>>,
-    pub cache_durations: std::collections::HashMap<String, i64>,
     #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub model_context_tier_costs: std::collections::HashMap<String, Vec<ContextTierCost>>,
 }

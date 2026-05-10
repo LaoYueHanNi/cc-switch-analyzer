@@ -407,115 +407,6 @@ impl ExternalDbService {
         Ok(result)
     }
 
-    pub fn get_cache_non_decay_duration(&self, params: &FilterParams) -> Result<HashMap<String, i64>, String> {
-        let db = self.db()?;
-        let thirty_days_ago = now_epoch_seconds() - CACHE_WINDOW_DAYS * 86400;
-        let (where_sql, binds) = Self::build_where_clause(params, true);
-
-        let sql = format!(
-            "WITH marked AS (
-                SELECT l.session_id, l.model, l.created_at, l.cache_read_tokens,
-                    CASE WHEN l.cache_read_tokens = 0 THEN 1 ELSE 0 END AS window_break
-                FROM proxy_request_logs l
-                {} AND l.created_at >= ?
-            ),
-            grouped AS (
-                SELECT session_id, model, created_at, cache_read_tokens,
-                    SUM(window_break) OVER (
-                        PARTITION BY session_id, model ORDER BY created_at
-                    ) AS grp
-                FROM marked
-            ),
-            window_durations AS (
-                SELECT model, grp,
-                    MAX(created_at) - MIN(created_at) AS duration_sec,
-                    MAX(created_at) AS end_ts
-                FROM grouped
-                WHERE cache_read_tokens > 0
-                GROUP BY session_id, model, grp
-                HAVING COUNT(*) > 1
-            ),
-            ranked AS (
-                SELECT model, duration_sec,
-                    ROW_NUMBER() OVER (PARTITION BY model ORDER BY end_ts DESC) AS rn
-                FROM window_durations
-            )
-            SELECT model, AVG(duration_sec) AS avg_duration_sec
-            FROM ranked WHERE rn <= 10 GROUP BY model",
-            where_sql
-        );
-
-        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询缓存时长失败: {}", e))?;
-        let mut all_binds: Vec<Box<dyn rusqlite::types::ToSql>> = binds;
-        all_binds.push(Box::new(thirty_days_ago));
-        let refs: Vec<&dyn rusqlite::types::ToSql> = all_binds.iter().map(|b| b.as_ref()).collect();
-        let rows = stmt
-            .query_map(refs.as_slice(), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-            })
-            .map_err(|e| format!("查询缓存时长失败: {}", e))?;
-
-        let mut result = HashMap::new();
-        for row in rows {
-            let (model, avg) = row.map_err(|e| format!("读取缓存时长失败: {}", e))?;
-            result.insert(model, avg.round() as i64);
-        }
-        Ok(result)
-    }
-
-    pub fn get_recent_cache_windows(&self, model_id: &str) -> Result<Vec<CacheWindow>, String> {
-        let db = self.db()?;
-        let thirty_days_ago = now_epoch_seconds() - CACHE_WINDOW_DAYS * 86400;
-
-        let sql = "
-            WITH marked AS (
-                SELECT l.session_id, l.created_at, l.cache_read_tokens,
-                    CASE WHEN l.cache_read_tokens = 0 THEN 1 ELSE 0 END AS window_break
-                FROM proxy_request_logs l
-                WHERE l.model = ? AND l.created_at >= ?
-            ),
-            grouped AS (
-                SELECT session_id, created_at, cache_read_tokens,
-                    SUM(window_break) OVER (
-                        PARTITION BY session_id ORDER BY created_at
-                    ) AS grp
-                FROM marked
-            ),
-            window_durations AS (
-                SELECT session_id, grp,
-                    MIN(created_at) AS start_ts,
-                    MAX(created_at) AS end_ts,
-                    MAX(created_at) - MIN(created_at) AS duration_sec,
-                    COUNT(*) AS hits
-                FROM grouped
-                WHERE cache_read_tokens > 0
-                GROUP BY session_id, grp
-                HAVING COUNT(*) > 1
-            )
-            SELECT start_ts, end_ts, duration_sec, hits
-            FROM window_durations
-            ORDER BY end_ts DESC
-            LIMIT 10";
-
-        let mut stmt = db.prepare(sql).map_err(|e| format!("查询缓存窗口失败: {}", e))?;
-        let rows = stmt
-            .query_map(params![model_id, thirty_days_ago], |row| {
-                Ok(CacheWindow {
-                    start_ts: row.get(0)?,
-                    end_ts: row.get(1)?,
-                    duration_sec: row.get(2)?,
-                    hits: row.get(3)?,
-                })
-            })
-            .map_err(|e| format!("查询缓存窗口失败: {}", e))?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.map_err(|e| format!("读取缓存窗口失败: {}", e))?);
-        }
-        Ok(result)
-    }
-
     pub fn get_session_breakdown(&self, params: &FilterParams) -> Result<Vec<SessionBreakdown>, String> {
         let db = self.db()?;
         let (where_sql, binds) = Self::build_where_clause(params, true);
@@ -523,12 +414,11 @@ impl ExternalDbService {
             "SELECT
                 l.session_id,
                 COUNT(*) AS requests,
-                (SELECT l2.input_tokens + l2.cache_read_tokens
+                (SELECT MAX(l2.input_tokens + l2.cache_read_tokens)
                  FROM proxy_request_logs l2
                  WHERE l2.session_id = l.session_id
                    AND l2.session_id IS NOT NULL AND l2.session_id != ''
-                   AND l2.input_tokens + l2.cache_read_tokens > 0
-                 ORDER BY l2.created_at DESC LIMIT 1) AS max_context_width,
+                   AND l2.input_tokens + l2.cache_read_tokens > 0) AS max_context_width,
                 SUM(l.input_tokens) AS input_tokens,
                 SUM(l.output_tokens) AS output_tokens,
                 SUM(l.cache_read_tokens) AS cache_read,

@@ -31,9 +31,6 @@ export const platformAdapter: PlatformAdapter = {
   async queryRealtimeLogs(since?: number) {
     return window.api.queryRealtimeLogs(since)
   },
-  async queryCacheWindows(modelId: string) {
-    return window.api.queryCacheWindows(modelId)
-  },
   async querySessionsWithCost(params: FilterParams) {
     return window.api.querySessionsWithCost(params)
   },

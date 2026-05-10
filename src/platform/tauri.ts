@@ -56,9 +56,6 @@ export const platformAdapter: PlatformAdapter = {
   async queryRealtimeLogs(since?: number) {
     return invoke('query_realtime_logs', { since: since ?? null })
   },
-  async queryCacheWindows(modelId: string) {
-    return invoke('query_cache_windows', { modelId })
-  },
   async querySessionsWithCost(params: FilterParams) {
     return invoke('query_sessions_with_cost', { params: toTauriParams(params) })
   },

@@ -91,18 +91,6 @@ export function registerDatabaseIPC(): void {
     return externalDb.getDailyTrend(params)
   })
 
-  ipcMain.handle('query:cache-durations', (_event, params: FilterParams) => {
-    if (!externalDb || !externalDb.isOpen) throw new Error('数据库未打开')
-    const map = externalDb.getCacheNonDecayDuration(params)
-    // 将 Map 序列化为对象
-    return Object.fromEntries(map)
-  })
-
-  ipcMain.handle('query:cache-windows', (_event, modelId: string) => {
-    if (!externalDb || !externalDb.isOpen) throw new Error('数据库未打开')
-    return externalDb.getRecentCacheWindows(modelId)
-  })
-
   ipcMain.handle('query:sessions', (_event, params: FilterParams) => {
     if (!externalDb || !externalDb.isOpen) throw new Error('数据库未打开')
     return externalDb.getSessionBreakdown(params)
@@ -165,8 +153,6 @@ export function registerDatabaseIPC(): void {
     const providerBreakdown = externalDb.getProviderBreakdown(params)
     const dailyTrend = externalDb.getDailyTrend(params)
     const providerModelTokens = externalDb.getProviderModelTokens(params)
-    const cacheDurations = externalDb.getCacheNonDecayDuration(params)
-
     // 预计算费用
     const precomputed = precomputeCosts(dailyTrend, providerModelTokens, pricingEngine)
 
@@ -174,10 +160,7 @@ export function registerDatabaseIPC(): void {
       summary,
       modelBreakdown,
       providerBreakdown,
-      precomputed: {
-        ...precomputed,
-        cacheDurations: Object.fromEntries(cacheDurations)
-      }
+      precomputed
     }
   })
 

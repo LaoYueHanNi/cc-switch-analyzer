@@ -120,8 +120,6 @@ pub fn run() {
             commands::query::query_by_provider,
             commands::query::query_provider_model_tokens,
             commands::query::query_daily_trend,
-            commands::query::query_cache_durations,
-            commands::query::query_cache_windows,
             commands::query::query_sessions,
             commands::query::query_session_model_tokens,
             commands::query::query_session_request_tokens,

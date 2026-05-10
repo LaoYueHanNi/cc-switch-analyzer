@@ -20,7 +20,6 @@
         :pricing="card.pricing"
         :cost-breakdown="card.costBreakdown"
         :total-cost="card.totalCost"
-        :cache-duration-sec="card.cacheDurationSec"
         :has-time-pricing="card.hasTimePricing"
         :time-rules="card.timeRules"
         :cloud-time-rules="card.cloudTimeRules"
@@ -68,7 +67,6 @@ interface ModelCardData {
   pricing: PricingData | null
   costBreakdown: [number, number, number, number]
   totalCost: number
-  cacheDurationSec: number
   hasTimePricing: boolean
   timeRules: TimePricingRule[]
   cloudTimeRules: CloudPricingTimeRule[]
@@ -88,8 +86,6 @@ const modelCards = computed<ModelCardData[]>(() => {
     pricingMap.set(p.modelId, p)
   }
 
-  // 构建 cacheDurations Map
-  const cacheDurations = pre?.cacheDurations || {}
   const modelTierCosts: Record<string, Array<{ threshold: number; cost: number }>> = pre?.modelContextTierCosts || {}
 
   return breakdown.filter(mb =>
@@ -98,7 +94,6 @@ const modelCards = computed<ModelCardData[]>(() => {
     const pricing = pricingMap.get(mb.model) || null
     const costBreakdown: [number, number, number, number] = pre?.modelCostBreakdown?.[mb.model] || [0, 0, 0, 0]
     const totalCost = pre?.modelCosts?.[mb.model] || 0
-    const cacheDurationSec = cacheDurations[mb.model] || 0
     const hasTimePricing = pricing?.hasTimePricing || false
     const timeRules = pricing?.timeRules || []
     const cloudTimeRules = pricing?.cloudTimeRules || []
@@ -109,7 +104,6 @@ const modelCards = computed<ModelCardData[]>(() => {
       pricing,
       costBreakdown,
       totalCost,
-      cacheDurationSec,
       hasTimePricing,
       timeRules,
       cloudTimeRules,
