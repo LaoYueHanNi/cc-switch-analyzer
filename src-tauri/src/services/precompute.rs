@@ -1,14 +1,20 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::models::*;
 use crate::services::pricing_engine::PricingEngine;
 use crate::utils::date_str_to_epoch;
+
+/// 将带时区的日期字符串转为 epoch 秒（本地零点 → UTC）
+fn day_to_epoch_local(day: &str, tz_offset: i64) -> i64 {
+    date_str_to_epoch(day) - tz_offset * 3600
+}
 
 // 一次遍历 dailyTrend + providerModelTokens，产出所有预计算结果
 pub fn precompute_costs(
     daily_trend: &[DailyTrendRow],
     provider_model_tokens: &[ProviderModelToken],
     ps: &PricingEngine,
+    tz_offset: i64,
 ) -> PrecomputedResult {
     let mut model_costs: HashMap<String, f64> = HashMap::new();
     let mut model_cost_breakdown: HashMap<String, Vec<f64>> = HashMap::new();
@@ -20,9 +26,10 @@ pub fn precompute_costs(
     let mut day_latency_sum: HashMap<String, f64> = HashMap::new();
     let mut day_latency_count: HashMap<String, i64> = HashMap::new();
     let mut daily_by_model: HashMap<String, Vec<DailyTrendRow>> = HashMap::new();
+    let mut unpriced_models_set: HashSet<String> = HashSet::new();
 
     for row in daily_trend {
-        let epoch = date_str_to_epoch(&row.day);
+        let epoch = day_to_epoch_local(&row.day, tz_offset);
         let p_at = ps.get_pricing_at(&row.model, epoch);
         let mut day_cost = 0.0f64;
         let mut day_cost_breakdown = vec![0.0f64, 0.0f64, 0.0f64, 0.0f64];
@@ -36,6 +43,8 @@ pub fn precompute_costs(
                 row.cache_creation,
             );
             day_cost = day_cost_breakdown[0] + day_cost_breakdown[1] + day_cost_breakdown[2] + day_cost_breakdown[3];
+        } else {
+            unpriced_models_set.insert(row.model.clone());
         }
 
         // 累加模型费用
@@ -87,6 +96,9 @@ pub fn precompute_costs(
         }
     }
 
+    let mut unpriced_models: Vec<String> = unpriced_models_set.into_iter().collect();
+    unpriced_models.sort();
+
     PrecomputedResult {
         model_costs,
         model_cost_breakdown,
@@ -99,6 +111,7 @@ pub fn precompute_costs(
         day_latency_count,
         daily_by_model,
         model_context_tier_costs: HashMap::new(),
+        unpriced_models,
     }
 }
 
@@ -225,6 +238,34 @@ pub fn compute_model_context_tier_costs(
             .entry(req.model.clone())
             .or_default()
             .entry(tier_key)
+            .or_insert(0.0) += cost;
+    }
+    result
+}
+
+/// 从 SQL 预聚合桶计算上下文档位费用
+pub fn compute_model_context_tier_costs_from_buckets(
+    buckets: &[crate::models::ModelContextTierBucket],
+    ps: &PricingEngine,
+) -> HashMap<String, HashMap<i64, f64>> {
+    let mut result: HashMap<String, HashMap<i64, f64>> = HashMap::new();
+    for bucket in buckets {
+        let context_size = bucket.input_tokens + bucket.cache_read;
+        let pricing = match ps.get_pricing_at_with_context(&bucket.model, bucket.representative_epoch, context_size) {
+            Some(p) => p,
+            None => continue,
+        };
+        let cost = ps.calculate_cost(
+            &pricing,
+            bucket.input_tokens,
+            bucket.output_tokens,
+            bucket.cache_read,
+            bucket.cache_creation,
+        );
+        *result
+            .entry(bucket.model.clone())
+            .or_default()
+            .entry(bucket.context_tier)
             .or_insert(0.0) += cost;
     }
     result

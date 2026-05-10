@@ -82,6 +82,8 @@ import {
   MoonOutline, SunnyOutline, RefreshOutline
 } from '@vicons/ionicons5'
 import { useDatabaseStore } from '@/stores/database'
+import { useFilterStore } from '@/stores/filter'
+import { useQueryStore } from '@/stores/query'
 import { useThemeStore } from '@/stores/theme'
 import { useDatabase } from '@/composables/useDatabase'
 import Toolbar from './Toolbar.vue'
@@ -91,6 +93,8 @@ import SummaryBar from './SummaryBar.vue'
 const router = useRouter()
 const route = useRoute()
 const dbStore = useDatabaseStore()
+const filterStore = useFilterStore()
+const queryStore = useQueryStore()
 const themeStore = useThemeStore()
 const { selectDatabase, autoLoadDatabase, refreshDatabase } = useDatabase()
 
@@ -174,6 +178,17 @@ watch(currentIntervalIndex, (idx) => {
     }, ms)
   }
 }, { immediate: true })
+
+// 集中查询触发：筛选变化、数据库加载、刷新时统一执行一次 queryPrecompute
+watch(() => filterStore.filterParams, () => {
+  if (dbStore.hasDatabase) queryStore.executeQuery(filterStore.filterParams)
+}, { deep: true })
+watch(() => dbStore.hasDatabase, (val) => {
+  if (val) queryStore.executeQuery(filterStore.filterParams)
+}, { immediate: true })
+watch(() => dbStore.refreshVersion, () => {
+  if (dbStore.hasDatabase) queryStore.executeQuery(filterStore.filterParams)
+})
 
 onMounted(async () => {
   syncLayoutHeight()

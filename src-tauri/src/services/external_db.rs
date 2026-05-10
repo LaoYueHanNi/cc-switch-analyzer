@@ -55,6 +55,17 @@ impl ExternalDbService {
 
     // ========== 构建动态 WHERE 子句 ==========
 
+    /// 生成带时区偏移的 date 表达式，如 date(created_at, 'unixepoch', '+8 hours')
+    fn tz_date_expr(params: &FilterParams) -> String {
+        match params.tz_offset {
+            Some(tz) if tz != 0 => {
+                let sign = if tz > 0 { "+" } else { "" };
+                format!("date(l.created_at, 'unixepoch', '{}{} hours')", sign, tz)
+            }
+            _ => "date(l.created_at, 'unixepoch')".to_string(),
+        }
+    }
+
     fn build_where_clause(
         params: &FilterParams,
         aliased: bool,
@@ -63,18 +74,16 @@ impl ExternalDbService {
         let mut clauses: Vec<String> = vec!["1=1".to_string()];
         let mut binds: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
-        if let Some(ref from_date) = params.from_date {
-            if !from_date.is_empty() {
+        if let Some(from_epoch) = params.from_epoch {
+            if from_epoch > 0 {
                 clauses.push(format!("{}created_at >= ?", prefix));
-                let epoch = to_epoch_seconds(from_date);
-                binds.push(Box::new(epoch));
+                binds.push(Box::new(from_epoch));
             }
         }
-        if let Some(ref to_date) = params.to_date {
-            if !to_date.is_empty() {
+        if let Some(to_epoch) = params.to_epoch {
+            if to_epoch > 0 {
                 clauses.push(format!("{}created_at < ?", prefix));
-                let epoch = to_exclusive_end_epoch(to_date);
-                binds.push(Box::new(epoch));
+                binds.push(Box::new(to_epoch));
             }
         }
         if let Some(ref provider_id) = params.provider_id {
@@ -324,6 +333,54 @@ impl ExternalDbService {
         Ok(result)
     }
 
+    /// 合并查询：一次 GROUP BY (day, provider_id, model) 替代 3 次独立查询
+    pub fn get_combined_breakdown(&self, params: &FilterParams) -> Result<Vec<CombinedBreakdownRow>, String> {
+        let db = self.db()?;
+        let (where_sql, binds) = Self::build_where_clause(params, true);
+        let day_expr = Self::tz_date_expr(params);
+        let sql = format!(
+            "SELECT
+                {} AS day,
+                l.provider_id,
+                l.model,
+                COUNT(*) AS requests,
+                SUM(l.input_tokens) AS input_tokens,
+                SUM(l.output_tokens) AS output_tokens,
+                SUM(l.cache_read_tokens) AS cache_read,
+                SUM(l.cache_creation_tokens) AS cache_creation,
+                COALESCE(SUM(l.latency_ms), 0) AS latency_sum
+             FROM proxy_request_logs l
+             {}
+             GROUP BY day, l.provider_id, l.model
+             ORDER BY day, l.provider_id, l.model",
+            day_expr, where_sql
+        );
+
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询合并统计失败: {}", e))?;
+        let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+        let rows = stmt
+            .query_map(refs.as_slice(), |row| {
+                Ok(CombinedBreakdownRow {
+                    day: row.get(0)?,
+                    provider_id: row.get(1)?,
+                    model: row.get(2)?,
+                    requests: row.get(3)?,
+                    input_tokens: row.get(4)?,
+                    output_tokens: row.get(5)?,
+                    cache_read: row.get(6)?,
+                    cache_creation: row.get(7)?,
+                    latency_sum: row.get::<_, Option<f64>>(8)?.unwrap_or(0.0),
+                })
+            })
+            .map_err(|e| format!("查询合并统计失败: {}", e))?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row.map_err(|e| format!("读取合并统计失败: {}", e))?);
+        }
+        Ok(result)
+    }
+
     pub fn get_provider_model_tokens(&self, params: &FilterParams) -> Result<Vec<ProviderModelToken>, String> {
         let db = self.db()?;
         let (where_sql, binds) = Self::build_where_clause(params, true);
@@ -414,11 +471,6 @@ impl ExternalDbService {
             "SELECT
                 l.session_id,
                 COUNT(*) AS requests,
-                (SELECT MAX(l2.input_tokens + l2.cache_read_tokens)
-                 FROM proxy_request_logs l2
-                 WHERE l2.session_id = l.session_id
-                   AND l2.session_id IS NOT NULL AND l2.session_id != ''
-                   AND l2.input_tokens + l2.cache_read_tokens > 0) AS max_context_width,
                 SUM(l.input_tokens) AS input_tokens,
                 SUM(l.output_tokens) AS output_tokens,
                 SUM(l.cache_read_tokens) AS cache_read,
@@ -441,13 +493,13 @@ impl ExternalDbService {
                 Ok(SessionBreakdown {
                     session_id: row.get(0)?,
                     requests: row.get(1)?,
-                    max_context_width: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
-                    input_tokens: row.get(3)?,
-                    output_tokens: row.get(4)?,
-                    cache_read: row.get(5)?,
-                    cache_creation: row.get(6)?,
-                    first_at: row.get(7)?,
-                    last_at: row.get(8)?,
+                    max_context_width: 0,
+                    input_tokens: row.get(2)?,
+                    output_tokens: row.get(3)?,
+                    cache_read: row.get(4)?,
+                    cache_creation: row.get(5)?,
+                    first_at: row.get(6)?,
+                    last_at: row.get(7)?,
                 })
             })
             .map_err(|e| format!("查询会话统计失败: {}", e))?;
@@ -455,6 +507,36 @@ impl ExternalDbService {
         let mut result = Vec::new();
         for row in rows {
             result.push(row.map_err(|e| format!("读取会话统计失败: {}", e))?);
+        }
+        Ok(result)
+    }
+
+    pub fn get_session_max_context_widths(&self, session_ids: &[String]) -> Result<HashMap<String, i64>, String> {
+        if session_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let db = self.db()?;
+        let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "SELECT session_id, MAX(input_tokens + cache_read_tokens) AS max_ctx
+             FROM proxy_request_logs
+             WHERE session_id IN ({})
+               AND input_tokens + cache_read_tokens > 0
+             GROUP BY session_id",
+            placeholders.join(",")
+        );
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询会话最大上下文失败: {}", e))?;
+        let refs: Vec<&dyn rusqlite::types::ToSql> = session_ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let rows = stmt
+            .query_map(refs.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| format!("查询会话最大上下文失败: {}", e))?;
+
+        let mut result = HashMap::new();
+        for row in rows {
+            let (sid, max_ctx) = row.map_err(|e| format!("读取会话最大上下文失败: {}", e))?;
+            result.insert(sid, max_ctx);
         }
         Ok(result)
     }
@@ -595,6 +677,66 @@ impl ExternalDbService {
         let mut result = Vec::new();
         for row in rows {
             result.push(row.map_err(|e| format!("读取全局请求Token失败: {}", e))?);
+        }
+        Ok(result)
+    }
+
+    /// 按 (model, day, context_tier_bucket) 预聚合，用于上下文档位费用计算
+    pub fn get_model_context_tier_buckets(
+        &self,
+        params: &FilterParams,
+        tier_thresholds: &[i64],
+    ) -> Result<Vec<ModelContextTierBucket>, String> {
+        let db = self.db()?;
+        let (where_sql, binds) = Self::build_where_clause(params, true);
+        let day_expr = Self::tz_date_expr(params);
+
+        // 构建 CASE 表达式：从高到低匹配
+        let mut case_expr = String::from("CASE");
+        for &th in tier_thresholds.iter().rev() {
+            case_expr.push_str(&format!(
+                " WHEN (l.input_tokens + l.cache_read_tokens) >= {} THEN {}",
+                th, th
+            ));
+        }
+        case_expr.push_str(" ELSE 0 END");
+
+        let sql = format!(
+            "SELECT
+                l.model,
+                {} AS day,
+                {} AS context_tier,
+                SUM(l.input_tokens) AS input_tokens,
+                SUM(l.output_tokens) AS output_tokens,
+                SUM(l.cache_read_tokens) AS cache_read,
+                SUM(l.cache_creation_tokens) AS cache_creation,
+                MIN(l.created_at) AS representative_epoch
+             FROM proxy_request_logs l
+             {}
+             GROUP BY l.model, day, context_tier",
+            day_expr, case_expr, where_sql
+        );
+
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询上下文档位聚合失败: {}", e))?;
+        let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+        let rows = stmt
+            .query_map(refs.as_slice(), |row| {
+                Ok(ModelContextTierBucket {
+                    model: row.get(0)?,
+                    day: row.get(1)?,
+                    context_tier: row.get(2)?,
+                    input_tokens: row.get(3)?,
+                    output_tokens: row.get(4)?,
+                    cache_read: row.get(5)?,
+                    cache_creation: row.get(6)?,
+                    representative_epoch: row.get(7)?,
+                })
+            })
+            .map_err(|e| format!("查询上下文档位聚合失败: {}", e))?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row.map_err(|e| format!("读取上下文档位聚合失败: {}", e))?);
         }
         Ok(result)
     }

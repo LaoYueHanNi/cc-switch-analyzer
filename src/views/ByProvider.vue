@@ -1,12 +1,12 @@
 <template>
   <div class="by-provider">
-    <div v-if="loading" class="tab-loading">
+    <div v-if="queryStore.loading" class="tab-loading">
       <n-spin size="medium" />
       <p>正在查询...</p>
     </div>
 
     <div v-else-if="providerCards.length === 0" class="tab-empty">
-      <p>{{ dbStore.hasDatabase ? '暂无数据' : '请先选择数据库文件' }}</p>
+      <p>暂无数据</p>
     </div>
 
     <div v-else class="card-grid">
@@ -22,18 +22,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { computed } from 'vue'
 import { NSpin } from 'naive-ui'
-import { platformAdapter } from '@/platform'
-import { useDatabaseStore } from '@/stores/database'
-import { useFilterStore } from '@/stores/filter'
 import { useQueryStore } from '@/stores/query'
 import ProviderCard from '@/components/provider/ProviderCard.vue'
 
-const dbStore = useDatabaseStore()
-const filterStore = useFilterStore()
 const queryStore = useQueryStore()
-const loading = ref(false)
 
 interface ProviderCardData {
   providerId: string
@@ -53,37 +47,6 @@ const providerCards = computed<ProviderCardData[]>(() => {
     requestCount: pb.requests
   }))
 })
-
-async function loadData(): Promise<void> {
-  if (!dbStore.hasDatabase) return
-  loading.value = true
-  try {
-    const params = filterStore.filterParams
-
-    try {
-      const preResult = await platformAdapter.queryPrecompute(params)
-      queryStore.setResults(preResult)
-    } catch {
-      const [result, modelResult, providerResult] = await Promise.all([
-        platformAdapter.querySummary(params),
-        platformAdapter.queryByModel(params),
-        platformAdapter.queryByProvider(params)
-      ])
-      queryStore.setResults({
-        summary: result,
-        modelBreakdown: modelResult,
-        providerBreakdown: providerResult,
-        precomputed: null
-      })
-    }
-  } finally {
-    loading.value = false
-  }
-}
-
-watch(() => filterStore.filterParams, () => loadData(), { deep: true })
-watch(() => dbStore.hasDatabase, (val) => { if (val) loadData() }, { immediate: true })
-watch(() => dbStore.refreshVersion, () => { if (dbStore.hasDatabase) loadData() })
 </script>
 
 <style scoped>

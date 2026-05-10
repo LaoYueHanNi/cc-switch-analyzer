@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FilterParams {
-    pub from_date: Option<String>,
-    pub to_date: Option<String>,
+    pub from_epoch: Option<i64>,
+    pub to_epoch: Option<i64>,
+    pub tz_offset: Option<i64>,
     pub provider_id: Option<String>,
     pub model_id: Option<String>,
 }
@@ -94,6 +95,31 @@ pub struct ProviderModelToken {
     pub output_tokens: i64,
     pub cache_read: i64,
     pub cache_creation: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CombinedBreakdownRow {
+    pub day: String,
+    pub provider_id: String,
+    pub model: String,
+    pub requests: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read: i64,
+    pub cache_creation: i64,
+    pub latency_sum: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelContextTierBucket {
+    pub model: String,
+    pub day: String,
+    pub context_tier: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read: i64,
+    pub cache_creation: i64,
+    pub representative_epoch: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -273,6 +299,8 @@ pub struct PrecomputedResult {
     pub daily_by_model: std::collections::HashMap<String, Vec<DailyTrendRow>>,
     #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub model_context_tier_costs: std::collections::HashMap<String, Vec<ContextTierCost>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unpriced_models: Vec<String>,
 }
 
 // ========== 组合查询结果 ==========

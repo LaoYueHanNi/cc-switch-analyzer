@@ -447,6 +447,20 @@ impl PricingEngine {
     pub fn size(&self) -> usize {
         self.merged.len()
     }
+
+    /// 收集所有已知的上下文档位阈值，用于 SQL 端预聚合
+    pub fn get_all_tier_thresholds(&self) -> Vec<i64> {
+        let mut thresholds: Vec<i64> = self.override_tiers.values()
+            .flat_map(|tiers| tiers.iter().map(|t| t.threshold))
+            .chain(self.time_rule_tiers.values()
+                .flat_map(|tiers| tiers.iter().map(|t| t.threshold)))
+            .chain(self.cloud_time_rule_tiers.values()
+                .flat_map(|tiers| tiers.iter().map(|t| t.threshold)))
+            .collect();
+        thresholds.sort();
+        thresholds.dedup();
+        thresholds
+    }
 }
 
 #[cfg(test)]

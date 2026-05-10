@@ -65,11 +65,13 @@ import { ref, computed, watch } from 'vue'
 import { NDatePicker, NSelect } from 'naive-ui'
 import { useDatabaseStore } from '@/stores/database'
 import { useFilterStore } from '@/stores/filter'
+import { useQueryStore } from '@/stores/query'
 import { useFilter } from '@/composables/useFilter'
 
 const dbStore = useDatabaseStore()
 const filterStore = useFilterStore()
-const { executeQuery, quickDateQuery } = useFilter()
+const queryStore = useQueryStore()
+const { quickDateQuery } = useFilter()
 
 const activeQuickDays = ref<number | null>(30)
 const dateRange = ref<[number, number] | null>(null)
@@ -114,7 +116,7 @@ const modelSelectOptions = computed(() => [
 ])
 
 async function onQuery(): Promise<void> {
-  await executeQuery()
+  await queryStore.executeQuery(filterStore.filterParams)
 }
 
 function onReset(): void {

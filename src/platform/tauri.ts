@@ -2,18 +2,19 @@ import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import type { PlatformAdapter, DbResult, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData } from './types'
 
-function dateToStr(d: Date | null): string | undefined {
-  if (!d) return undefined
-  const yyyy = d.getFullYear()
-  const mm = String(d.getMonth() + 1).padStart(2, '0')
-  const dd = String(d.getDate()).padStart(2, '0')
-  return `${yyyy}-${mm}-${dd}`
+function localDateToEpoch(d: Date): number {
+  return Math.floor(new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 1000)
+}
+
+function localDateToEpochEndExclusive(d: Date): number {
+  return Math.floor(new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime() / 1000)
 }
 
 function toTauriParams(params: FilterParams): any {
   return {
-    fromDate: dateToStr(params.fromDate),
-    toDate: dateToStr(params.toDate),
+    fromEpoch: params.fromDate ? localDateToEpoch(params.fromDate) : undefined,
+    toEpoch: params.toDate ? localDateToEpochEndExclusive(params.toDate) : undefined,
+    tzOffset: -(new Date().getTimezoneOffset() / 60),
     providerId: params.providerId || undefined,
     modelId: params.modelId || undefined
   }

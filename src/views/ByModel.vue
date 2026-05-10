@@ -1,14 +1,14 @@
 <template>
   <div class="by-model">
     <!-- 加载状态 -->
-    <div v-if="loading" class="tab-loading">
+    <div v-if="queryStore.loading" class="tab-loading">
       <n-spin size="medium" />
       <p>正在查询...</p>
     </div>
 
     <!-- 空数据 -->
     <div v-else-if="modelCards.length === 0" class="tab-empty">
-      <p>{{ dbStore.hasDatabase ? '暂无数据，请调整筛选条件' : '请先选择数据库文件' }}</p>
+      <p>暂无数据，请调整筛选条件</p>
     </div>
 
     <!-- 卡片流布局 -->
@@ -42,11 +42,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { NSpin } from 'naive-ui'
-import { platformAdapter } from '@/platform'
-import { useDatabaseStore } from '@/stores/database'
-import { useFilterStore } from '@/stores/filter'
 import { useQueryStore } from '@/stores/query'
 import { usePricingStore } from '@/stores/pricing'
 import ModelCard from '@/components/model/ModelCard.vue'
@@ -54,12 +51,8 @@ import ModelCompareDialog from '@/components/model/ModelCompareDialog.vue'
 import type { ModelBreakdown } from '@/types/database'
 import type { PricingData, TimePricingRule, CloudPricingTimeRule } from '@/types/pricing'
 
-const dbStore = useDatabaseStore()
-const filterStore = useFilterStore()
 const queryStore = useQueryStore()
 const pricingStore = usePricingStore()
-
-const loading = ref(false)
 
 // 模型卡片数据
 interface ModelCardData {
@@ -136,51 +129,6 @@ const router = useRouter()
 function onSetPricing(_modelId: string): void {
   router.push({ name: 'pricing' })
 }
-
-// 执行查询
-async function loadData(): Promise<void> {
-  if (!dbStore.hasDatabase) return
-  loading.value = true
-  try {
-    const params = filterStore.filterParams
-
-    try {
-      const preResult = await platformAdapter.queryPrecompute(params)
-      queryStore.setResults(preResult)
-    } catch {
-      const [result, modelResult, providerResult] = await Promise.all([
-        platformAdapter.querySummary(params),
-        platformAdapter.queryByModel(params),
-        platformAdapter.queryByProvider(params)
-      ])
-      queryStore.setResults({
-        summary: result,
-        modelBreakdown: modelResult,
-        providerBreakdown: providerResult,
-        precomputed: null
-      })
-    }
-  } catch (err: any) {
-    console.error('查询失败:', err)
-  } finally {
-    loading.value = false
-  }
-}
-
-// 监视筛选变化自动查询
-watch(() => filterStore.filterParams, () => {
-  loadData()
-}, { deep: true })
-
-// 数据库加载后查询（immediate: 组件挂载时如果 DB 已加载则立即查询）
-watch(() => dbStore.hasDatabase, (val) => {
-  if (val) loadData()
-}, { immediate: true })
-
-// 全局刷新触发
-watch(() => dbStore.refreshVersion, () => {
-  if (dbStore.hasDatabase) loadData()
-})
 </script>
 
 <style scoped>
