@@ -116,12 +116,15 @@ function resolveTier(tiers: ContextTier[], contextSize: number): ContextTier | n
 function getActiveRate(pricing: PricingData | undefined, field: RateField, contextSize: number): number {
   if (!pricing) return 0
   const now = Math.floor(Date.now() / 1000)
+  // 1. 用户时间规则（最高优先级）
   const rule = pricing.timeRules?.find((r: TimePricingRule) => now >= r.startTime && now <= r.endTime)
+    || pricing.cloudTimeRules?.find((r: TimePricingRule) => now >= r.startTime && now <= r.endTime)
   if (rule) {
     const tier = resolveTier(rule.contextTiers || [], contextSize)
     if (tier) return tier[field]
     return rule[field]
   }
+  // 2. 覆盖/云端上下文档位 → 3. 固定定价
   const tier = resolveTier(pricing.contextTiers || [], contextSize)
   if (tier) return tier[field]
   return pricing[field] || 0

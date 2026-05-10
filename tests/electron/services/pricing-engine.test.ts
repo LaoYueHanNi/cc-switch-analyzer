@@ -305,8 +305,7 @@ describe('PricingEngine — getPricingAtWithContext（四级优先级）', () =>
       const result = engine.getPricingAtWithContext(MODEL_ID, epoch, 25000)
       expect(result).not.toBeNull()
       expect(result!.inputCostPerMillion).toBe(12)
-      // tierToMerged 硬编码 isOverride=true
-      expect(result!.isOverride).toBe(true)
+      expect(result!.isOverride).toBe(false) // 云端时间规则档位 → isOverride=false
     })
 
     it('在云端时间范围内，contextSize 未命中档位 → 使用规则平价', () => {
@@ -426,8 +425,7 @@ describe('PricingEngine — getPricingAtWithContext（四级优先级）', () =>
       const result = engine.getPricingAtWithContext(MODEL_ID, EPOCH_T + 200000, 15000)
       expect(result).not.toBeNull()
       expect(result!.inputCostPerMillion).toBe(12) // 云端时间规则档位
-      // tierToMerged 硬编码 isOverride=true，但价格来自云端
-      expect(result!.isOverride).toBe(true)
+      expect(result!.isOverride).toBe(false) // 云端时间规则档位 → isOverride=false
     })
 
     it('所有时间范围外，命中覆盖档位', () => {
@@ -777,7 +775,7 @@ describe('PricingEngine — 边界与防御性', () => {
     expect(result!.inputCostPerMillion).toBe(30)
   })
 
-  it('多个用户时间规则，第一个匹配的优先', () => {
+  it('多个用户时间规则，后创建的（id 更大）优先', () => {
     const rule1 = makeTimeRule({
       id: 1,
       startTime: 1700000000,
@@ -786,7 +784,7 @@ describe('PricingEngine — 边界与防御性', () => {
     })
     const rule2 = makeTimeRule({
       id: 2,
-      startTime: 1700000000,
+      startTime: 1700040000,  // 与 rule1 重叠但不完全相同，确保独立分组
       endTime: 1700086400,
       inputCostPerMillion: 14,
     })
@@ -797,9 +795,15 @@ describe('PricingEngine — 边界与防御性', () => {
       })
     )
     engine.refresh()
-    const result = engine.getPricingAt(MODEL_ID, 1700040000)
+    // 1700050000 同时落在两条规则范围内
+    const result = engine.getPricingAt(MODEL_ID, 1700050000)
     expect(result).not.toBeNull()
-    expect(result!.inputCostPerMillion).toBe(7) // 第一个匹配
+    expect(result!.inputCostPerMillion).toBe(14) // 后创建的规则优先（id=2 > id=1）
+
+    // 1700030000 只落在 rule1 范围内
+    const result2 = engine.getPricingAt(MODEL_ID, 1700030000)
+    expect(result2).not.toBeNull()
+    expect(result2!.inputCostPerMillion).toBe(7)
   })
 
   it('calculateCost 对零定价不会产生 NaN', () => {

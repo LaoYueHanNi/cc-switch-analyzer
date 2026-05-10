@@ -411,7 +411,7 @@ export class AppDbService {
         })
       }
     }
-    return Array.from(map.values()).sort((a, b) => a.modelId.localeCompare(b.modelId) || a.startTime - b.startTime)
+    return Array.from(map.values()).sort((a, b) => a.modelId.localeCompare(b.modelId) || a.startTime - b.startTime || a.endTime - b.endTime)
   }
 
   addTimeOverride(

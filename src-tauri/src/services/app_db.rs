@@ -400,7 +400,7 @@ impl AppDbService {
         }
 
         let mut result: Vec<TimePricingRule> = map.into_values().collect();
-        result.sort_by(|a, b| (&a.model_id, a.start_time).cmp(&(&b.model_id, b.start_time)));
+        result.sort_by(|a, b| (&a.model_id, a.start_time, a.end_time).cmp(&(&b.model_id, b.start_time, b.end_time)));
         Ok(result)
     }
 

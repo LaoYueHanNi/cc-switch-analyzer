@@ -46,14 +46,14 @@ export class PricingEngine {
     return best
   }
 
-  private tierToMerged(modelId: string, tier: ContextTier): MergedPricing {
+  private tierToMerged(modelId: string, tier: ContextTier, isOverride: boolean): MergedPricing {
     return {
       modelId,
       inputCostPerMillion: tier.inputCostPerMillion,
       outputCostPerMillion: tier.outputCostPerMillion,
       cacheReadCostPerMillion: tier.cacheReadCostPerMillion,
       cacheCreationCostPerMillion: tier.cacheCreationCostPerMillion,
-      isOverride: true
+      isOverride
     }
   }
 
@@ -117,6 +117,10 @@ export class PricingEngine {
       const list = this.timeOverridesByModel.get(rule.modelId) || []
       list.push(rule)
       this.timeOverridesByModel.set(rule.modelId, list)
+    }
+    // 按 id 降序：后创建的规则优先匹配
+    for (const rules of this.timeOverridesByModel.values()) {
+      rules.sort((a, b) => b.id - a.id)
     }
   }
 
@@ -280,7 +284,7 @@ export class PricingEngine {
           const tiers = this.timeRuleTiers.get(rule.id)
           if (tiers) {
             const tier = this.resolveTier(tiers, contextSize)
-            if (tier) return this.tierToMerged(resolved, tier)
+            if (tier) return this.tierToMerged(resolved, tier, true)
           }
           return {
             modelId: resolved,
@@ -303,7 +307,7 @@ export class PricingEngine {
           const tiers = this.cloudTimeRuleTiers.get(key)
           if (tiers) {
             const tier = this.resolveTier(tiers, contextSize)
-            if (tier) return this.tierToMerged(resolved, tier)
+            if (tier) return this.tierToMerged(resolved, tier, false)
           }
           return {
             modelId: resolved,
@@ -321,7 +325,7 @@ export class PricingEngine {
     const overrideTiers = this.overrideTiers.get(resolved)
     if (overrideTiers) {
       const tier = this.resolveTier(overrideTiers, contextSize)
-      if (tier) return this.tierToMerged(resolved, tier)
+      if (tier) return this.tierToMerged(resolved, tier, true)
     }
 
     // 4. 固定定价

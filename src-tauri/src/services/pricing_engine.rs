@@ -45,14 +45,14 @@ impl PricingEngine {
         best
     }
 
-    fn tier_to_merged(model_id: &str, tier: &ContextTier) -> MergedPricing {
+    fn tier_to_merged(model_id: &str, tier: &ContextTier, is_override: bool) -> MergedPricing {
         MergedPricing {
             model_id: model_id.to_string(),
             input_cost_per_million: tier.input_cost_per_million,
             output_cost_per_million: tier.output_cost_per_million,
             cache_read_cost_per_million: tier.cache_read_cost_per_million,
             cache_creation_cost_per_million: tier.cache_creation_cost_per_million,
-            is_override: true,
+            is_override,
         }
     }
 
@@ -89,12 +89,13 @@ impl PricingEngine {
         self.override_tiers.clear();
         self.merge(base, cloud_tiers, overrides);
 
-        // 5. 加载云端时间规则（已按 model_id 分组）
+        // 5. 加载云端时间规则（已按 model_id 分组）+ 排序上下文档位
         self.cloud_time_rule_tiers.clear();
         self.cloud_time_rules_by_model = cloud_time_rules;
-        for rules in self.cloud_time_rules_by_model.values() {
+        for rules in self.cloud_time_rules_by_model.values_mut() {
             for rule in rules {
                 if !rule.context_tiers.is_empty() {
+                    rule.context_tiers.sort_by_key(|t| t.threshold);
                     self.cloud_time_rule_tiers.insert(
                         (rule.model_id.clone(), rule.start_time, rule.end_time),
                         rule.context_tiers.clone(),
@@ -115,6 +116,10 @@ impl PricingEngine {
                 .entry(rule.model_id.clone())
                 .or_default()
                 .push(rule.clone());
+        }
+        // 按 id 降序：后创建的规则优先匹配
+        for rules in self.time_overrides_by_model.values_mut() {
+            rules.sort_by(|a, b| b.id.cmp(&a.id));
         }
 
         Ok(())
@@ -276,7 +281,7 @@ impl PricingEngine {
                 if rule.start_time <= epoch_seconds && epoch_seconds <= rule.end_time {
                     if let Some(tiers) = self.time_rule_tiers.get(&rule.id) {
                         if let Some(tier) = Self::resolve_tier(tiers, context_size) {
-                            return Some(Self::tier_to_merged(&resolved, tier));
+                            return Some(Self::tier_to_merged(&resolved, tier, true));
                         }
                     }
                     return Some(MergedPricing {
@@ -297,7 +302,7 @@ impl PricingEngine {
                 if rule.start_time <= epoch_seconds && epoch_seconds <= rule.end_time {
                     if let Some(tiers) = self.cloud_time_rule_tiers.get(&(resolved.clone(), rule.start_time, rule.end_time)) {
                         if let Some(tier) = Self::resolve_tier(tiers, context_size) {
-                            return Some(Self::tier_to_merged(&resolved, tier));
+                            return Some(Self::tier_to_merged(&resolved, tier, false));
                         }
                     }
                     return Some(MergedPricing {
@@ -315,7 +320,7 @@ impl PricingEngine {
         // 3. 覆盖上下文档位
         if let Some(tiers) = self.override_tiers.get(&resolved) {
             if let Some(tier) = Self::resolve_tier(tiers, context_size) {
-                return Some(Self::tier_to_merged(&resolved, tier));
+                return Some(Self::tier_to_merged(&resolved, tier, true));
             }
         }
 
@@ -553,6 +558,32 @@ mod tests {
         let p = engine.get_pricing_at("claude-sonnet-4", 1700043200).unwrap();
         assert!(p.is_override);
         assert!((p.input_cost_per_million - 10.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_get_pricing_at_newer_time_rule_priority() {
+        let (mut engine, app_db) = create_test_engine();
+        // 旧规则（id 小，范围 1700000000 ~ 1700086400）
+        app_db.add_time_override(
+            "claude-sonnet-4", 1700000000, 1700086400,
+            10.5, 52.5, 1.05, 13.125, "旧折扣"
+        ).unwrap();
+        // 新规则（id 大，范围 1700040000 ~ 1700086400，与旧规则重叠）
+        app_db.add_time_override(
+            "claude-sonnet-4", 1700040000, 1700086400,
+            7.0, 35.0, 0.7, 8.75, "新折扣"
+        ).unwrap();
+        engine.refresh(&app_db).unwrap();
+
+        // 1700050000 同时落在两条规则范围内
+        let p = engine.get_pricing_at("claude-sonnet-4", 1700050000).unwrap();
+        assert!(p.is_override);
+        // 后创建的规则优先（新折扣 7.0 而非旧折扣 10.5）
+        assert!((p.input_cost_per_million - 7.0).abs() < 0.001);
+
+        // 1700030000 只落在旧规则范围内，不受影响
+        let p2 = engine.get_pricing_at("claude-sonnet-4", 1700030000).unwrap();
+        assert!((p2.input_cost_per_million - 10.5).abs() < 0.001);
     }
 
     #[test]
