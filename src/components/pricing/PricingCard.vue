@@ -3,7 +3,12 @@
     <div class="pricing-header">
       <div class="pricing-header-left">
         <span class="pricing-name">{{ modelName }}</span>
-        <n-button size="tiny" text @click="$emit('edit')">编辑</n-button>
+        <span class="header-actions">
+          <n-button size="tiny" text @click="$emit('manageAliases')">
+            别名<span v-if="aliases.length">({{ aliases.length }})</span>
+          </n-button>
+          <n-button size="tiny" text @click="$emit('edit')">编辑</n-button>
+        </span>
       </div>
       <div v-if="isOverride || activeRule" class="pricing-badges">
         <span v-if="isOverride" class="custom-badge">自定义</span>
@@ -106,12 +111,15 @@ const props = withDefaults(defineProps<{
   cloudTimeRules: CloudPricingTimeRule[]
   contextTiers: ContextTier[]
   simTokens: { input: number; output: number; cacheRead: number; cacheCreation: number }
+  aliases: string[]
 }>(), {
-  cloudTimeRules: () => []
+  cloudTimeRules: () => [],
+  aliases: () => []
 })
 
 defineEmits<{
   edit: []
+  manageAliases: []
   addTimeRule: []
   editTimeRule: [rule: TimePricingRule]
   deleteTimeRule: [rule: TimePricingRule]
@@ -366,6 +374,22 @@ function formatDate(ts: number): string {
 }
 .rule-icon-btn:hover {
   color: var(--text-tertiary) !important;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.header-actions :deep(.n-button) {
+  font-size: 11px;
+  padding: 0 4px;
+  height: 20px;
+  color: var(--text-tertiary);
+}
+.header-actions :deep(.n-button:hover) {
+  color: var(--color-blue);
 }
 
 .add-time-btn {

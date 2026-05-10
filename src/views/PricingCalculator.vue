@@ -54,10 +54,12 @@
           :cloud-time-rules="card?.cloudTimeRules || []"
           :context-tiers="card?.contextTiers || []"
           :sim-tokens="simTokens"
+          :aliases="card.aliases || []"
           @edit="onOpenEditDialog(card)"
           @add-time-rule="onAddTimeRule(card.modelId)"
           @edit-time-rule="(rule) => onEditTimeRule(rule)"
           @delete-time-rule="(rule) => onDeleteTimeRule(rule)"
+          @manage-aliases="onManageAliases(card)"
         />
       </div>
     </div>
@@ -80,13 +82,24 @@
           :cloud-time-rules="card?.cloudTimeRules || []"
           :context-tiers="card?.contextTiers || []"
           :sim-tokens="simTokens"
+          :aliases="card.aliases || []"
           @edit="onOpenEditDialog(card)"
           @add-time-rule="onAddTimeRule(card.modelId)"
           @edit-time-rule="(rule) => onEditTimeRule(rule)"
           @delete-time-rule="(rule) => onDeleteTimeRule(rule)"
+          @manage-aliases="onManageAliases(card)"
         />
       </div>
     </div>
+
+    <!-- 别名管理弹窗 -->
+    <AliasDialog
+      v-model:show="showAliasDialog"
+      :model-id="aliasModelId"
+      :model-name="aliasModelName"
+      :current-aliases="aliasCurrentAliases"
+      @changed="onAliasChanged"
+    />
 
     <!-- 时间定价弹窗 -->
     <TimePricingDialog
@@ -121,6 +134,7 @@ import { usePricingStore } from '@/stores/pricing'
 import PricingCard from '@/components/pricing/PricingCard.vue'
 import PricingEditDialog from '@/components/pricing/PricingEditDialog.vue'
 import TimePricingDialog from '@/components/pricing/TimePricingDialog.vue'
+import AliasDialog from '@/components/pricing/AliasDialog.vue'
 import type { PricingData, TimePricingRule, CloudPricingTimeRule, ContextTier } from '@/types/pricing'
 import { epochToDateStr } from '@/utils/format'
 
@@ -146,6 +160,24 @@ const editContextTiers = ref<ContextTier[]>([])
 const showTimeDialog = ref(false)
 const editingTimeRule = ref<TimePricingRule | null>(null)
 const currentTimeRuleModelId = ref('')
+
+// 别名管理弹窗
+const showAliasDialog = ref(false)
+const aliasModelId = ref('')
+const aliasModelName = ref('')
+const aliasCurrentAliases = ref<string[]>([])
+
+function onManageAliases(card: PricingData): void {
+  aliasModelId.value = card.modelId
+  aliasModelName.value = card.modelId
+  aliasCurrentAliases.value = card.aliases || []
+  showAliasDialog.value = true
+}
+
+async function onAliasChanged(): Promise<void> {
+  await platformAdapter.refreshPricing()
+  loadPricingData()
+}
 
 const timeDialogData = computed(() => {
   if (!editingTimeRule.value) return undefined

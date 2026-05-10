@@ -53,6 +53,10 @@ impl AppDbService {
             self.backup_before_migration(2)?;
             self.migrate_v3()?;
         }
+        if version < 4 {
+            self.backup_before_migration(3)?;
+            self.migrate_v4()?;
+        }
 
         Ok(())
     }
@@ -202,6 +206,42 @@ impl AppDbService {
         }
 
         self.set_schema_version(3)?;
+        Ok(())
+    }
+
+    fn migrate_v4(&mut self) -> Result<(), String> {
+        // 新建 model_aliases 独立表，将别名与定价覆盖解耦
+        self.db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS model_aliases (
+                model_id TEXT NOT NULL,
+                alias TEXT NOT NULL,
+                PRIMARY KEY (model_id, alias)
+            );"
+        ).map_err(|e| format!("迁移 v4 (model_aliases) 失败: {}", e))?;
+        // 迁移已有数据：从 pricing_overrides 读取逗号分隔的 user_aliases，逐个插入新表
+        let existing: Vec<(String, String)> = {
+            let mut stmt = self.db
+                .prepare("SELECT model_id, user_aliases FROM pricing_overrides WHERE user_aliases != ''")
+                .map_err(|e| format!("迁移 v4 查询失败: {}", e))?;
+            let mut rows = stmt.query([]).map_err(|e| format!("迁移 v4 查询失败: {}", e))?;
+            let mut pairs = Vec::new();
+            while let Some(row) = rows.next().map_err(|e| format!("迁移 v4 查询失败: {}", e))? {
+                let model_id: String = row.get(0).map_err(|e| format!("迁移 v4 读取失败: {}", e))?;
+                let aliases_str: String = row.get(1).map_err(|e| format!("迁移 v4 读取失败: {}", e))?;
+                pairs.push((model_id, aliases_str));
+            }
+            pairs
+        };
+        let mut insert = self.db
+            .prepare("INSERT OR IGNORE INTO model_aliases (model_id, alias) VALUES (?, ?)")
+            .map_err(|e| format!("迁移 v4 准备插入失败: {}", e))?;
+        for (model_id, aliases_str) in existing {
+            for alias in aliases_str.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+                insert.execute(params![model_id, alias])
+                    .map_err(|e| format!("迁移 v4 插入失败: {}", e))?;
+            }
+        }
+        self.set_schema_version(4)?;
         Ok(())
     }
 
@@ -867,81 +907,36 @@ impl AppDbService {
 
     pub fn get_user_aliases(&self) -> Result<HashMap<String, Vec<String>>, String> {
         let mut stmt = self.db
-            .prepare("SELECT model_id, user_aliases FROM pricing_overrides WHERE threshold = 0")
+            .prepare("SELECT model_id, alias FROM model_aliases ORDER BY model_id, alias")
             .map_err(|e| format!("查询用户别名失败: {}", e))?;
 
         let rows = stmt.query_map([], |row| {
             Ok((
-                row.get::<_, String>("model_id")?,
-                row.get::<_, String>("user_aliases")?,
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
             ))
         }).map_err(|e| format!("查询用户别名失败: {}", e))?;
 
         let mut result: HashMap<String, Vec<String>> = HashMap::new();
         for row in rows {
-            let (model_id, aliases_str) = row.map_err(|e| format!("读取用户别名失败: {}", e))?;
-            let aliases: Vec<String> = if aliases_str.is_empty() {
-                Vec::new()
-            } else {
-                aliases_str.split(',').map(|s| s.to_string()).filter(|s| !s.is_empty()).collect()
-            };
-            if !aliases.is_empty() {
-                result.insert(model_id, aliases);
-            }
+            let (model_id, alias) = row.map_err(|e| format!("读取用户别名失败: {}", e))?;
+            result.entry(model_id).or_default().push(alias);
         }
         Ok(result)
     }
 
     pub fn add_user_alias(&self, model_id: &str, alias: &str) -> Result<(), String> {
-        let existing: Option<String> = self.db
-            .query_row(
-                "SELECT user_aliases FROM pricing_overrides WHERE model_id = ? AND threshold = 0",
-                params![model_id],
-                |row| row.get(0),
-            ).ok();
-
-        let mut aliases: Vec<String> = match &existing {
-            Some(s) if !s.is_empty() => s.split(',').map(|s| s.to_string()).filter(|s| !s.is_empty()).collect(),
-            _ => Vec::new(),
-        };
-
-        if aliases.iter().any(|a| a == alias) {
-            return Ok(());
-        }
-        aliases.push(alias.to_string());
-        let updated = aliases.join(",");
-
-        if existing.is_some() {
-            self.db.execute(
-                "UPDATE pricing_overrides SET user_aliases = ? WHERE model_id = ? AND threshold = 0",
-                params![updated, model_id],
-            ).map_err(|e| format!("更新用户别名失败: {}", e))?;
-        } else {
-            self.db.execute(
-                "INSERT INTO pricing_overrides (model_id, threshold, input_cost_per_million, output_cost_per_million, cache_read_cost_per_million, cache_creation_cost_per_million, user_aliases) VALUES (?, 0, 0, 0, 0, 0, ?)",
-                params![model_id, updated],
-            ).map_err(|e| format!("插入用户别名失败: {}", e))?;
-        }
+        self.db.execute(
+            "INSERT OR IGNORE INTO model_aliases (model_id, alias) VALUES (?, ?)",
+            params![model_id, alias],
+        ).map_err(|e| format!("添加用户别名失败: {}", e))?;
         Ok(())
     }
 
     pub fn remove_user_alias(&self, model_id: &str, alias: &str) -> Result<(), String> {
-        let existing: Option<String> = self.db
-            .query_row(
-                "SELECT user_aliases FROM pricing_overrides WHERE model_id = ? AND threshold = 0",
-                params![model_id],
-                |row| row.get(0),
-            ).ok().flatten();
-
-        let aliases: Vec<String> = match existing {
-            Some(s) if !s.is_empty() => s.split(',').map(|s| s.to_string()).filter(|a| !a.is_empty() && a != alias).collect(),
-            _ => return Ok(()),
-        };
-
-        let updated = aliases.join(",");
         self.db.execute(
-            "UPDATE pricing_overrides SET user_aliases = ? WHERE model_id = ? AND threshold = 0",
-            params![updated, model_id],
+            "DELETE FROM model_aliases WHERE model_id = ? AND alias = ?",
+            params![model_id, alias],
         ).map_err(|e| format!("删除用户别名失败: {}", e))?;
         Ok(())
     }
@@ -1014,9 +1009,14 @@ impl AppDbService {
                 cache_creation_cost_per_million REAL NOT NULL,
                 label TEXT DEFAULT '',
                 threshold INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS model_aliases (
+                model_id TEXT NOT NULL,
+                alias TEXT NOT NULL,
+                PRIMARY KEY (model_id, alias)
             );"
         ).map_err(|e| format!("初始化内存表失败: {}", e))?;
-        self.set_setting("schema_version", "3")?;
+        self.set_setting("schema_version", "4")?;
         Ok(())
     }
 }
@@ -1042,7 +1042,7 @@ mod tests {
     #[test]
     fn test_schema_version() {
         let db = create_db();
-        assert_eq!(db.get_setting("schema_version").unwrap(), "3");
+        assert_eq!(db.get_setting("schema_version").unwrap(), "4");
     }
 
     #[test]

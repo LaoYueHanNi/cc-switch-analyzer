@@ -126,6 +126,10 @@ export class AppDbService {
       this.backupBeforeMigration(2)
       this.migrateV3()
     }
+    if (version < 4) {
+      this.backupBeforeMigration(3)
+      this.migrateV4()
+    }
   }
 
   private getSchemaVersion(): number {
@@ -253,6 +257,26 @@ export class AppDbService {
     this.setSchemaVersion(3)
   }
 
+  private migrateV4(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS model_aliases (
+        model_id TEXT NOT NULL,
+        alias TEXT NOT NULL,
+        PRIMARY KEY (model_id, alias)
+      );
+    `)
+    // 迁移已有数据
+    const rows = this.db.prepare("SELECT model_id, user_aliases FROM pricing_overrides WHERE user_aliases != ''").all() as { model_id: string; user_aliases: string }[]
+    const insert = this.db.prepare('INSERT OR IGNORE INTO model_aliases (model_id, alias) VALUES (?, ?)')
+    for (const r of rows) {
+      const aliases = r.user_aliases.split(',').map((s: string) => s.trim()).filter((s: string) => s.length > 0)
+      for (const a of aliases) {
+        insert.run(r.model_id, a)
+      }
+    }
+    this.setSchemaVersion(4)
+  }
+
   close(): void {
     this.db.close()
   }
@@ -260,40 +284,25 @@ export class AppDbService {
   // ========== 用户自定义别名 ==========
 
   getUserAliases(): Map<string, string[]> {
-    const rows = this.db.prepare('SELECT model_id, user_aliases FROM pricing_overrides WHERE threshold = 0').all() as any[]
+    const rows = this.db.prepare('SELECT model_id, alias FROM model_aliases ORDER BY model_id, alias').all() as { model_id: string; alias: string }[]
     const map = new Map<string, string[]>()
     for (const r of rows) {
-      const aliases = (r.user_aliases as string || '').split(',').filter((a: string) => a.length > 0)
-      if (aliases.length > 0) map.set(r.model_id, aliases)
+      const aliases = map.get(r.model_id)
+      if (aliases) {
+        aliases.push(r.alias)
+      } else {
+        map.set(r.model_id, [r.alias])
+      }
     }
     return map
   }
 
   addUserAlias(modelId: string, alias: string): void {
-    // 确保有 base 行
-    const row = this.db.prepare('SELECT user_aliases FROM pricing_overrides WHERE model_id = ? AND threshold = 0').get(modelId) as { user_aliases: string } | undefined
-    const existing = row ? (row.user_aliases || '').split(',').filter((a: string) => a.length > 0) : []
-    if (!existing.includes(alias)) {
-      existing.push(alias)
-      const updated = existing.join(',')
-      if (row) {
-        this.db.prepare('UPDATE pricing_overrides SET user_aliases = ? WHERE model_id = ? AND threshold = 0').run(updated, modelId)
-      } else {
-        // 没有 override 行则创建一个（价格设为 0，后续用户可覆盖）
-        this.db.prepare(`
-          INSERT INTO pricing_overrides (model_id, threshold, input_cost_per_million, output_cost_per_million, cache_read_cost_per_million, cache_creation_cost_per_million, user_aliases)
-          VALUES (?, 0, 0, 0, 0, 0, ?)
-        `).run(modelId, updated)
-      }
-    }
+    this.db.prepare('INSERT OR IGNORE INTO model_aliases (model_id, alias) VALUES (?, ?)').run(modelId, alias)
   }
 
   removeUserAlias(modelId: string, alias: string): void {
-    const row = this.db.prepare('SELECT user_aliases FROM pricing_overrides WHERE model_id = ? AND threshold = 0').get(modelId) as { user_aliases: string } | undefined
-    if (!row) return
-    const existing = (row.user_aliases || '').split(',').filter((a: string) => a.length > 0 && a !== alias)
-    const updated = existing.join(',')
-    this.db.prepare('UPDATE pricing_overrides SET user_aliases = ? WHERE model_id = ? AND threshold = 0').run(updated, modelId)
+    this.db.prepare('DELETE FROM model_aliases WHERE model_id = ? AND alias = ?').run(modelId, alias)
   }
 
   // ========== 设置管理 ==========
