@@ -78,7 +78,7 @@ const props = defineProps<{
   hasTimePricing: boolean
   timeRules: TimePricingRule[]
   cloudTimeRules?: CloudPricingTimeRule[]
-  contextTierCosts?: Array<{ threshold: number; cost: number }>
+  contextTierCosts?: Array<{ threshold: number; cost: number; tokens: number }>
 }>()
 
 defineEmits<{
@@ -107,10 +107,10 @@ const cacheHitRate = computed(() => {
 const tierLabel = computed(() => {
   const tiers = props.contextTierCosts
   if (!tiers || !tiers.some(t => t.threshold > 0)) return ''
-  const total = tiers.reduce((s, t) => s + t.cost, 0)
+  const total = tiers.reduce((s, t) => s + (t.tokens || 0), 0)
   if (total <= 0) return ''
   return tiers.map(t => {
-    const pct = Math.round(t.cost / total * 100)
+    const pct = Math.round((t.tokens || 0) / total * 100)
     const name = t.threshold === 0 ? '基础' : `≥${Math.round(t.threshold / 1000)}K`
     return `${name} ${pct}%`
   }).join(' ')

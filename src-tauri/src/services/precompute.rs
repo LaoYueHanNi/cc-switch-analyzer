@@ -162,6 +162,7 @@ pub fn compute_session_model_costs(
                     cache_read: smt.cache_read,
                     cache_creation: smt.cache_creation,
                     tier_costs: HashMap::new(),
+                    tier_tokens: HashMap::new(),
                 },
             );
     }
@@ -195,6 +196,8 @@ pub fn compute_session_model_costs(
                 entry.breakdown[2] += req_breakdown[2];
                 entry.breakdown[3] += req_breakdown[3];
                 *entry.tier_costs.entry(tier_key).or_insert(0.0) += req_cost;
+                let req_tokens = req.input_tokens + req.output_tokens + req.cache_read + req.cache_creation;
+                *entry.tier_tokens.entry(tier_key).or_insert(0) += req_tokens;
             }
         }
     }
@@ -210,6 +213,7 @@ pub struct SessionModelCostData {
     pub cache_read: i64,
     pub cache_creation: i64,
     pub tier_costs: HashMap<i64, f64>,
+    pub tier_tokens: HashMap<i64, i64>,
 }
 
 /// Per-model 上下文档位费用聚合
@@ -244,11 +248,12 @@ pub fn compute_model_context_tier_costs(
 }
 
 /// 从 SQL 预聚合桶计算上下文档位费用
+/// 返回 HashMap<model, HashMap<threshold, (cost, tokens)>>
 pub fn compute_model_context_tier_costs_from_buckets(
     buckets: &[crate::models::ModelContextTierBucket],
     ps: &PricingEngine,
-) -> HashMap<String, HashMap<i64, f64>> {
-    let mut result: HashMap<String, HashMap<i64, f64>> = HashMap::new();
+) -> HashMap<String, HashMap<i64, (f64, i64)>> {
+    let mut result: HashMap<String, HashMap<i64, (f64, i64)>> = HashMap::new();
     // 预计算哪些模型有上下文 tier，避免逐桶重复查询
     let mut has_tiers_cache: HashMap<String, bool> = HashMap::new();
     for bucket in buckets {
@@ -274,11 +279,14 @@ pub fn compute_model_context_tier_costs_from_buckets(
         } else {
             0
         };
-        *result
+        let tokens = bucket.input_tokens + bucket.output_tokens + bucket.cache_read + bucket.cache_creation;
+        let entry = result
             .entry(bucket.model.clone())
             .or_default()
             .entry(tier_key)
-            .or_insert(0.0) += cost;
+            .or_insert((0.0, 0));
+        entry.0 += cost;
+        entry.1 += tokens;
     }
     result
 }

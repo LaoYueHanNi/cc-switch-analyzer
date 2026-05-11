@@ -63,7 +63,7 @@ interface ModelCardData {
   hasTimePricing: boolean
   timeRules: TimePricingRule[]
   cloudTimeRules: CloudPricingTimeRule[]
-  contextTierCosts: Array<{ threshold: number; cost: number }>
+  contextTierCosts: Array<{ threshold: number; cost: number; tokens: number }>
 }
 
 const modelCards = computed<ModelCardData[]>(() => {

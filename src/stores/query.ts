@@ -28,9 +28,9 @@ export const useQueryStore = defineStore('query', () => {
     unpricedModels.value = data.precomputed?.unpricedModels || []
   }
 
-  async function executeQuery(params: FilterParams): Promise<void> {
+  async function executeQuery(params: FilterParams, force: boolean = false): Promise<void> {
     const key = JSON.stringify(params)
-    if (key === lastParamsKey && summary.value) return
+    if (!force && key === lastParamsKey && summary.value) return
     lastParamsKey = key
     loading.value = true
     try {

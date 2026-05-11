@@ -135,7 +135,7 @@ const intervalTitles: Record<string, string> = {
   '5min': '每5分钟自动刷新',
   '30min': '每30分钟自动刷新'
 }
-const currentIntervalIndex = ref(1) // 默认 30s
+const currentIntervalIndex = ref(2) // 默认 1min
 
 const intervalDisplay = computed(() => intervalLabels[intervals[currentIntervalIndex.value]])
 const intervalTitle = computed(() => intervalTitles[intervals[currentIntervalIndex.value]])
@@ -187,7 +187,7 @@ watch(() => dbStore.hasDatabase, (val) => {
   if (val) queryStore.executeQuery(filterStore.filterParams)
 }, { immediate: true })
 watch(() => dbStore.refreshVersion, () => {
-  if (dbStore.hasDatabase) queryStore.executeQuery(filterStore.filterParams)
+  if (dbStore.hasDatabase) queryStore.executeQuery(filterStore.filterParams, true)
 })
 
 onMounted(async () => {

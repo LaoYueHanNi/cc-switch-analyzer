@@ -241,8 +241,8 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
         .map(|(model, tiers)| {
             let mut vec: Vec<ContextTierCost> = tiers
                 .into_iter()
-                .filter(|(_, c)| *c > 0.0)
-                .map(|(threshold, cost)| ContextTierCost { threshold, cost })
+                .filter(|(_, (c, _))| *c > 0.0)
+                .map(|(threshold, (cost, tokens))| ContextTierCost { threshold, cost, tokens })
                 .collect();
             vec.sort_by_key(|t| t.threshold);
             (model, vec)
@@ -305,6 +305,7 @@ pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) ->
                                 .map(|(threshold, cost)| ContextTierCost {
                                     threshold: *threshold,
                                     cost: *cost,
+                                    tokens: data.tier_tokens.get(threshold).copied().unwrap_or(0),
                                 })
                                 .collect();
                             tier_vec.sort_by_key(|t| t.threshold);

@@ -321,6 +321,7 @@ pub struct PrecomputeQueryResult {
 pub struct ContextTierCost {
     pub threshold: i64,
     pub cost: f64,
+    pub tokens: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]

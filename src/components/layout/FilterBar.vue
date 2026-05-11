@@ -116,7 +116,7 @@ const modelSelectOptions = computed(() => [
 ])
 
 async function onQuery(): Promise<void> {
-  await queryStore.executeQuery(filterStore.filterParams)
+  await queryStore.executeQuery(filterStore.filterParams, true)
 }
 
 function onReset(): void {

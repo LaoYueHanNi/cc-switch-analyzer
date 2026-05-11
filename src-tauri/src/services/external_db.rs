@@ -124,7 +124,7 @@ impl ExternalDbService {
     }
 
     pub fn get_latest_timestamp(&self) -> Option<i64> {
-        self.latest_timestamp
+        self.get_latest_timestamp_internal()
     }
 
     pub fn get_providers(&self) -> Result<Vec<Provider>, String> {
