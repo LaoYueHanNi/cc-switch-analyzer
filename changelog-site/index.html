@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CC-Switch Analyzer - CHANGELOG</title>
+<style>
+  body {
+    background: #0c0c0c;
+    color: #b0b0b0;
+    font-family: "Courier New", Courier, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    margin: 0;
+    padding: 24px;
+  }
+  pre {
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+</style>
+</head>
+<body>
+<pre id="content">Loading...</pre>
+<script>
+(async () => {
+  const res = await fetch('data.json')
+  const releases = await res.json()
+
+  const W = 76
+  const line = c => c.repeat(W)
+  const out = []
+
+  out.push('  CC-SWITCH ANALYZER -- CHANGELOG')
+  out.push('  ' + line('='))
+  out.push('')
+
+  for (const rel of releases) {
+    const tag = rel.version === 'Unreleased' ? '[Unreleased]' : `[v${rel.version}]`
+    const commits = rel.commits.slice(0, 5)
+    const remaining = rel.commits.length - commits.length
+
+    out.push(`  ${tag}  ${rel.date}`)
+    out.push('  ' + line('-'))
+
+    if (rel.commits.length === 0) {
+      out.push('    (no changes)')
+    } else {
+      for (const c of commits) {
+        out.push(`    ${c.hash}  ${c.subject}`)
+      }
+      if (remaining > 0) {
+        out.push(`    ... and ${remaining} more`)
+      }
+    }
+    out.push('')
+  }
+
+  out.push('  ' + line('='))
+  out.push(`  Generated ${new Date().toISOString().slice(0, 10)}`)
+  out.push('')
+
+  document.getElementById('content').textContent = out.join('\n')
+})()
+</script>
+</body>
+</html>

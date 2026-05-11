@@ -1,0 +1,244 @@
+[
+  {
+    "version": "0.4.2",
+    "date": "2026-05-11",
+    "commits": [
+      {
+        "hash": "a9ae747",
+        "subject": "feat: 供应商卡片默认按费用降序排列",
+        "date": "2026-05-11"
+      },
+      {
+        "hash": "35f398f",
+        "subject": "chore: 清理 slash command 中残留的 Electron 引用，移除不必要的 cc-switch.exe kill",
+        "date": "2026-05-11"
+      },
+      {
+        "hash": "773149d",
+        "subject": "feat: 模型卡片默认按 token 总量降序排列",
+        "date": "2026-05-11"
+      }
+    ]
+  },
+  {
+    "version": "0.4.1",
+    "date": "2026-05-11",
+    "commits": [
+      {
+        "hash": "09e4fed",
+        "subject": "chore: 移除 Electron 代码，仅保留 Tauri",
+        "date": "2026-05-11"
+      },
+      {
+        "hash": "e658dd0",
+        "subject": "fix: 修复自动刷新失效、查询按钮缓存、区间百分比改用 token 数",
+        "date": "2026-05-11"
+      },
+      {
+        "hash": "97c866a",
+        "subject": "fix: 修复模型上下文 tier 标签错误展示问题",
+        "date": "2026-05-11"
+      },
+      {
+        "hash": "e3ed2f8",
+        "subject": "chore: 添加 dev slash command",
+        "date": "2026-05-11"
+      }
+    ]
+  },
+  {
+    "version": "0.4.0",
+    "date": "2026-05-10",
+    "commits": [
+      {
+        "hash": "a6d6f87",
+        "subject": "chore: 添加 version slash command",
+        "date": "2026-05-10"
+      },
+      {
+        "hash": "a51d7d4",
+        "subject": "feat: 模型别名管理功能",
+        "date": "2026-05-10"
+      },
+      {
+        "hash": "daf1ec8",
+        "subject": "perf: 全面优化查询性能与业务体验",
+        "date": "2026-05-10"
+      }
+    ]
+  },
+  {
+    "version": "0.3.9",
+    "date": "2026-05-10",
+    "commits": [
+      {
+        "hash": "5eee204",
+        "subject": "refactor: 最大上下文改为取 MAX 值，彻底移除缓存窗口功能",
+        "date": "2026-05-10"
+      }
+    ]
+  },
+  {
+    "version": "0.3.8",
+    "date": "2026-05-10",
+    "commits": [
+      {
+        "hash": "93971fa",
+        "subject": "fix: 定价引擎优先级与排序 bug 修复",
+        "date": "2026-05-10"
+      }
+    ]
+  },
+  {
+    "version": "0.3.7",
+    "date": "2026-05-09",
+    "commits": [
+      {
+        "hash": "ef11d4a",
+        "subject": "refactor: 彻底移除 displayName 字段，统一使用 modelId",
+        "date": "2026-05-09"
+      }
+    ]
+  },
+  {
+    "version": "0.3.6",
+    "date": "2026-05-09",
+    "commits": [
+      {
+        "hash": "8be8fd1",
+        "subject": "feat: 模型别名匹配机制 — 移除displayName，支持云端+用户自定义别名",
+        "date": "2026-05-09"
+      },
+      {
+        "hash": "a445469",
+        "subject": "feat: 构建完整测试模块 — 232 个测试覆盖核心业务逻辑",
+        "date": "2026-05-09"
+      }
+    ]
+  },
+  {
+    "version": "0.3.5",
+    "date": "2026-05-09",
+    "commits": [
+      {
+        "hash": "15802ab",
+        "subject": "fix: 模型tab过滤掉4项token数全为0的模型",
+        "date": "2026-05-08"
+      },
+      {
+        "hash": "5984055",
+        "subject": "fix: ModelCard时段定价badge未展示云端规则名称",
+        "date": "2026-05-08"
+      }
+    ]
+  },
+  {
+    "version": "0.3.4",
+    "date": "2026-05-08",
+    "commits": [
+      {
+        "hash": "7899a36",
+        "subject": "fix: PricingCard展示云端时间规则 + 创建时冲突校验",
+        "date": "2026-05-08"
+      }
+    ]
+  },
+  {
+    "version": "0.3.3",
+    "date": "2026-05-08",
+    "commits": [
+      {
+        "hash": "3af4eac",
+        "subject": "feat: 云端定价体系 — Gitee JSON 数据源 + 时间区间定价 + 版本比较",
+        "date": "2026-05-07"
+      }
+    ]
+  },
+  {
+    "version": "0.3.2",
+    "date": "2026-05-07",
+    "commits": [
+      {
+        "hash": "2426469",
+        "subject": "feat: 上下文档位占比优化 + 模型对比倍数形式 + 定价tab改进",
+        "date": "2026-05-07"
+      },
+      {
+        "hash": "05f8051",
+        "subject": "feat: 上下文计费档位占比展示 + 汇总栏重构 + 实时tab时间修复",
+        "date": "2026-05-07"
+      }
+    ]
+  },
+  {
+    "version": "0.0.3",
+    "date": "2026-05-06",
+    "commits": [
+      {
+        "hash": "cc73445",
+        "subject": "功能: 上下文定价档位 — 基于context_size的分档计价",
+        "date": "2026-05-06"
+      },
+      {
+        "hash": "8683e0a",
+        "subject": "功能: 记忆用户选择的数据库路径",
+        "date": "2026-05-05"
+      },
+      {
+        "hash": "0c0d378",
+        "subject": "功能: 单实例运行，重复启动时激活已有窗口",
+        "date": "2026-05-05"
+      },
+      {
+        "hash": "40be28f",
+        "subject": "fix: macOS 托盘兼容性 — Cmd+Q 退出、Dock 点击唤起、单色图标",
+        "date": "2026-05-05"
+      },
+      {
+        "hash": "d657575",
+        "subject": "功能: 系统托盘 + 新图标",
+        "date": "2026-05-05"
+      },
+      {
+        "hash": "c5ee1e3",
+        "subject": "文档: build.md 新增 Electron 安装包打包命令",
+        "date": "2026-05-05"
+      },
+      {
+        "hash": "ad4a9dc",
+        "subject": "修复: macOS 下 zoom + 100vh 精度导致底部间隙",
+        "date": "2026-05-05"
+      },
+      {
+        "hash": "67bd4b3",
+        "subject": "功能: 从首条用户消息生成会话标题并显示项目名",
+        "date": "2026-05-05"
+      },
+      {
+        "hash": "e0fc5bf",
+        "subject": "功能: 增量轮询、500 条实时日志、费用统计与缓存命中率",
+        "date": "2026-05-05"
+      },
+      {
+        "hash": "ba9d918",
+        "subject": "功能: 实时 tab 会话分组，可折叠区块",
+        "date": "2026-05-04"
+      },
+      {
+        "hash": "a957505",
+        "subject": "功能: 侧边栏导航、暗色模式、卡片/网格布局优化",
+        "date": "2026-05-04"
+      },
+      {
+        "hash": "b524023",
+        "subject": "功能: 实时 Token 表格、暗色模式、定价卡片 UI、全局刷新",
+        "date": "2026-05-04"
+      },
+      {
+        "hash": "ff92c4f",
+        "subject": "功能: 合并 Electron + Tauri 为 monorepo，共享 Vue 前端",
+        "date": "2026-05-04"
+      }
+    ]
+  }
+]
