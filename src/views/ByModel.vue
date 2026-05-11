@@ -81,9 +81,11 @@ const modelCards = computed<ModelCardData[]>(() => {
 
   const modelTierCosts: Record<string, Array<{ threshold: number; cost: number }>> = pre?.modelContextTierCosts || {}
 
+  const tokensOf = (mb: ModelBreakdown) => mb.inputTokens + mb.outputTokens + mb.cacheRead + mb.cacheCreation
+
   return breakdown.filter(mb =>
     mb.inputTokens > 0 || mb.outputTokens > 0 || mb.cacheRead > 0 || mb.cacheCreation > 0
-  ).map(mb => {
+  ).sort((a, b) => tokensOf(b) - tokensOf(a)).map(mb => {
     const pricing = pricingMap.get(mb.model) || null
     const costBreakdown: [number, number, number, number] = pre?.modelCostBreakdown?.[mb.model] || [0, 0, 0, 0]
     const totalCost = pre?.modelCosts?.[mb.model] || 0
