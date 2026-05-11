@@ -14,21 +14,15 @@ start "" "src-tauri/target/release/cc-switch-analyzer.exe"
 - 自动构建前端（via beforeBuildCommand）
 - exe 路径：`src-tauri/target/release/cc-switch-analyzer.exe`
 
-## Tauri (推荐，体积小)
+## Tauri
 pnpm dev:tauri          # 开发模式
-pnpm build:tauri        # 生产构建 → .app + .dmg (~5MB)
-
-## Electron
-pnpm dev:electron       # 开发模式
-pnpm build:electron     # 编译 → out/（不含安装包）
-pnpm build:electron && npx electron-builder --win  # 打 NSIS 安装包 → dist-electron/
+pnpm build:tauri        # 生产构建
 
 ## 仅前端
 pnpm dev:tauri-frontend   # Vite 开发服务器 (port 1420)
 pnpm build:tauri-frontend # Vite 生产构建
 
 ## 架构
-- src/ = 共享 Vue 前端
-- src/platform/ = 平台适配器（Vite alias 编译时切换）
-- electron/ = Electron main + preload
+- src/ = Vue 前端
+- src/platform/ = 平台适配器
 - src-tauri/ = Tauri Rust 后端

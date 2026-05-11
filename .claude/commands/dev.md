@@ -22,7 +22,6 @@ tasklist 2>/dev/null | grep -i "cc-switch-analyzer"
 ```bash
 # 清理残留进程（如有）
 taskkill //F //IM cc-switch-analyzer.exe 2>/dev/null
-taskkill //F //IM cc-switch.exe 2>/dev/null
 # 等待端口释放
 sleep 3
 # 启动 dev 服务器（后台运行）
