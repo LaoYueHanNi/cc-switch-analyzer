@@ -249,9 +249,14 @@ pub fn compute_model_context_tier_costs_from_buckets(
     ps: &PricingEngine,
 ) -> HashMap<String, HashMap<i64, f64>> {
     let mut result: HashMap<String, HashMap<i64, f64>> = HashMap::new();
+    // 预计算哪些模型有上下文 tier，避免逐桶重复查询
+    let mut has_tiers_cache: HashMap<String, bool> = HashMap::new();
     for bucket in buckets {
-        let context_size = bucket.input_tokens + bucket.cache_read;
-        let pricing = match ps.get_pricing_at_with_context(&bucket.model, bucket.representative_epoch, context_size) {
+        // 使用桶的 context_tier（即 SQL CASE 匹配到的阈值）作为上下文大小来做定价查找，
+        // 不能用聚合后的 input_tokens + cache_read（那是整个桶的总和，不代表单次请求的上下文）。
+        // base 桶用 0，分级桶用对应的阈值。
+        let pricing_context = bucket.context_tier.max(0);
+        let pricing = match ps.get_pricing_at_with_context(&bucket.model, bucket.representative_epoch, pricing_context) {
             Some(p) => p,
             None => continue,
         };
@@ -262,10 +267,17 @@ pub fn compute_model_context_tier_costs_from_buckets(
             bucket.cache_read,
             bucket.cache_creation,
         );
+        let tier_key = if *has_tiers_cache.entry(bucket.model.clone()).or_insert_with(|| ps.model_has_context_tiers(&bucket.model)) {
+            // 将全局阈值映射回模型自己的实际 tier
+            ps.get_matched_tier_threshold(&bucket.model, bucket.representative_epoch, pricing_context)
+                .unwrap_or(0)
+        } else {
+            0
+        };
         *result
             .entry(bucket.model.clone())
             .or_default()
-            .entry(bucket.context_tier)
+            .entry(tier_key)
             .or_insert(0.0) += cost;
     }
     result
