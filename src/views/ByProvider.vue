@@ -45,7 +45,7 @@ const providerCards = computed<ProviderCardData[]>(() => {
     name: pb.providerName,
     totalCost: pre?.providerCosts?.[pb.providerId] || 0,
     requestCount: pb.requests
-  }))
+  })).sort((a, b) => b.totalCost - a.totalCost)
 })
 </script>
 
