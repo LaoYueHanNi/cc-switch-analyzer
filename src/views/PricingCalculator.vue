@@ -98,6 +98,7 @@
       :model-id="aliasModelId"
       :model-name="aliasModelName"
       :current-aliases="aliasCurrentAliases"
+      :user-aliases="aliasUserAliases"
       @changed="onAliasChanged"
     />
 
@@ -167,11 +168,13 @@ const showAliasDialog = ref(false)
 const aliasModelId = ref('')
 const aliasModelName = ref('')
 const aliasCurrentAliases = ref<string[]>([])
+const aliasUserAliases = ref<string[]>([])
 
 function onManageAliases(card: PricingData): void {
   aliasModelId.value = card.modelId
   aliasModelName.value = card.modelId
   aliasCurrentAliases.value = card.aliases || []
+  aliasUserAliases.value = card.userAliases || []
   showAliasDialog.value = true
 }
 

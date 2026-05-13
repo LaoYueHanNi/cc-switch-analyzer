@@ -5,9 +5,12 @@ use crate::models::*;
 
 #[tauri::command]
 pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, String> {
-    let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
     let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+    let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
     log::debug!("[PRICING] get_all_pricing: 引擎模型数={}", pricing.size());
+
+    let user_alias_map = app_db.get_user_aliases().unwrap_or_default();
 
     let mut used_models: std::collections::HashSet<String> = std::collections::HashSet::new();
     if ext_db.is_open() {
@@ -41,6 +44,7 @@ pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, Strin
                 context_tiers: pricing.get_override_tiers(&p.model_id),
                 cloud_time_rules: pricing.get_cloud_time_rules(&p.model_id),
                 aliases: pricing.get_aliases(&p.model_id),
+                user_aliases: user_alias_map.get(&p.model_id).cloned().unwrap_or_default(),
             }
         })
         .collect())

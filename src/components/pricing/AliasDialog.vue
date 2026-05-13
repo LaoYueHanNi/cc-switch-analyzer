@@ -15,9 +15,9 @@
         </div>
         <div v-if="aliases.length === 0" class="empty-hint">暂无别名</div>
         <div v-else class="alias-list">
-          <div v-for="alias in aliases" :key="alias" class="alias-tag">
+          <div v-for="alias in aliases" :key="alias" class="alias-tag" :class="{ 'cloud-alias': !props.userAliases.includes(alias) }">
             <span class="alias-text">{{ alias }}</span>
-            <n-button text size="tiny" class="delete-btn" @click="onRemove(alias)">
+            <n-button v-if="props.userAliases.includes(alias)" text size="tiny" class="delete-btn" @click="onRemove(alias)">
               <n-icon size="12"><close-outline /></n-icon>
             </n-button>
           </div>
@@ -38,6 +38,7 @@ const props = defineProps<{
   modelId: string
   modelName: string
   currentAliases: string[]
+  userAliases: string[]
 }>()
 
 const emit = defineEmits<{
@@ -118,5 +119,9 @@ async function onRemove(alias: string): void {
 }
 .delete-btn:hover {
   color: var(--color-cost);
+}
+.cloud-alias {
+  opacity: 0.6;
+  border-style: dashed;
 }
 </style>

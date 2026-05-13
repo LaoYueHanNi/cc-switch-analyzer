@@ -281,6 +281,8 @@ pub struct PricingData {
     pub cloud_time_rules: Vec<CloudPricingTimeRule>,
     #[serde(default)]
     pub aliases: Vec<String>,
+    #[serde(default)]
+    pub user_aliases: Vec<String>,
 }
 
 // ========== 预计算结果 ==========
