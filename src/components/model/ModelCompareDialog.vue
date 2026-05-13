@@ -133,7 +133,7 @@ function getActiveRate(pricing: PricingData | undefined, field: RateField, conte
 const comparisonResult = computed(() => {
   if (!targetModel.value || !props.modelData) return null
 
-  const sourcePricing = props.allModels.find(m => m.modelId === props.modelData!.model)
+  const sourcePricing = props.allModels.find(m => m.modelId === props.modelData!.model || m.aliases?.includes(props.modelData!.model))
   const targetPricing = props.allModels.find(m => m.modelId === targetModel.value)
   if (!targetPricing) return null
 
