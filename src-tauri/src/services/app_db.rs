@@ -403,7 +403,7 @@ impl AppDbService {
                     row.get::<_, f64>("output_cost_per_million")?,
                     row.get::<_, f64>("cache_read_cost_per_million")?,
                     row.get::<_, f64>("cache_creation_cost_per_million")?,
-                    row.get::<_, String>("label")?,
+                    row.get::<_, Option<String>>("label")?.unwrap_or_default(),
                     row.get::<_, i64>("threshold")?,
                 ))
             })
@@ -856,7 +856,7 @@ impl AppDbService {
                 row.get::<_, f64>("output_cost_per_million")?,
                 row.get::<_, f64>("cache_read_cost_per_million")?,
                 row.get::<_, f64>("cache_creation_cost_per_million")?,
-                row.get::<_, String>("label")?,
+                row.get::<_, Option<String>>("label")?.unwrap_or_default(),
                 row.get::<_, i64>("threshold")?,
             ))
         }).map_err(|e| format!("查询云端时间规则缓存失败: {}", e))?;

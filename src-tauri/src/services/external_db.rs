@@ -141,8 +141,8 @@ impl ExternalDbService {
         let rows = stmt
             .query_map([], |row| {
                 Ok(Provider {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
+                    id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    name: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 })
             })
             .map_err(|e| format!("查询供应商失败: {}", e))?;
@@ -161,26 +161,28 @@ impl ExternalDbService {
             .map_err(|e| format!("查询模型失败: {}", e))?;
 
         let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))
+            .query_map([], |row| row.get::<_, Option<String>>(0))
             .map_err(|e| format!("查询模型失败: {}", e))?;
 
         let mut result = Vec::new();
         for row in rows {
-            result.push(row.map_err(|e| format!("读取模型失败: {}", e))?);
+            if let Some(model) = row.map_err(|e| format!("读取模型失败: {}", e))? {
+                result.push(model);
+            }
         }
         Ok(result)
     }
 
     pub fn get_date_range(&self) -> Result<DateRange, String> {
         let db = self.db()?;
-        let (min, max): (i64, i64) = db
+        let (min, max): (Option<i64>, Option<i64>) = db
             .query_row(
                 "SELECT MIN(created_at), MAX(created_at) FROM proxy_request_logs",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(|e| format!("查询日期范围失败: {}", e))?;
-        Ok(DateRange { min, max })
+        Ok(DateRange { min: min.unwrap_or(0), max: max.unwrap_or(0) })
     }
 
     pub fn get_base_pricing(&self) -> Result<Vec<ModelPricing>, String> {
@@ -199,11 +201,11 @@ impl ExternalDbService {
         let rows = stmt
             .query_map([], |row| {
                 Ok(ModelPricing {
-                    model_id: row.get("model_id")?,
-                    input_cost_per_million: row.get("input_cost_per_million")?,
-                    output_cost_per_million: row.get("output_cost_per_million")?,
-                    cache_read_cost_per_million: row.get("cache_read_cost_per_million")?,
-                    cache_creation_cost_per_million: row.get("cache_creation_cost_per_million")?,
+                    model_id: row.get::<_, Option<String>>("model_id")?.unwrap_or_default(),
+                    input_cost_per_million: row.get::<_, Option<f64>>("input_cost_per_million")?.unwrap_or(0.0),
+                    output_cost_per_million: row.get::<_, Option<f64>>("output_cost_per_million")?.unwrap_or(0.0),
+                    cache_read_cost_per_million: row.get::<_, Option<f64>>("cache_read_cost_per_million")?.unwrap_or(0.0),
+                    cache_creation_cost_per_million: row.get::<_, Option<f64>>("cache_creation_cost_per_million")?.unwrap_or(0.0),
                 })
             })
             .map_err(|e| format!("查询基础定价失败: {}", e))?;
@@ -275,12 +277,12 @@ impl ExternalDbService {
         let rows = stmt
             .query_map(refs.as_slice(), |row| {
                 Ok(ModelBreakdown {
-                    model: row.get(0)?,
+                    model: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     requests: row.get(1)?,
-                    input_tokens: row.get(2)?,
-                    output_tokens: row.get(3)?,
-                    cache_read: row.get(4)?,
-                    cache_creation: row.get(5)?,
+                    input_tokens: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
                 })
             })
             .map_err(|e| format!("查询模型统计失败: {}", e))?;
@@ -316,12 +318,12 @@ impl ExternalDbService {
         let rows = stmt
             .query_map(refs.as_slice(), |row| {
                 Ok(ProviderBreakdown {
-                    provider_name: row.get(0)?,
-                    provider_id: row.get(1)?,
+                    provider_name: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    provider_id: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     requests: row.get(2)?,
-                    successes: row.get(3)?,
-                    success_rate: row.get(4)?,
-                    avg_latency: row.get(5)?,
+                    successes: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    success_rate: row.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
+                    avg_latency: row.get::<_, Option<f64>>(5)?.unwrap_or(0.0),
                 })
             })
             .map_err(|e| format!("查询供应商统计失败: {}", e))?;
@@ -361,14 +363,14 @@ impl ExternalDbService {
         let rows = stmt
             .query_map(refs.as_slice(), |row| {
                 Ok(CombinedBreakdownRow {
-                    day: row.get(0)?,
-                    provider_id: row.get(1)?,
-                    model: row.get(2)?,
+                    day: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    provider_id: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    model: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                     requests: row.get(3)?,
-                    input_tokens: row.get(4)?,
-                    output_tokens: row.get(5)?,
-                    cache_read: row.get(6)?,
-                    cache_creation: row.get(7)?,
+                    input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                     latency_sum: row.get::<_, Option<f64>>(8)?.unwrap_or(0.0),
                 })
             })
@@ -403,12 +405,12 @@ impl ExternalDbService {
         let rows = stmt
             .query_map(refs.as_slice(), |row| {
                 Ok(ProviderModelToken {
-                    provider_id: row.get(0)?,
-                    model: row.get(1)?,
-                    input_tokens: row.get(2)?,
-                    output_tokens: row.get(3)?,
-                    cache_read: row.get(4)?,
-                    cache_creation: row.get(5)?,
+                    provider_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    input_tokens: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
                 })
             })
             .map_err(|e| format!("查询供应商模型Token失败: {}", e))?;
@@ -445,14 +447,14 @@ impl ExternalDbService {
         let rows = stmt
             .query_map(refs.as_slice(), |row| {
                 Ok(DailyTrendRow {
-                    day: row.get(0)?,
-                    model: row.get(1)?,
+                    day: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     requests: row.get(2)?,
-                    input_tokens: row.get(3)?,
-                    output_tokens: row.get(4)?,
-                    cache_read: row.get(5)?,
-                    cache_creation: row.get(6)?,
-                    avg_latency: row.get(7)?,
+                    input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    avg_latency: row.get::<_, Option<f64>>(7)?.unwrap_or(0.0),
                 })
             })
             .map_err(|e| format!("查询每日趋势失败: {}", e))?;
@@ -491,15 +493,15 @@ impl ExternalDbService {
         let rows = stmt
             .query_map(refs.as_slice(), |row| {
                 Ok(SessionBreakdown {
-                    session_id: row.get(0)?,
+                    session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     requests: row.get(1)?,
                     max_context_width: 0,
-                    input_tokens: row.get(2)?,
-                    output_tokens: row.get(3)?,
-                    cache_read: row.get(4)?,
-                    cache_creation: row.get(5)?,
-                    first_at: row.get(6)?,
-                    last_at: row.get(7)?,
+                    input_tokens: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    first_at: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    last_at: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 })
             })
             .map_err(|e| format!("查询会话统计失败: {}", e))?;
@@ -529,7 +531,7 @@ impl ExternalDbService {
         let refs: Vec<&dyn rusqlite::types::ToSql> = session_ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
         let rows = stmt
             .query_map(refs.as_slice(), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                Ok((row.get::<_, Option<String>>(0)?.unwrap_or_default(), row.get::<_, Option<i64>>(1)?.unwrap_or(0)))
             })
             .map_err(|e| format!("查询会话最大上下文失败: {}", e))?;
 
@@ -573,12 +575,12 @@ impl ExternalDbService {
         let rows = stmt
             .query_map(refs.as_slice(), |row| {
                 Ok(SessionModelToken {
-                    session_id: row.get(0)?,
-                    model: row.get(1)?,
-                    input_tokens: row.get(2)?,
-                    output_tokens: row.get(3)?,
-                    cache_read: row.get(4)?,
-                    cache_creation: row.get(5)?,
+                    session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    input_tokens: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
                 })
             })
             .map_err(|e| format!("查询会话模型Token失败: {}", e))?;
@@ -623,13 +625,13 @@ impl ExternalDbService {
         let rows = stmt
             .query_map(refs.as_slice(), |row| {
                 Ok(SessionRequestToken {
-                    session_id: row.get(0)?,
-                    model: row.get(1)?,
-                    created_at: row.get(2)?,
-                    input_tokens: row.get(3)?,
-                    output_tokens: row.get(4)?,
-                    cache_read: row.get(5)?,
-                    cache_creation: row.get(6)?,
+                    session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    created_at: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                 })
             })
             .map_err(|e| format!("查询会话请求Token失败: {}", e))?;
@@ -664,12 +666,12 @@ impl ExternalDbService {
             .query_map(refs.as_slice(), |row| {
                 Ok(SessionRequestToken {
                     session_id: row.get(0)?,
-                    model: row.get(1)?,
-                    created_at: row.get(2)?,
-                    input_tokens: row.get(3)?,
-                    output_tokens: row.get(4)?,
-                    cache_read: row.get(5)?,
-                    cache_creation: row.get(6)?,
+                    model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    created_at: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                 })
             })
             .map_err(|e| format!("查询全局请求Token失败: {}", e))?;
@@ -722,14 +724,14 @@ impl ExternalDbService {
         let rows = stmt
             .query_map(refs.as_slice(), |row| {
                 Ok(ModelContextTierBucket {
-                    model: row.get(0)?,
-                    day: row.get(1)?,
-                    context_tier: row.get(2)?,
-                    input_tokens: row.get(3)?,
-                    output_tokens: row.get(4)?,
-                    cache_read: row.get(5)?,
-                    cache_creation: row.get(6)?,
-                    representative_epoch: row.get(7)?,
+                    model: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    day: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    context_tier: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    representative_epoch: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 })
             })
             .map_err(|e| format!("查询上下文档位聚合失败: {}", e))?;
@@ -758,7 +760,7 @@ impl ExternalDbService {
         let refs: Vec<&dyn rusqlite::types::ToSql> = session_ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
         let rows = stmt
             .query_map(refs.as_slice(), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                Ok((row.get::<_, Option<String>>(0)?.unwrap_or_default(), row.get::<_, Option<i64>>(1)?.unwrap_or(0)))
             })
             .map_err(|e| format!("查询会话时间戳失败: {}", e))?;
 
@@ -789,12 +791,12 @@ impl ExternalDbService {
         let rows = stmt
             .query_map(params![one_hour_ago], |row| {
                 Ok(RealtimeBucket {
-                    bucket: row.get(0)?,
+                    bucket: row.get::<_, Option<i64>>(0)?.unwrap_or(0),
                     requests: row.get(1)?,
-                    input_tokens: row.get(2)?,
-                    output_tokens: row.get(3)?,
-                    cache_read: row.get(4)?,
-                    cache_creation: row.get(5)?,
+                    input_tokens: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
                 })
             })
             .map_err(|e| format!("查询实时趋势失败: {}", e))?;
@@ -832,14 +834,14 @@ impl ExternalDbService {
         let rows = stmt.query_map(params_refs.as_slice(), |row| {
             Ok((
                 row.get::<_, Option<String>>(0)?.unwrap_or_default(),
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, i64>(6)?,
-                row.get::<_, i64>(7)?,
-                row.get::<_, i64>(8)?,
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(7)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(8)?.unwrap_or(0),
             ))
         }).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
 
