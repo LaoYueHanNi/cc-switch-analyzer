@@ -831,7 +831,7 @@ impl ExternalDbService {
         let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(params_refs.as_slice(), |row| {
             Ok((
-                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, i64>(3)?,
