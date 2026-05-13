@@ -69,6 +69,7 @@ const props = defineProps<{
     outputCost?: number
     cacheReadCost?: number
     cacheCreationCost?: number
+    contextTierCosts?: Array<{ threshold: number; cost: number; tokens: number }>
   }>
 }>()
 
@@ -90,7 +91,7 @@ const modelBreakdownWithCosts = computed(() =>
     cacheCreationCost: m.cacheCreationCost,
     totalCost: m.cost,
     totalTokens: (m.inputTokens || 0) + (m.outputTokens || 0) + (m.cacheReadTokens || 0) + (m.cacheCreationTokens || 0),
-    contextTierCosts: (m as any).contextTierCosts || []
+    contextTierCosts: m.contextTierCosts || []
   }))
 )
 

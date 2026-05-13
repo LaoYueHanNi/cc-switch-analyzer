@@ -4,7 +4,7 @@ mod services;
 mod utils;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use services::app_db::AppDbService;
 use services::external_db::ExternalDbService;
 use services::pricing_engine::PricingEngine;
@@ -13,9 +13,9 @@ use tauri::{Manager, RunEvent, WindowEvent};
 
 // 全局应用状态
 pub struct AppState {
-    external_db: Mutex<ExternalDbService>,
+    external_db: RwLock<ExternalDbService>,
     app_db: Mutex<AppDbService>,
-    pricing_engine: Mutex<PricingEngine>,
+    pricing_engine: RwLock<PricingEngine>,
     db_latest_timestamp: Mutex<Option<i64>>,
 }
 
@@ -26,9 +26,9 @@ pub fn run() {
     let pricing_engine = PricingEngine::new();
 
     let state = AppState {
-        external_db: Mutex::new(external_db),
+        external_db: RwLock::new(external_db),
         app_db: Mutex::new(app_db),
-        pricing_engine: Mutex::new(pricing_engine),
+        pricing_engine: RwLock::new(pricing_engine),
         db_latest_timestamp: Mutex::new(None),
     };
 
@@ -47,13 +47,11 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(log::LevelFilter::Info)
+                    .build(),
+            )?;
 
             // 系统托盘
             let menu = tauri::menu::MenuBuilder::new(app)
@@ -61,8 +59,12 @@ pub fn run() {
                 .separator()
                 .item(&tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?)
                 .build()?;
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+            let tray_builder = if let Some(icon) = app.default_window_icon() {
+                TrayIconBuilder::new().icon(icon.clone())
+            } else {
+                TrayIconBuilder::new()
+            };
+            let _tray = tray_builder
                 .icon_as_template(true)
                 .tooltip("CC-Switch Analyzer")
                 .menu(&menu)
@@ -73,18 +75,20 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        let win = tray.app_handle().get_webview_window("main").unwrap();
-                        win.show().unwrap();
-                        win.set_focus().unwrap();
+                        if let Some(win) = tray.app_handle().get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
                     }
                 })
                 .on_menu_event(move |app_handle, event| {
                     if event.id() == "quit" {
                         app_handle.exit(0);
                     } else if event.id() == "show" {
-                        let win = app_handle.get_webview_window("main").unwrap();
-                        win.show().unwrap();
-                        win.set_focus().unwrap();
+                        if let Some(win) = app_handle.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
                     }
                 })
                 .build(app)?;
@@ -109,7 +113,6 @@ pub fn run() {
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             // 数据库操作
-            commands::database::select_database,
             commands::database::auto_load_database,
             commands::database::load_database,
             commands::database::refresh_database,
@@ -171,5 +174,8 @@ pub fn run() {
             }
             _ => {}
         }
+        // 非 macOS 时 app_handle 未被使用，抑制 unused 变量警告
+        #[cfg(not(target_os = "macos"))]
+        let _ = &app_handle;
     });
 }

@@ -8,6 +8,7 @@ export function useRealtimePolling() {
   const logs = ref<RealtimeRequestLog[]>([])
   const lastRefreshTime = ref('')
   const isPolling = ref(false)
+  let isFetchingBusy = false
   let timer: ReturnType<typeof setInterval> | null = null
   let prevMaxCreatedAt = 0
 
@@ -27,6 +28,8 @@ export function useRealtimePolling() {
   }
 
   async function fetchData(): Promise<void> {
+    if (isFetchingBusy) return
+    isFetchingBusy = true
     try {
       if (prevMaxCreatedAt === 0) {
         // 首次：全量加载
@@ -40,7 +43,7 @@ export function useRealtimePolling() {
         const fresh: RealtimeRequestLog[] = await platformAdapter.queryRealtimeLogs(prevMaxCreatedAt) ?? []
         if (fresh.length > 0) {
           for (const row of fresh) {
-            (row as any)._new = true
+            row.isNew = true
           }
           logs.value = [...fresh, ...logs.value].slice(0, MAX_LOGS)
           prevMaxCreatedAt = fresh[0].createdAt
@@ -49,6 +52,8 @@ export function useRealtimePolling() {
       lastRefreshTime.value = new Date().toLocaleTimeString('zh-CN')
     } catch (err: any) {
       console.error('实时日志查询失败:', err)
+    } finally {
+      isFetchingBusy = false
     }
   }
 

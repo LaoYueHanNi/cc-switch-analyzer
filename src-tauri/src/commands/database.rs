@@ -6,13 +6,6 @@ use crate::models::*;
 // ========== 数据库操作命令 ==========
 
 #[tauri::command]
-pub fn select_database(state: State<AppState>) -> Result<Option<DatabaseInfo>, String> {
-    // Tauri 的文件对话框由前端 @tauri-apps/plugin-dialog 处理
-    // 此命令由前端调用 open() 拿到路径后调用 load_database
-    Err("请使用前端对话框选择文件后调用 load_database".to_string())
-}
-
-#[tauri::command]
 pub fn auto_load_database(state: State<AppState>) -> Result<Option<DatabaseInfo>, String> {
     // 优先使用上次选择的数据库路径
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
@@ -22,34 +15,39 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Option<DatabaseInfo>
         .filter(|p| std::path::Path::new(p).exists())
         .cloned()
         .unwrap_or_else(|| {
-            let default = crate::utils::get_default_db_path();
-            default.to_str().unwrap().to_string()
+            crate::utils::get_default_db_path()
+                .ok()
+                .and_then(|p| p.to_str().map(|s| s.to_string()))
+                .unwrap_or_default()
         });
     drop(app_db);
 
-    eprintln!("[DB] auto_load_database: path={}", db_path);
+    log::info!("[DB] auto_load_database: path={}", db_path);
     if !std::path::Path::new(&db_path).exists() {
-        eprintln!("[DB] 数据库不存在");
+        log::info!("[DB] 数据库不存在");
         return Ok(None);
     }
 
-    let mut ext_db = state.external_db.lock().map_err(|e| e.to_string())?;
-    ext_db.open(&db_path)?;
-    eprintln!("[DB] 数据库打开成功");
+    let mut ext_db = state.external_db.write().map_err(|e| e.to_string())?;
+    ext_db.open(&db_path).map_err(|e| {
+        log::error!("[DB] 数据库打开失败: {}", e);
+        "打开数据库失败，请检查文件路径".to_string()
+    })?;
+    log::info!("[DB] 数据库打开成功");
 
     let count = ext_db.get_record_count()?;
     let date_range = ext_db.get_date_range()?;
     let providers = ext_db.get_providers()?;
     let models = ext_db.get_models()?;
-    eprintln!("[DB] 记录数={}, 日期范围={:?}, 供应商={}, 模型={}", count, date_range, providers.len(), models.len());
+    log::info!("[DB] 记录数={}, 日期范围={:?}, 供应商={}, 模型={}", count, date_range, providers.len(), models.len());
 
     // 刷新定价引擎
     {
         let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-        let mut pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
+        let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
         match pricing.refresh(&app_db) {
-            Ok(()) => eprintln!("[DB] 定价引擎刷新成功, 模型数={}", pricing.size()),
-            Err(e) => eprintln!("[DB] 定价引擎刷新失败: {}", e),
+            Ok(()) => log::info!("[DB] 定价引擎刷新成功, 模型数={}", pricing.size()),
+            Err(e) => log::error!("[DB] 定价引擎刷新失败: {}", e),
         }
     }
 
@@ -62,39 +60,72 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Option<DatabaseInfo>
     }))
 }
 
+/// 校验并规范化数据库文件路径
+fn validate_db_path(file_path: &str) -> Result<std::path::PathBuf, String> {
+    let path = std::path::Path::new(file_path);
+
+    // 规范化路径，解析 . 和 .. 等相对组件，防止路径遍历
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|e| format!("路径不存在或无法访问: {} ({})", file_path, e))?;
+
+    // 校验是否为文件（非目录）
+    if !canonical.is_file() {
+        return Err(format!("路径不是文件: {}", canonical.display()));
+    }
+
+    // 校验文件扩展名
+    let valid_extensions = ["db", "sqlite", "sqlite3"];
+    match canonical.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) if valid_extensions.contains(&ext.to_lowercase().as_str()) => {}
+        other => {
+            return Err(format!(
+                "不支持的文件扩展名: {:?}，仅支持 .db/.sqlite/.sqlite3",
+                other
+            ));
+        }
+    }
+
+    Ok(canonical)
+}
+
 #[tauri::command]
 pub fn load_database(file_path: String, state: State<AppState>) -> Result<DatabaseInfo, String> {
-    eprintln!("[DB] load_database: {}", file_path);
-    let mut ext_db = state.external_db.lock().map_err(|e| e.to_string())?;
-    ext_db.open(&file_path)?;
-    eprintln!("[DB] 数据库打开成功");
+    let canonical_path = validate_db_path(&file_path)?;
+    let canonical_str = canonical_path.to_string_lossy().to_string();
+    log::info!("[DB] load_database: {}", canonical_str);
+    let mut ext_db = state.external_db.write().map_err(|e| e.to_string())?;
+    ext_db.open(&canonical_str).map_err(|e| {
+        log::error!("[DB] 数据库打开失败: {}", e);
+        "打开数据库失败，请检查文件路径".to_string()
+    })?;
+    log::info!("[DB] 数据库打开成功");
 
     let count = ext_db.get_record_count()?;
     let date_range = ext_db.get_date_range()?;
     let providers = ext_db.get_providers()?;
     let models = ext_db.get_models()?;
-    eprintln!("[DB] 记录数={}, 供应商={}, 模型={}", count, providers.len(), models.len());
+    log::info!("[DB] 记录数={}, 供应商={}, 模型={}", count, providers.len(), models.len());
 
     // 刷新定价引擎
     {
         let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-        let mut pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
+        let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
         match pricing.refresh(&app_db) {
-            Ok(()) => eprintln!("[DB] 定价引擎刷新成功, 模型数={}", pricing.size()),
-            Err(e) => eprintln!("[DB] 定价引擎刷新失败: {}", e),
+            Ok(()) => log::info!("[DB] 定价引擎刷新成功, 模型数={}", pricing.size()),
+            Err(e) => log::error!("[DB] 定价引擎刷新失败: {}", e),
         }
     }
 
-    // 记住选择的数据库路径
+    // 记住选择的数据库路径（使用规范化后的路径）
     {
         let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-        if let Err(e) = app_db.set_setting("last_db_path", &file_path) {
-            eprintln!("[DB] 保存数据库路径失败: {}", e);
+        if let Err(e) = app_db.set_setting("last_db_path", &canonical_str) {
+            log::error!("[DB] 保存数据库路径失败: {}", e);
         }
     }
 
     Ok(DatabaseInfo {
-        path: file_path,
+        path: canonical_str,
         record_count: count,
         date_range,
         providers,
@@ -104,7 +135,7 @@ pub fn load_database(file_path: String, state: State<AppState>) -> Result<Databa
 
 #[tauri::command]
 pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String> {
-    let ext_db = state.external_db.lock().map_err(|e| e.to_string())?;
+    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
     if !ext_db.is_open() {
         return Ok(RefreshResult {
             has_new: false,
@@ -132,7 +163,7 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
 
 #[tauri::command]
 pub fn get_filter_options(state: State<AppState>) -> Result<FilterOptions, String> {
-    let ext_db = state.external_db.lock().map_err(|e| e.to_string())?;
+    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
     if !ext_db.is_open() {
         return Ok(FilterOptions {
             providers: Vec::new(),

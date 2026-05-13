@@ -77,8 +77,9 @@ import { ref, computed, watch } from 'vue'
 import { NModal, NCard, NSelect, NButton } from 'naive-ui'
 import { formatCost, formatRate } from '@/utils/format'
 import { COLORS } from '@/utils/constants'
+import { getActiveRate, ALL_RATE_FIELDS } from '@/utils/pricing'
 import type { ModelBreakdown } from '@/types/database'
-import type { PricingData, TimePricingRule, ContextTier } from '@/types/pricing'
+import type { PricingData } from '@/types/pricing'
 
 const props = defineProps<{
   show: boolean
@@ -101,35 +102,6 @@ const modelOptions = computed(() =>
     .map(m => ({ label: m.modelId, value: m.modelId }))
 )
 
-type RateField = 'inputCostPerMillion' | 'outputCostPerMillion' | 'cacheReadCostPerMillion' | 'cacheCreationCostPerMillion'
-
-function resolveTier(tiers: ContextTier[], contextSize: number): ContextTier | null {
-  let best: ContextTier | null = null
-  for (const tier of tiers) {
-    if (tier.threshold <= contextSize && (!best || tier.threshold > best.threshold)) {
-      best = tier
-    }
-  }
-  return best
-}
-
-function getActiveRate(pricing: PricingData | undefined, field: RateField, contextSize: number): number {
-  if (!pricing) return 0
-  const now = Math.floor(Date.now() / 1000)
-  // 1. 用户时间规则（最高优先级）
-  const rule = pricing.timeRules?.find((r: TimePricingRule) => now >= r.startTime && now <= r.endTime)
-    || pricing.cloudTimeRules?.find((r: TimePricingRule) => now >= r.startTime && now <= r.endTime)
-  if (rule) {
-    const tier = resolveTier(rule.contextTiers || [], contextSize)
-    if (tier) return tier[field]
-    return rule[field]
-  }
-  // 2. 覆盖/云端上下文档位 → 3. 固定定价
-  const tier = resolveTier(pricing.contextTiers || [], contextSize)
-  if (tier) return tier[field]
-  return pricing[field] || 0
-}
-
 const comparisonResult = computed(() => {
   if (!targetModel.value || !props.modelData) return null
 
@@ -145,14 +117,18 @@ const comparisonResult = computed(() => {
   }
 
   const contextSize = tokens.input + tokens.cacheRead
+  const tokenKeys: (keyof typeof tokens)[] = ['input', 'output', 'cacheRead', 'cacheCreation']
 
   // 用目标模型的当前有效单价计算费用
-  const fields: RateField[] = ['inputCostPerMillion', 'outputCostPerMillion', 'cacheReadCostPerMillion', 'cacheCreationCostPerMillion']
-  const tokenKeys: (keyof typeof tokens)[] = ['input', 'output', 'cacheRead', 'cacheCreation']
-  const targetCosts = fields.map((f, i) => tokens[tokenKeys[i]] * getActiveRate(targetPricing, f, contextSize) / 1_000_000)
+  const targetRates = getActiveRate(targetPricing, contextSize)
+  const targetRateArr = [targetRates.inputRate, targetRates.outputRate, targetRates.cacheReadRate, targetRates.cacheCreationRate]
+  const targetCosts = ALL_RATE_FIELDS.map((_, i) => tokens[tokenKeys[i]] * targetRateArr[i] / 1_000_000)
   const targetCost = targetCosts.reduce((a, b) => a + b, 0)
 
   const ratio = props.sourceCost > 0 ? targetCost / props.sourceCost : 0
+
+  const sourceRates = getActiveRate(sourcePricing, contextSize)
+  const sourceRateArr = [sourceRates.inputRate, sourceRates.outputRate, sourceRates.cacheReadRate, sourceRates.cacheCreationRate]
 
   const bd = props.sourceCostBreakdown
   const labels = ['输入', '输出', '缓存读取', '缓存写入']
@@ -162,8 +138,8 @@ const comparisonResult = computed(() => {
     label,
     cost: bd[i],
     targetCost: targetCosts[i],
-    sourceRate: getActiveRate(sourcePricing, fields[i], contextSize),
-    targetRate: getActiveRate(targetPricing, fields[i], contextSize),
+    sourceRate: sourceRateArr[i],
+    targetRate: targetRateArr[i],
     color: colors[i],
     ratio: bd[i] > 0 ? targetCosts[i] / bd[i] : 0
   }))

@@ -30,10 +30,10 @@
       :output-cost="outputCostComputed"
       :cache-read-cost="cacheReadCostComputed"
       :cache-creation-cost="cacheCreationCostComputed"
-      :input-rate="formatRate(getRate('inputCostPerMillion')) + '/M'"
-      :output-rate="formatRate(getRate('outputCostPerMillion')) + '/M'"
-      :cache-read-rate="formatRate(getRate('cacheReadCostPerMillion')) + '/M'"
-      :cache-creation-rate="formatRate(getRate('cacheCreationCostPerMillion')) + '/M'"
+      :input-rate="formatRate(activeRates.inputRate) + '/M'"
+      :output-rate="formatRate(activeRates.outputRate) + '/M'"
+      :cache-read-rate="formatRate(activeRates.cacheReadRate) + '/M'"
+      :cache-creation-rate="formatRate(activeRates.cacheCreationRate) + '/M'"
     />
 
     <!-- 上下文定价档位 -->
@@ -88,6 +88,7 @@ import { formatRate } from '@/utils/format'
 import { epochToDateStr } from '@/utils/format'
 import { COLORS } from '@/utils/constants'
 import PricingGrid from '@/components/common/PricingGrid.vue'
+import { getActiveRate } from '@/utils/pricing'
 import type { PricingData, TimePricingRule, CloudPricingTimeRule, ContextTier } from '@/types/pricing'
 
 interface DisplayTimeRule {
@@ -163,32 +164,6 @@ function isActive(rule: DisplayTimeRule): boolean {
   return now >= rule.startTime && now <= rule.endTime
 }
 
-// 上下文档位匹配：找 threshold <= contextSize 的最大档位
-function resolveTier(tiers: ContextTier[], contextSize: number): ContextTier | null {
-  let best: ContextTier | null = null
-  for (const tier of tiers) {
-    if (tier.threshold <= contextSize && (!best || tier.threshold > best.threshold)) {
-      best = tier
-    }
-  }
-  return best
-}
-
-// 获取基础单价（不解析上下文档位）
-type RateField = 'inputCostPerMillion' | 'outputCostPerMillion' | 'cacheReadCostPerMillion' | 'cacheCreationCostPerMillion'
-function getRate(field: RateField): number {
-  // 1. 时间规则基础定价
-  if (activeRule.value) {
-    return activeRule.value[field]
-  }
-  // 2. 用户覆盖基础定价
-  if (props.pricing?.isOverride) {
-    return props.pricing[field] || 0
-  }
-  // 3. 默认定价
-  return props.pricing?.[field] || 0
-}
-
 // 展示用的上下文档位：命中时间规则时用时间规则的档位，否则用覆盖/默认档位
 const displayTiers = computed(() => {
   if (activeRule.value && activeRule.value.contextTiers?.length > 0) {
@@ -197,18 +172,31 @@ const displayTiers = computed(() => {
   return props.contextTiers
 })
 
+// 获取当前有效单价（有时间规则时优先用时间规则基础定价，否则解析上下文档位）
+const activeRates = computed(() => {
+  if (activeRule.value) {
+    return {
+      inputRate: activeRule.value.inputCostPerMillion,
+      outputRate: activeRule.value.outputCostPerMillion,
+      cacheReadRate: activeRule.value.cacheReadCostPerMillion,
+      cacheCreationRate: activeRule.value.cacheCreationCostPerMillion
+    }
+  }
+  return getActiveRate(props.pricing || undefined)
+})
+
 // 根据 simTokens 和有效定价计算每项费用
 const inputCostComputed = computed(() =>
-  props.simTokens.input * getRate('inputCostPerMillion') / 1_000_000
+  props.simTokens.input * activeRates.value.inputRate / 1_000_000
 )
 const outputCostComputed = computed(() =>
-  props.simTokens.output * getRate('outputCostPerMillion') / 1_000_000
+  props.simTokens.output * activeRates.value.outputRate / 1_000_000
 )
 const cacheReadCostComputed = computed(() =>
-  props.simTokens.cacheRead * getRate('cacheReadCostPerMillion') / 1_000_000
+  props.simTokens.cacheRead * activeRates.value.cacheReadRate / 1_000_000
 )
 const cacheCreationCostComputed = computed(() =>
-  props.simTokens.cacheCreation * getRate('cacheCreationCostPerMillion') / 1_000_000
+  props.simTokens.cacheCreation * activeRates.value.cacheCreationRate / 1_000_000
 )
 
 function formatDate(ts: number): string {

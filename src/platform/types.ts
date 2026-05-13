@@ -1,3 +1,7 @@
+import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog } from '@/types/database'
+import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
+import type { PricingData } from '@/types/pricing'
+
 export interface DbResult {
   path: string
   recordCount: number
@@ -69,9 +73,6 @@ export interface TimeRuleContextTierData {
 }
 
 export interface DeleteTimePricingRuleData {
-  modelId: string
-  startTime: number
-  endTime: number
   id: number
 }
 
@@ -81,25 +82,25 @@ export interface PlatformAdapter {
   autoLoadDatabase(): Promise<DbResult | null>
   refreshDatabase(): Promise<RefreshResult>
   // 查询
-  querySummary(params: FilterParams): Promise<any>
-  queryByModel(params: FilterParams): Promise<any>
-  queryByProvider(params: FilterParams): Promise<any>
-  queryPrecompute(params: FilterParams): Promise<any>
-  queryRealtime(): Promise<any>
-  queryRealtimeLogs(since?: number): Promise<any>
-  querySessionsWithCost(params: FilterParams): Promise<any[]>
+  querySummary(params: FilterParams): Promise<SummaryData>
+  queryByModel(params: FilterParams): Promise<ModelBreakdown[]>
+  queryByProvider(params: FilterParams): Promise<ProviderBreakdown[]>
+  queryPrecompute(params: FilterParams): Promise<PrecomputeQueryResult>
+  queryRealtime(): Promise<RealtimeBucket[]>
+  queryRealtimeLogs(since?: number): Promise<RealtimeRequestLog[]>
+  querySessionsWithCost(params: FilterParams): Promise<SessionWithCost[]>
   // 定价
-  getAllPricing(): Promise<any[]>
+  getAllPricing(): Promise<PricingData[]>
   setPricingOverride(data: PricingOverrideData): Promise<void>
   removePricingOverride(modelId: string): Promise<void>
-  addTimePricingRule(data: TimePricingRuleData): Promise<any>
+  addTimePricingRule(data: TimePricingRuleData): Promise<void>
   updateTimePricingRule(data: UpdateTimePricingRuleData): Promise<void>
   deleteTimePricingRule(data: DeleteTimePricingRuleData): Promise<void>
   refreshPricing(): Promise<void>
   // 上下文定价档位
   saveOverrideContextTier(data: ContextTierData): Promise<void>
   deleteOverrideContextTier(data: { modelId: string; threshold: number }): Promise<void>
-  saveTimeRuleContextTier(data: TimeRuleContextTierData): Promise<any>
+  saveTimeRuleContextTier(data: TimeRuleContextTierData): Promise<void>
   updateTimeRuleContextTier(data: { id: number; input: number; output: number; cacheRead: number; cacheCreation: number }): Promise<void>
   deleteTimeRuleContextTier(id: number): Promise<void>
   // 云端定价

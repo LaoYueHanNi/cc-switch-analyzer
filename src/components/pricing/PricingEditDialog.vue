@@ -62,6 +62,7 @@ import { NModal, NCard, NInputNumber, NButton, NIcon } from 'naive-ui'
 import { CreateOutline, TrashOutline, AddOutline } from '@vicons/ionicons5'
 import ContextTierDialog from './ContextTierDialog.vue'
 import { formatRate } from '@/utils/format'
+import { useContextTierEditor } from '@/composables/useContextTierEditor'
 import type { ContextTier } from '@/types/pricing'
 
 const props = defineProps<{
@@ -83,13 +84,16 @@ const output = ref(0)
 const cacheRead = ref(0)
 const cacheCreation = ref(0)
 
-// 本地档位列表
-const localTiers = ref<ContextTier[]>([])
-
-// 档位子弹窗
-const showTierDialog = ref(false)
-const editingTierIdx = ref<number | null>(null)
-const editingTierData = ref<{ threshold: number; input: number; output: number; cacheRead: number; cacheCreation: number } | undefined>(undefined)
+const {
+  localTiers,
+  showTierDialog,
+  editingTierIdx,
+  editingTierData,
+  onAddTier,
+  onEditTier,
+  onRemoveTier,
+  onConfirmTier
+} = useContextTierEditor()
 
 watch(() => props.show, (val) => {
   if (val) {
@@ -101,45 +105,6 @@ watch(() => props.show, (val) => {
   }
   editingTierIdx.value = null
 })
-
-function onAddTier(): void {
-  editingTierIdx.value = null
-  editingTierData.value = undefined
-  showTierDialog.value = true
-}
-
-function onEditTier(idx: number): void {
-  const tier = localTiers.value[idx]
-  editingTierIdx.value = idx
-  editingTierData.value = {
-    threshold: tier.threshold,
-    input: tier.inputCostPerMillion,
-    output: tier.outputCostPerMillion,
-    cacheRead: tier.cacheReadCostPerMillion,
-    cacheCreation: tier.cacheCreationCostPerMillion
-  }
-  showTierDialog.value = true
-}
-
-function onRemoveTier(idx: number): void {
-  localTiers.value.splice(idx, 1)
-}
-
-function onConfirmTier(data: { threshold: number; input: number; output: number; cacheRead: number; cacheCreation: number }): void {
-  const tier: ContextTier = {
-    threshold: data.threshold,
-    inputCostPerMillion: data.input,
-    outputCostPerMillion: data.output,
-    cacheReadCostPerMillion: data.cacheRead,
-    cacheCreationCostPerMillion: data.cacheCreation
-  }
-  if (editingTierIdx.value !== null) {
-    localTiers.value[editingTierIdx.value] = tier
-  } else {
-    localTiers.value.push(tier)
-  }
-  editingTierIdx.value = null
-}
 
 function onSave(): void {
   emit('save', {

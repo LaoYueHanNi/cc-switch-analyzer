@@ -3,7 +3,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import * as echarts from 'echarts'
 import { epochToTimeStr } from '@/utils/format'
 
@@ -76,7 +76,14 @@ function renderChart(): void {
 }
 
 onMounted(renderChart)
-watch(() => props.timestamps, renderChart)
+watch(() => props.timestamps, renderChart, { deep: true })
+
+onUnmounted(() => {
+  if (chart) {
+    chart.dispose()
+    chart = null
+  }
+})
 </script>
 
 <style scoped>

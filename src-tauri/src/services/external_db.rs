@@ -12,6 +12,10 @@ pub struct ExternalDbService {
     latest_timestamp: Option<i64>,
 }
 
+// rusqlite::Connection 是 Send 但非 Sync（内部 RefCell），
+// 所有并发访问均由外部 RwLock 保护，此处安全实现 Sync。
+unsafe impl Sync for ExternalDbService {}
+
 impl ExternalDbService {
     pub fn new() -> Self {
         Self {
@@ -27,7 +31,10 @@ impl ExternalDbService {
             Path::new(file_path),
             OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
-        .map_err(|e| format!("打开数据库失败: {}", e))?;
+        .map_err(|e| {
+            log::error!("[DB] 打开数据库失败 (path={}): {}", file_path, e);
+            "打开数据库失败，请检查文件路径".to_string()
+        })?;
         self.db_path = file_path.to_string();
         self.db = Some(conn);
         self.latest_timestamp = self.get_latest_timestamp_internal();
@@ -43,19 +50,31 @@ impl ExternalDbService {
         self.db.is_some()
     }
 
-    pub fn path(&self) -> &str {
-        &self.db_path
-    }
-
     fn db(&self) -> Result<&Connection, String> {
         self.db
             .as_ref()
             .ok_or_else(|| "数据库未打开".to_string())
     }
 
+    /// 收集查询行结果为 Vec<T>，context 用于错误消息前缀
+    fn collect_rows<T, F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>>(
+        mut rows: rusqlite::MappedRows<'_, F>,
+        context: &str,
+    ) -> Result<Vec<T>, String> {
+        let mut result = Vec::new();
+        while let Some(item) = rows.next() {
+            result.push(item.map_err(|e| format!("{}: {}", context, e))?);
+        }
+        Ok(result)
+    }
+
     // ========== 构建动态 WHERE 子句 ==========
 
     /// 生成带时区偏移的 date 表达式，如 date(created_at, 'unixepoch', '+8 hours')
+    ///
+    /// 注意: tz_offset 未使用参数绑定，因为 SQLite 的日期函数修饰符
+    /// （如 `'+8 hours'`）必须是字符串字面量，绑定参数 `?` 无法被识别为修饰符。
+    /// 此处安全无虞，因为 tz_offset 的类型为 `i64`，不可能包含 SQL 注入内容。
     fn tz_date_expr(params: &FilterParams) -> String {
         match params.tz_offset {
             Some(tz) if tz != 0 => {
@@ -147,11 +166,7 @@ impl ExternalDbService {
             })
             .map_err(|e| format!("查询供应商失败: {}", e))?;
 
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.map_err(|e| format!("读取供应商失败: {}", e))?);
-        }
-        Ok(result)
+        Self::collect_rows(rows, "读取供应商")
     }
 
     pub fn get_models(&self) -> Result<Vec<String>, String> {
@@ -164,13 +179,10 @@ impl ExternalDbService {
             .query_map([], |row| row.get::<_, Option<String>>(0))
             .map_err(|e| format!("查询模型失败: {}", e))?;
 
-        let mut result = Vec::new();
-        for row in rows {
-            if let Some(model) = row.map_err(|e| format!("读取模型失败: {}", e))? {
-                result.push(model);
-            }
-        }
-        Ok(result)
+        Ok(Self::collect_rows(rows, "读取模型")?
+            .into_iter()
+            .flatten()
+            .collect())
     }
 
     pub fn get_date_range(&self) -> Result<DateRange, String> {
@@ -183,39 +195,6 @@ impl ExternalDbService {
             )
             .map_err(|e| format!("查询日期范围失败: {}", e))?;
         Ok(DateRange { min: min.unwrap_or(0), max: max.unwrap_or(0) })
-    }
-
-    pub fn get_base_pricing(&self) -> Result<Vec<ModelPricing>, String> {
-        let db = self.db()?;
-        let mut stmt = db
-            .prepare(
-                "SELECT model_id,
-                    CAST(input_cost_per_million AS REAL) AS input_cost_per_million,
-                    CAST(output_cost_per_million AS REAL) AS output_cost_per_million,
-                    CAST(cache_read_cost_per_million AS REAL) AS cache_read_cost_per_million,
-                    CAST(cache_creation_cost_per_million AS REAL) AS cache_creation_cost_per_million
-                 FROM model_pricing ORDER BY model_id",
-            )
-            .map_err(|e| format!("查询基础定价失败: {}", e))?;
-
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(ModelPricing {
-                    model_id: row.get::<_, Option<String>>("model_id")?.unwrap_or_default(),
-                    input_cost_per_million: row.get::<_, Option<f64>>("input_cost_per_million")?.unwrap_or(0.0),
-                    output_cost_per_million: row.get::<_, Option<f64>>("output_cost_per_million")?.unwrap_or(0.0),
-                    cache_read_cost_per_million: row.get::<_, Option<f64>>("cache_read_cost_per_million")?.unwrap_or(0.0),
-                    cache_creation_cost_per_million: row.get::<_, Option<f64>>("cache_creation_cost_per_million")?.unwrap_or(0.0),
-                })
-            })
-            .map_err(|e| format!("查询基础定价失败: {}", e))?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            let p = row.map_err(|e| format!("读取定价失败: {}", e))?;
-            result.push(p);
-        }
-        Ok(result)
     }
 
     // ========== 筛选查询 ==========
@@ -287,11 +266,7 @@ impl ExternalDbService {
             })
             .map_err(|e| format!("查询模型统计失败: {}", e))?;
 
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.map_err(|e| format!("读取模型统计失败: {}", e))?);
-        }
-        Ok(result)
+        Self::collect_rows(rows, "读取模型统计")
     }
 
     pub fn get_provider_breakdown(&self, params: &FilterParams) -> Result<Vec<ProviderBreakdown>, String> {
@@ -328,11 +303,7 @@ impl ExternalDbService {
             })
             .map_err(|e| format!("查询供应商统计失败: {}", e))?;
 
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.map_err(|e| format!("读取供应商统计失败: {}", e))?);
-        }
-        Ok(result)
+        Self::collect_rows(rows, "读取供应商统计")
     }
 
     /// 合并查询：一次 GROUP BY (day, provider_id, model) 替代 3 次独立查询
@@ -376,11 +347,7 @@ impl ExternalDbService {
             })
             .map_err(|e| format!("查询合并统计失败: {}", e))?;
 
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.map_err(|e| format!("读取合并统计失败: {}", e))?);
-        }
-        Ok(result)
+        Self::collect_rows(rows, "读取合并统计")
     }
 
     pub fn get_provider_model_tokens(&self, params: &FilterParams) -> Result<Vec<ProviderModelToken>, String> {
@@ -415,11 +382,7 @@ impl ExternalDbService {
             })
             .map_err(|e| format!("查询供应商模型Token失败: {}", e))?;
 
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.map_err(|e| format!("读取供应商模型Token失败: {}", e))?);
-        }
-        Ok(result)
+        Self::collect_rows(rows, "读取供应商模型Token")
     }
 
     pub fn get_daily_trend(&self, params: &FilterParams) -> Result<Vec<DailyTrendRow>, String> {
@@ -459,11 +422,7 @@ impl ExternalDbService {
             })
             .map_err(|e| format!("查询每日趋势失败: {}", e))?;
 
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.map_err(|e| format!("读取每日趋势失败: {}", e))?);
-        }
-        Ok(result)
+        Self::collect_rows(rows, "读取每日趋势")
     }
 
     pub fn get_session_breakdown(&self, params: &FilterParams) -> Result<Vec<SessionBreakdown>, String> {
@@ -506,11 +465,7 @@ impl ExternalDbService {
             })
             .map_err(|e| format!("查询会话统计失败: {}", e))?;
 
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.map_err(|e| format!("读取会话统计失败: {}", e))?);
-        }
-        Ok(result)
+        Self::collect_rows(rows, "读取会话统计")
     }
 
     pub fn get_session_max_context_widths(&self, session_ids: &[String]) -> Result<HashMap<String, i64>, String> {
@@ -585,11 +540,7 @@ impl ExternalDbService {
             })
             .map_err(|e| format!("查询会话模型Token失败: {}", e))?;
 
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.map_err(|e| format!("读取会话模型Token失败: {}", e))?);
-        }
-        Ok(result)
+        Self::collect_rows(rows, "读取会话模型Token")
     }
 
     pub fn get_session_request_tokens(&self, params: &FilterParams) -> Result<Vec<SessionRequestToken>, String> {
@@ -636,51 +587,7 @@ impl ExternalDbService {
             })
             .map_err(|e| format!("查询会话请求Token失败: {}", e))?;
 
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.map_err(|e| format!("读取会话请求Token失败: {}", e))?);
-        }
-        Ok(result)
-    }
-
-    /// 获取所有请求级 Token 数据（用于全局上下文档位计费）
-    pub fn get_all_request_tokens(&self, params: &FilterParams) -> Result<Vec<SessionRequestToken>, String> {
-        let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params, true);
-        let sql = format!(
-            "SELECT
-                COALESCE(session_id, ''),
-                l.model,
-                l.created_at,
-                l.input_tokens,
-                l.output_tokens,
-                l.cache_read_tokens,
-                l.cache_creation_tokens
-             FROM proxy_request_logs l
-             {}",
-            where_sql
-        );
-        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询全局请求Token失败: {}", e))?;
-        let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
-        let rows = stmt
-            .query_map(refs.as_slice(), |row| {
-                Ok(SessionRequestToken {
-                    session_id: row.get(0)?,
-                    model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    created_at: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
-                    input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                    output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
-                    cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                    cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
-                })
-            })
-            .map_err(|e| format!("查询全局请求Token失败: {}", e))?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.map_err(|e| format!("读取全局请求Token失败: {}", e))?);
-        }
-        Ok(result)
+        Self::collect_rows(rows, "读取会话请求Token")
     }
 
     /// 按 (model, day, context_tier_bucket) 预聚合，用于上下文档位费用计算
@@ -736,11 +643,7 @@ impl ExternalDbService {
             })
             .map_err(|e| format!("查询上下文档位聚合失败: {}", e))?;
 
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.map_err(|e| format!("读取上下文档位聚合失败: {}", e))?);
-        }
-        Ok(result)
+        Self::collect_rows(rows, "读取上下文档位聚合")
     }
 
     pub fn get_session_timestamps(&self, session_ids: &[String]) -> Result<HashMap<String, Vec<i64>>, String> {
@@ -801,11 +704,7 @@ impl ExternalDbService {
             })
             .map_err(|e| format!("查询实时趋势失败: {}", e))?;
 
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.map_err(|e| format!("读取实时趋势失败: {}", e))?);
-        }
-        Ok(result)
+        Self::collect_rows(rows, "读取实时趋势")
     }
 
     pub fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String> {
@@ -845,10 +744,6 @@ impl ExternalDbService {
             ))
         }).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
 
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.map_err(|e| format!("读取请求日志失败: {}", e))?);
-        }
-        Ok(result)
+        Self::collect_rows(rows, "读取请求日志")
     }
 }

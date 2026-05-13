@@ -5,9 +5,9 @@ use crate::models::*;
 
 #[tauri::command]
 pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, String> {
-    let pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
-    let ext_db = state.external_db.lock().map_err(|e| e.to_string())?;
-    eprintln!("[PRICING] get_all_pricing: 引擎模型数={}", pricing.size());
+    let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
+    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    log::debug!("[PRICING] get_all_pricing: 引擎模型数={}", pricing.size());
 
     let mut used_models: std::collections::HashSet<String> = std::collections::HashSet::new();
     if ext_db.is_open() {
@@ -24,7 +24,7 @@ pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, Strin
     }
 
     let all = pricing.get_all_pricing();
-    eprintln!("[PRICING] 返回定价数据: {} 条", all.len());
+    log::debug!("[PRICING] 返回定价数据: {} 条", all.len());
     Ok(all
         .iter()
         .map(|p| {
@@ -61,6 +61,12 @@ pub fn set_pricing_override(
     cache_creation: f64,
     state: State<AppState>,
 ) -> Result<(), String> {
+    if model_id.trim().is_empty() {
+        return Err("模型 ID 不能为空".to_string());
+    }
+    if input < 0.0 || output < 0.0 || cache_read < 0.0 || cache_creation < 0.0 {
+        return Err("价格不能为负数".to_string());
+    }
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     app_db.save_override(&model_id, input, output, cache_read, cache_creation)
 }
@@ -111,15 +117,11 @@ pub fn update_time_pricing_rule(
 
 #[tauri::command]
 pub fn delete_time_pricing_rule(
-    model_id: String,
-    start_time: i64,
-    end_time: i64,
-    _id: i64,
+    id: i64,
     state: State<AppState>,
 ) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    // 如果有上下文档位（通过分组删除），否则按 id 删除单行
-    app_db.delete_time_override_group(&model_id, start_time, end_time)
+    app_db.delete_time_override(id)
 }
 
 #[tauri::command]
@@ -187,14 +189,14 @@ pub fn delete_time_rule_context_tier(
 #[tauri::command]
 pub fn refresh_pricing(state: State<AppState>) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    let mut pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
+    let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
     pricing.refresh(&app_db)
 }
 
 #[tauri::command]
 pub fn fetch_cloud_pricing(state: State<AppState>) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    let mut pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
+    let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
     pricing.fetch_and_cache_cloud_pricing(&app_db)?;
     pricing.refresh(&app_db)
 }
@@ -202,7 +204,7 @@ pub fn fetch_cloud_pricing(state: State<AppState>) -> Result<(), String> {
 #[tauri::command]
 pub fn add_user_alias(model_id: String, alias: String, state: State<AppState>) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    let mut pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
+    let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
     app_db.add_user_alias(&model_id, &alias)?;
     pricing.refresh(&app_db)
 }
@@ -210,7 +212,7 @@ pub fn add_user_alias(model_id: String, alias: String, state: State<AppState>) -
 #[tauri::command]
 pub fn remove_user_alias(model_id: String, alias: String, state: State<AppState>) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    let mut pricing = state.pricing_engine.lock().map_err(|e| e.to_string())?;
+    let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
     app_db.remove_user_alias(&model_id, &alias)?;
     pricing.refresh(&app_db)
 }

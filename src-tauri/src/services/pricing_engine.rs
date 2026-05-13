@@ -5,6 +5,23 @@ use crate::services::app_db::AppDbService;
 use crate::services::cloud_pricing;
 use crate::utils::CLOUD_PRICING_URL;
 
+/// 提供时间范围访问的 trait，用于统一匹配用户时间规则和云端时间规则
+trait HasTimeRange {
+    fn time_range(&self) -> (i64, i64);
+}
+
+impl HasTimeRange for TimePricingRule {
+    fn time_range(&self) -> (i64, i64) {
+        (self.start_time, self.end_time)
+    }
+}
+
+impl HasTimeRange for CloudPricingTimeRule {
+    fn time_range(&self) -> (i64, i64) {
+        (self.start_time, self.end_time)
+    }
+}
+
 // 定价计算引擎 —— 四层定价优先级（上下文大小为子维度）
 pub struct PricingEngine {
     merged: HashMap<String, MergedPricing>,
@@ -54,6 +71,20 @@ impl PricingEngine {
             cache_creation_cost_per_million: tier.cache_creation_cost_per_million,
             is_override,
         }
+    }
+
+    /// 在规则列表中查找匹配的时间规则（第一条时间范围命中的规则）
+    fn find_matching_rule<'a, T: HasTimeRange>(
+        rules: &'a [T],
+        epoch_seconds: i64,
+    ) -> Option<&'a T> {
+        for rule in rules {
+            let (start, end) = rule.time_range();
+            if start <= epoch_seconds && epoch_seconds <= end {
+                return Some(rule);
+            }
+        }
+        None
     }
 
     // 刷新全部定价数据
@@ -130,11 +161,11 @@ impl PricingEngine {
         match app_db.load_cloud_pricing() {
             Ok((base, tiers, cloud_time_rules, cloud_aliases)) => {
                 let time_rule_count: usize = cloud_time_rules.values().map(|v| v.len()).sum();
-                eprintln!("[PRICING] 从缓存加载云端定价: {} 个模型, {} 条时间规则", base.len(), time_rule_count);
+                log::info!("[PRICING] 从缓存加载云端定价: {} 个模型, {} 条时间规则", base.len(), time_rule_count);
                 (base, tiers, cloud_time_rules, cloud_aliases)
             }
             Err(e) => {
-                eprintln!("[PRICING] 读取云端定价缓存失败: {}", e);
+                log::error!("[PRICING] 读取云端定价缓存失败: {}", e);
                 (Vec::new(), HashMap::new(), HashMap::new(), HashMap::new())
             }
         }
@@ -143,13 +174,13 @@ impl PricingEngine {
     /// 从网络拉取云端定价，比较版本后写入缓存
     pub fn fetch_and_cache_cloud_pricing(&self, app_db: &AppDbService) -> Result<(), String> {
         let data = cloud_pricing::fetch_cloud_pricing(CLOUD_PRICING_URL)?;
-        eprintln!("[PRICING] 云端定价拉取成功: {} 个模型, version={}", data.models.len(), data.version);
+        log::info!("[PRICING] 云端定价拉取成功: {} 个模型, version={}", data.models.len(), data.version);
         let cached_version = app_db.get_setting("cloud_pricing_version");
         if cached_version.as_deref() != Some(&data.version.to_string()) {
-            eprintln!("[PRICING] 版本变化 {} → {}, 更新缓存", cached_version.unwrap_or_default(), data.version);
+            log::info!("[PRICING] 版本变化 {} → {}, 更新缓存", cached_version.unwrap_or_default(), data.version);
             app_db.save_cloud_pricing(&data)?;
         } else {
-            eprintln!("[PRICING] 版本未变化 ({}), 跳过缓存更新", data.version);
+            log::info!("[PRICING] 版本未变化 ({}), 跳过缓存更新", data.version);
         }
         Ok(())
     }
@@ -218,6 +249,7 @@ impl PricingEngine {
     }
 
     // 获取固定合并定价
+    #[cfg(test)]
     pub fn get_pricing(&self, model_id: &str) -> Option<&MergedPricing> {
         let resolved = self.resolve_model_id(model_id)?;
         self.merged.get(&resolved)
@@ -232,32 +264,28 @@ impl PricingEngine {
 
         // 1. 用户自定义时间规则
         if let Some(rules) = self.time_overrides_by_model.get(&resolved) {
-            for rule in rules {
-                if rule.start_time <= epoch_seconds && epoch_seconds <= rule.end_time {
-                    return Some(MergedPricing {
-                        model_id: resolved.clone(),
-                        input_cost_per_million: rule.input_cost_per_million,
-                        output_cost_per_million: rule.output_cost_per_million,
-                        cache_read_cost_per_million: rule.cache_read_cost_per_million,
-                        cache_creation_cost_per_million: rule.cache_creation_cost_per_million,
-                        is_override: true,
-                    });
-                }
+            if let Some(rule) = Self::find_matching_rule(rules, epoch_seconds) {
+                return Some(MergedPricing {
+                    model_id: resolved.clone(),
+                    input_cost_per_million: rule.input_cost_per_million,
+                    output_cost_per_million: rule.output_cost_per_million,
+                    cache_read_cost_per_million: rule.cache_read_cost_per_million,
+                    cache_creation_cost_per_million: rule.cache_creation_cost_per_million,
+                    is_override: true,
+                });
             }
         }
         // 2. 云端时间规则
         if let Some(rules) = self.cloud_time_rules_by_model.get(&resolved) {
-            for rule in rules {
-                if rule.start_time <= epoch_seconds && epoch_seconds <= rule.end_time {
-                    return Some(MergedPricing {
-                        model_id: resolved.clone(),
-                        input_cost_per_million: rule.input_cost_per_million,
-                        output_cost_per_million: rule.output_cost_per_million,
-                        cache_read_cost_per_million: rule.cache_read_cost_per_million,
-                        cache_creation_cost_per_million: rule.cache_creation_cost_per_million,
-                        is_override: false,
-                    });
-                }
+            if let Some(rule) = Self::find_matching_rule(rules, epoch_seconds) {
+                return Some(MergedPricing {
+                    model_id: resolved.clone(),
+                    input_cost_per_million: rule.input_cost_per_million,
+                    output_cost_per_million: rule.output_cost_per_million,
+                    cache_read_cost_per_million: rule.cache_read_cost_per_million,
+                    cache_creation_cost_per_million: rule.cache_creation_cost_per_million,
+                    is_override: false,
+                });
             }
         }
         self.merged.get(&resolved).cloned()
@@ -277,43 +305,39 @@ impl PricingEngine {
 
         // 1. 用户自定义时间规则
         if let Some(rules) = self.time_overrides_by_model.get(&resolved) {
-            for rule in rules {
-                if rule.start_time <= epoch_seconds && epoch_seconds <= rule.end_time {
-                    if let Some(tiers) = self.time_rule_tiers.get(&rule.id) {
-                        if let Some(tier) = Self::resolve_tier(tiers, context_size) {
-                            return Some(Self::tier_to_merged(&resolved, tier, true));
-                        }
+            if let Some(rule) = Self::find_matching_rule(rules, epoch_seconds) {
+                if let Some(tiers) = self.time_rule_tiers.get(&rule.id) {
+                    if let Some(tier) = Self::resolve_tier(tiers, context_size) {
+                        return Some(Self::tier_to_merged(&resolved, tier, true));
                     }
-                    return Some(MergedPricing {
-                        model_id: resolved.clone(),
-                        input_cost_per_million: rule.input_cost_per_million,
-                        output_cost_per_million: rule.output_cost_per_million,
-                        cache_read_cost_per_million: rule.cache_read_cost_per_million,
-                        cache_creation_cost_per_million: rule.cache_creation_cost_per_million,
-                        is_override: true,
-                    });
                 }
+                return Some(MergedPricing {
+                    model_id: resolved.clone(),
+                    input_cost_per_million: rule.input_cost_per_million,
+                    output_cost_per_million: rule.output_cost_per_million,
+                    cache_read_cost_per_million: rule.cache_read_cost_per_million,
+                    cache_creation_cost_per_million: rule.cache_creation_cost_per_million,
+                    is_override: true,
+                });
             }
         }
 
         // 2. 云端时间规则
         if let Some(rules) = self.cloud_time_rules_by_model.get(&resolved) {
-            for rule in rules {
-                if rule.start_time <= epoch_seconds && epoch_seconds <= rule.end_time {
-                    if let Some(tiers) = self.cloud_time_rule_tiers.get(&(resolved.clone(), rule.start_time, rule.end_time)) {
-                        if let Some(tier) = Self::resolve_tier(tiers, context_size) {
-                            return Some(Self::tier_to_merged(&resolved, tier, false));
-                        }
+            if let Some(rule) = Self::find_matching_rule(rules, epoch_seconds) {
+                if let Some(tiers) = self.cloud_time_rule_tiers.get(&(resolved.clone(), rule.start_time, rule.end_time)) {
+                    if let Some(tier) = Self::resolve_tier(tiers, context_size) {
+                        return Some(Self::tier_to_merged(&resolved, tier, false));
                     }
-                    return Some(MergedPricing {
-                        model_id: resolved.clone(),
-                        input_cost_per_million: rule.input_cost_per_million,
-                        output_cost_per_million: rule.output_cost_per_million,
-                        cache_read_cost_per_million: rule.cache_read_cost_per_million,
-                        cache_creation_cost_per_million: rule.cache_creation_cost_per_million,
-                        is_override: false,
-                    });
                 }
+                return Some(MergedPricing {
+                    model_id: resolved.clone(),
+                    input_cost_per_million: rule.input_cost_per_million,
+                    output_cost_per_million: rule.output_cost_per_million,
+                    cache_read_cost_per_million: rule.cache_read_cost_per_million,
+                    cache_creation_cost_per_million: rule.cache_creation_cost_per_million,
+                    is_override: false,
+                });
             }
         }
 
@@ -396,28 +420,24 @@ impl PricingEngine {
         };
         // 1. 用户时间规则的档位
         if let Some(rules) = self.time_overrides_by_model.get(&resolved) {
-            for rule in rules {
-                if rule.start_time <= epoch_seconds && epoch_seconds <= rule.end_time {
-                    if let Some(tiers) = self.time_rule_tiers.get(&rule.id) {
-                        if let Some(tier) = Self::resolve_tier(tiers, context_size) {
-                            return Some(tier.threshold);
-                        }
+            if let Some(rule) = Self::find_matching_rule(rules, epoch_seconds) {
+                if let Some(tiers) = self.time_rule_tiers.get(&rule.id) {
+                    if let Some(tier) = Self::resolve_tier(tiers, context_size) {
+                        return Some(tier.threshold);
                     }
-                    return None;
                 }
+                return None;
             }
         }
         // 2. 云端时间规则的档位
         if let Some(rules) = self.cloud_time_rules_by_model.get(&resolved) {
-            for rule in rules {
-                if rule.start_time <= epoch_seconds && epoch_seconds <= rule.end_time {
-                    if let Some(tiers) = self.cloud_time_rule_tiers.get(&(resolved.clone(), rule.start_time, rule.end_time)) {
-                        if let Some(tier) = Self::resolve_tier(tiers, context_size) {
-                            return Some(tier.threshold);
-                        }
+            if let Some(rule) = Self::find_matching_rule(rules, epoch_seconds) {
+                if let Some(tiers) = self.cloud_time_rule_tiers.get(&(resolved.clone(), rule.start_time, rule.end_time)) {
+                    if let Some(tier) = Self::resolve_tier(tiers, context_size) {
+                        return Some(tier.threshold);
                     }
-                    return None;
                 }
+                return None;
             }
         }
         // 3. 覆盖档位

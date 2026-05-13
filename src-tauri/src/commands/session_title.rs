@@ -38,7 +38,6 @@ pub fn get_session_titles(
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     for id in &uncached {
         let (title, project) = generate_title(id)
-            .map(|(t, p)| (t, p))
             .unwrap_or_else(|| (short_session(id), String::new()));
         // 存储格式: "title|project"
         app_db.save_session_title(id, &format!("{}|{}", title, project))?;

@@ -86,6 +86,7 @@ import { useFilterStore } from '@/stores/filter'
 import { useQueryStore } from '@/stores/query'
 import { useThemeStore } from '@/stores/theme'
 import { useDatabase } from '@/composables/useDatabase'
+import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import Toolbar from './Toolbar.vue'
 import FilterBar from './FilterBar.vue'
 import SummaryBar from './SummaryBar.vue'
@@ -119,26 +120,10 @@ async function onSelectDb(): Promise<void> {
   await selectDatabase()
 }
 
-// ===== 刷新间隔循环 =====
-const intervals = ['manual', '30s', '1min', '5min', '30min']
-const intervalLabels: Record<string, string> = {
-  manual: '手动',
-  '30s': '30s',
-  '1min': '1m',
-  '5min': '5m',
-  '30min': '30m'
-}
-const intervalTitles: Record<string, string> = {
-  manual: '手动刷新（点击执行）',
-  '30s': '每30秒自动刷新',
-  '1min': '每1分钟自动刷新',
-  '5min': '每5分钟自动刷新',
-  '30min': '每30分钟自动刷新'
-}
-const currentIntervalIndex = ref(2) // 默认 1min
-
-const intervalDisplay = computed(() => intervalLabels[intervals[currentIntervalIndex.value]])
-const intervalTitle = computed(() => intervalTitles[intervals[currentIntervalIndex.value]])
+// ===== 自动刷新 =====
+const { intervalDisplay, intervalTitle, cycleInterval: onCycleInterval } = useAutoRefresh(() => {
+  if (dbStore.hasDatabase) refreshDatabase()
+})
 
 // body { zoom: 1.1 } 导致 macOS WebKit 下 calc(100vh / 1.1) 精度不足
 // 使用 window.innerHeight 精确补偿 zoom 倍率
@@ -147,37 +132,6 @@ const syncLayoutHeight = () => {
   if (!appLayoutRef.value) return
   appLayoutRef.value.style.height = `${window.innerHeight / 1.1}px`
 }
-
-let autoRefreshTimer: ReturnType<typeof setInterval> | null = null
-
-function onCycleInterval(): void {
-  // 手动模式下直接刷新
-  if (intervals[currentIntervalIndex.value] === 'manual') {
-    refreshDatabase()
-  }
-  // 切换到下一个
-  currentIntervalIndex.value = (currentIntervalIndex.value + 1) % intervals.length
-}
-
-// 监听间隔变化
-watch(currentIntervalIndex, (idx) => {
-  if (autoRefreshTimer) {
-    clearInterval(autoRefreshTimer)
-    autoRefreshTimer = null
-  }
-  const intervalMap: Record<string, number> = {
-    '30s': 30_000,
-    '1min': 60_000,
-    '5min': 300_000,
-    '30min': 1_800_000
-  }
-  const ms = intervalMap[intervals[idx]]
-  if (ms) {
-    autoRefreshTimer = setInterval(() => {
-      if (dbStore.hasDatabase) refreshDatabase()
-    }, ms)
-  }
-}, { immediate: true })
 
 // 集中查询触发：筛选变化、数据库加载、刷新时统一执行一次 queryPrecompute
 watch(() => filterStore.filterParams, () => {

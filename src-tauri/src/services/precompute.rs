@@ -4,9 +4,9 @@ use crate::models::*;
 use crate::services::pricing_engine::PricingEngine;
 use crate::utils::date_str_to_epoch;
 
-/// 将带时区的日期字符串转为 epoch 秒（本地零点 → UTC）
+/// 将带时区的日期字符串转为 epoch 秒（本地零点 → UTC），无效日期返回 0
 fn day_to_epoch_local(day: &str, tz_offset: i64) -> i64 {
-    date_str_to_epoch(day) - tz_offset * 3600
+    date_str_to_epoch(day).unwrap_or(0) - tz_offset * 3600
 }
 
 // 一次遍历 dailyTrend + providerModelTokens，产出所有预计算结果
@@ -216,35 +216,105 @@ pub struct SessionModelCostData {
     pub tier_tokens: HashMap<i64, i64>,
 }
 
-/// Per-model 上下文档位费用聚合
-pub fn compute_model_context_tier_costs(
-    requests: &[SessionRequestToken],
-    ps: &PricingEngine,
-) -> HashMap<String, HashMap<i64, f64>> {
-    let mut result: HashMap<String, HashMap<i64, f64>> = HashMap::new();
-    for req in requests {
-        let context_size = req.input_tokens + req.cache_read;
-        let pricing = match ps.get_pricing_at_with_context(&req.model, req.created_at, context_size) {
-            Some(p) => p,
-            None => continue,
-        };
-        let cost = ps.calculate_cost(
-            &pricing,
-            req.input_tokens,
-            req.output_tokens,
-            req.cache_read,
-            req.cache_creation,
-        );
-        let tier_key = ps
-            .get_matched_tier_threshold(&req.model, req.created_at, context_size)
-            .unwrap_or(0);
-        *result
-            .entry(req.model.clone())
-            .or_default()
-            .entry(tier_key)
-            .or_insert(0.0) += cost;
+/// 聚合结果，包含从 CombinedBreakdownRow 派生的三组数据
+pub struct CombinedAggregation {
+    pub model_breakdown: Vec<ModelBreakdown>,
+    pub daily_trend: Vec<DailyTrendRow>,
+    pub provider_model_tokens: Vec<ProviderModelToken>,
+}
+
+/// 从 CombinedBreakdownRow 列表一次性聚合出 model_breakdown、daily_trend、provider_model_tokens
+pub fn aggregate_combined_breakdown(combined: &[CombinedBreakdownRow]) -> CombinedAggregation {
+    let mut model_map: HashMap<String, (i64, i64, i64, i64, i64)> = HashMap::new();
+    let mut daily_map: HashMap<(String, String), (i64, i64, i64, i64, i64, f64)> = HashMap::new();
+    let mut pmt_map: HashMap<(String, String), (i64, i64, i64, i64)> = HashMap::new();
+
+    for row in combined {
+        // model_breakdown 聚合
+        let e = model_map.entry(row.model.clone()).or_insert((0, 0, 0, 0, 0));
+        e.0 += row.requests;
+        e.1 += row.input_tokens;
+        e.2 += row.output_tokens;
+        e.3 += row.cache_read;
+        e.4 += row.cache_creation;
+
+        // daily_trend 聚合
+        let dt_key = (row.day.clone(), row.model.clone());
+        let dt = daily_map.entry(dt_key).or_insert((0, 0, 0, 0, 0, 0.0));
+        dt.0 += row.requests;
+        dt.1 += row.input_tokens;
+        dt.2 += row.output_tokens;
+        dt.3 += row.cache_read;
+        dt.4 += row.cache_creation;
+        dt.5 += row.latency_sum;
+
+        // provider_model_tokens 聚合
+        let pmt_key = (row.provider_id.clone(), row.model.clone());
+        let pmt = pmt_map.entry(pmt_key).or_insert((0, 0, 0, 0));
+        pmt.0 += row.input_tokens;
+        pmt.1 += row.output_tokens;
+        pmt.2 += row.cache_read;
+        pmt.3 += row.cache_creation;
     }
-    result
+
+    let mut model_breakdown: Vec<ModelBreakdown> = model_map
+        .into_iter()
+        .map(|(model, (requests, input_tokens, output_tokens, cache_read, cache_creation))| {
+            ModelBreakdown { model, requests, input_tokens, output_tokens, cache_read, cache_creation }
+        })
+        .collect();
+    model_breakdown.sort_by(|a, b| b.requests.cmp(&a.requests));
+
+    let mut daily_trend: Vec<DailyTrendRow> = daily_map
+        .into_iter()
+        .map(|((day, model), (requests, input_tokens, output_tokens, cache_read, cache_creation, latency_sum))| {
+            DailyTrendRow {
+                day,
+                model,
+                requests,
+                input_tokens,
+                output_tokens,
+                cache_read,
+                cache_creation,
+                avg_latency: if requests > 0 { latency_sum / requests as f64 } else { 0.0 },
+            }
+        })
+        .collect();
+    daily_trend.sort_by(|a, b| a.day.cmp(&b.day).then(a.model.cmp(&b.model)));
+
+    let provider_model_tokens: Vec<ProviderModelToken> = pmt_map
+        .into_iter()
+        .map(|((provider_id, model), (input_tokens, output_tokens, cache_read, cache_creation))| {
+            ProviderModelToken { provider_id, model, input_tokens, output_tokens, cache_read, cache_creation }
+        })
+        .collect();
+
+    CombinedAggregation {
+        model_breakdown,
+        daily_trend,
+        provider_model_tokens,
+    }
+}
+
+/// 将 compute_model_context_tier_costs_from_buckets 的原始结果转换为
+/// HashMap<model, Vec<ContextTierCost>>，过滤零值并按 threshold 排序
+pub fn build_context_tier_costs(
+    tier_buckets: &[ModelContextTierBucket],
+    pricing: &PricingEngine,
+) -> HashMap<String, Vec<ContextTierCost>> {
+    let model_tiers = compute_model_context_tier_costs_from_buckets(tier_buckets, pricing);
+    model_tiers
+        .into_iter()
+        .map(|(model, tiers)| {
+            let mut vec: Vec<ContextTierCost> = tiers
+                .into_iter()
+                .filter(|(_, (c, _))| *c > 0.0)
+                .map(|(threshold, (cost, tokens))| ContextTierCost { threshold, cost, tokens })
+                .collect();
+            vec.sort_by_key(|t| t.threshold);
+            (model, vec)
+        })
+        .collect()
 }
 
 /// 从 SQL 预聚合桶计算上下文档位费用

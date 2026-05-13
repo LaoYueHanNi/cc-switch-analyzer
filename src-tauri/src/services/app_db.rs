@@ -12,7 +12,7 @@ pub struct AppDbService {
 
 impl AppDbService {
     pub fn new() -> Result<Self, String> {
-        let db_path = get_app_db_path();
+        let db_path = get_app_db_path()?;
         let conn = Connection::open(Path::new(&db_path))
             .map_err(|e| format!("打开应用数据库失败: {}", e))?;
         conn.pragma_update(None, "journal_mode", "WAL")
@@ -72,7 +72,7 @@ impl AppDbService {
     }
 
     fn backup_before_migration(&self, from_version: i64) -> Result<(), String> {
-        let db_path = get_app_db_path();
+        let db_path = get_app_db_path()?;
         let backup_path = format!("{}.v{}.bak", db_path.display(), from_version);
         let backup = Path::new(&backup_path);
         if !backup.exists() {
@@ -469,7 +469,7 @@ impl AppDbService {
                     output_cost,
                     cache_read_cost,
                     cache_creation_cost,
-                    if label.is_empty() { "" } else { label }
+                    label
                 ],
             )
             .map_err(|e| format!("添加时间定价失败: {}", e))?;
@@ -540,7 +540,7 @@ impl AppDbService {
                     output_cost,
                     cache_read_cost,
                     cache_creation_cost,
-                    if label.is_empty() { "" } else { label },
+                    label,
                     id
                 ],
             )
@@ -548,6 +548,7 @@ impl AppDbService {
         Ok(())
     }
 
+    #[allow(dead_code)] // 按 model_id+时间范围批量更新，预留 API
     pub fn update_time_override_range(
         &self,
         model_id: &str,
@@ -565,7 +566,7 @@ impl AppDbService {
                 params![
                     new_start,
                     new_end,
-                    if label.is_empty() { "" } else { label },
+                    label,
                     model_id,
                     old_start,
                     old_end,
@@ -605,6 +606,7 @@ impl AppDbService {
         Ok(())
     }
 
+    #[allow(dead_code)] // 按 model_id+时间范围批量删除，预留 API（测试中使用）
     pub fn delete_time_override_group(
         &self,
         model_id: &str,
@@ -1157,7 +1159,7 @@ mod tests {
             ],
         };
         db.save_cloud_pricing(&data).unwrap();
-        let (base, tiers, cloud_time_rules, cloud_aliases) = db.load_cloud_pricing().unwrap();
+        let (base, tiers, cloud_time_rules, _cloud_aliases) = db.load_cloud_pricing().unwrap();
         assert_eq!(base.len(), 1);
         assert_eq!(base[0].model_id, "model-a");
         assert!(tiers.contains_key("model-a"));

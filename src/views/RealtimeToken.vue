@@ -71,7 +71,7 @@
         </div>
         <!-- 数据行 -->
         <div class="session-rows">
-        <div class="log-row" :class="{ 'log-new': (row as any)._new }" v-for="(row, ri) in group.rows" :key="row.createdAt + row.model + ri">
+        <div class="log-row" :class="{ 'log-new': row.isNew }" v-for="(row, ri) in group.rows" :key="row.createdAt + row.model + ri">
           <span class="col-time">{{ formatTime(row.createdAt) }}</span>
           <span class="col-model" :title="row.model">{{ shortModel(row.model) }}</span>
           <span class="col-token c-input">
@@ -130,30 +130,48 @@ function toggleGroup(sessionId: string): void {
 }
 
 function groupHasNew(group: SessionGroup): boolean {
-  return group.rows.some(r => (r as any)._new)
+  return group.rows.some(r => r.isNew)
 }
 
-const hasNewData = computed(() => logs.value.some(r => (r as any)._new))
+const hasNewData = computed(() => logs.value.some(r => r.isNew))
 
-const totalCost = computed(() =>
-  logs.value.reduce((sum, r) => sum + r.totalCost, 0)
-)
-
-const totalTokens = computed(() =>
-  logs.value.reduce((sum, r) =>
-    sum + r.inputTokens + r.outputTokens + r.cacheReadTokens + r.cacheCreationTokens, 0
-  )
-)
-
-const totalInputCost = computed(() => logs.value.reduce((s, r) => s + r.inputCost, 0))
-const totalOutputCost = computed(() => logs.value.reduce((s, r) => s + r.outputCost, 0))
-const totalCacheReadCost = computed(() => logs.value.reduce((s, r) => s + r.cacheReadCost, 0))
-const totalCacheCreationCost = computed(() => logs.value.reduce((s, r) => s + r.cacheCreationCost, 0))
-const cacheHitRate = computed(() => {
-  const input = logs.value.reduce((s, r) => s + r.inputTokens, 0)
-  const cacheRead = logs.value.reduce((s, r) => s + r.cacheReadTokens, 0)
-  return (input + cacheRead) > 0 ? cacheRead / (input + cacheRead) : 0
+const summaryStats = computed(() => {
+  let cost = 0
+  let tokens = 0
+  let inputCost = 0
+  let outputCost = 0
+  let cacheReadCost = 0
+  let cacheCreationCost = 0
+  let inputTokens = 0
+  let cacheReadTokens = 0
+  for (const r of logs.value) {
+    cost += r.totalCost
+    tokens += r.inputTokens + r.outputTokens + r.cacheReadTokens + r.cacheCreationTokens
+    inputCost += r.inputCost
+    outputCost += r.outputCost
+    cacheReadCost += r.cacheReadCost
+    cacheCreationCost += r.cacheCreationCost
+    inputTokens += r.inputTokens
+    cacheReadTokens += r.cacheReadTokens
+  }
+  return {
+    totalCost: cost,
+    totalTokens: tokens,
+    totalInputCost: inputCost,
+    totalOutputCost: outputCost,
+    totalCacheReadCost: cacheReadCost,
+    totalCacheCreationCost: cacheCreationCost,
+    cacheHitRate: (inputTokens + cacheReadTokens) > 0 ? cacheReadTokens / (inputTokens + cacheReadTokens) : 0
+  }
 })
+
+const totalCost = computed(() => summaryStats.value.totalCost)
+const totalTokens = computed(() => summaryStats.value.totalTokens)
+const totalInputCost = computed(() => summaryStats.value.totalInputCost)
+const totalOutputCost = computed(() => summaryStats.value.totalOutputCost)
+const totalCacheReadCost = computed(() => summaryStats.value.totalCacheReadCost)
+const totalCacheCreationCost = computed(() => summaryStats.value.totalCacheCreationCost)
+const cacheHitRate = computed(() => summaryStats.value.cacheHitRate)
 
 interface SessionGroup {
   sessionId: string

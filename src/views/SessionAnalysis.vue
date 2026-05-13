@@ -41,6 +41,7 @@ import { useDatabaseStore } from '@/stores/database'
 import { useFilterStore } from '@/stores/filter'
 import { useSessionTitles } from '@/composables/useSessionTitles'
 import SessionCard from '@/components/session/SessionCard.vue'
+import type { SessionModelCostEntry } from '@/types/common'
 
 const dbStore = useDatabaseStore()
 const filterStore = useFilterStore()
@@ -67,7 +68,7 @@ interface SessionCardData {
   maxContextWidth: number
   cacheHitRate: number
   timestamps: number[]
-  modelBreakdown: any[]
+  modelBreakdown: SessionModelCostEntry[]
 }
 
 const sessionsRaw = ref<SessionCardData[]>([])
@@ -75,7 +76,7 @@ const sessionsRaw = ref<SessionCardData[]>([])
 const sessionCards = computed<SessionCardData[]>(() => {
   const list = sessionsRaw.value.map(s => {
     // 每个会话内的模型固定按费用降序
-    const sortedModels = [...s.modelBreakdown].sort((a: any, b: any) => (b.cost || 0) - (a.cost || 0))
+    const sortedModels = [...s.modelBreakdown].sort((a, b) => (b.cost || 0) - (a.cost || 0))
     return { ...s, modelBreakdown: sortedModels }
   })
 
@@ -95,7 +96,7 @@ async function loadData(): Promise<void> {
     console.log('[SessionAnalysis] 会话结果数:', result?.length || 0)
     sessionsRaw.value = result || []
     if (result && result.length > 0) {
-      fetchTitles(result.map((s: any) => s.sessionId).filter(Boolean))
+      fetchTitles(result.map(s => s.sessionId).filter(Boolean))
     }
   } catch (err: any) {
     console.error('[SessionAnalysis] 会话查询失败:', err.message || err)

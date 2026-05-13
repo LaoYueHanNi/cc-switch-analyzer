@@ -9,7 +9,6 @@ export interface FilterParams {
 
 export interface Provider {
   id: string
-  appType: string
   name: string
 }
 
@@ -86,4 +85,6 @@ export interface RealtimeRequestLog {
   cacheCreationCost: number
   totalCost: number
   contextTierThreshold?: number
+  /** 标记是否为增量轮询新增的记录（前端本地属性，不来自后端） */
+  isNew?: boolean
 }

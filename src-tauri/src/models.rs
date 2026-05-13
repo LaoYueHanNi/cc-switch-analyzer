@@ -113,6 +113,7 @@ pub struct CombinedBreakdownRow {
 #[derive(Debug, Clone)]
 pub struct ModelContextTierBucket {
     pub model: String,
+    #[allow(dead_code)] // 从 SQL 查询结果中填充，当前计算流程不直接读取
     pub day: String,
     pub context_tier: i64,
     pub input_tokens: i64,

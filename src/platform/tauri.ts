@@ -1,6 +1,17 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import type { PlatformAdapter, DbResult, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData } from './types'
+import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog } from '@/types/database'
+import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
+import type { PricingData } from '@/types/pricing'
+
+interface TauriFilterParams {
+  fromEpoch?: number
+  toEpoch?: number
+  tzOffset: number
+  providerId?: string
+  modelId?: string
+}
 
 function localDateToEpoch(d: Date): number {
   return Math.floor(new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 1000)
@@ -10,7 +21,7 @@ function localDateToEpochEndExclusive(d: Date): number {
   return Math.floor(new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime() / 1000)
 }
 
-function toTauriParams(params: FilterParams): any {
+function toTauriParams(params: FilterParams): TauriFilterParams {
   return {
     fromEpoch: params.fromDate ? localDateToEpoch(params.fromDate) : undefined,
     toEpoch: params.toDate ? localDateToEpochEndExclusive(params.toDate) : undefined,
@@ -39,97 +50,97 @@ export const platformAdapter: PlatformAdapter = {
     return invoke<RefreshResult>('refresh_database')
   },
   // 查询 — 日期转字符串给 Rust
-  async querySummary(params: FilterParams) {
-    return invoke('query_summary', { params: toTauriParams(params) })
+  async querySummary(params: FilterParams): Promise<SummaryData> {
+    return invoke<SummaryData>('query_summary', { params: toTauriParams(params) })
   },
-  async queryByModel(params: FilterParams) {
-    return invoke('query_by_model', { params: toTauriParams(params) })
+  async queryByModel(params: FilterParams): Promise<ModelBreakdown[]> {
+    return invoke<ModelBreakdown[]>('query_by_model', { params: toTauriParams(params) })
   },
-  async queryByProvider(params: FilterParams) {
-    return invoke('query_by_provider', { params: toTauriParams(params) })
+  async queryByProvider(params: FilterParams): Promise<ProviderBreakdown[]> {
+    return invoke<ProviderBreakdown[]>('query_by_provider', { params: toTauriParams(params) })
   },
-  async queryPrecompute(params: FilterParams) {
-    return invoke('query_precompute', { params: toTauriParams(params) })
+  async queryPrecompute(params: FilterParams): Promise<PrecomputeQueryResult> {
+    return invoke<PrecomputeQueryResult>('query_precompute', { params: toTauriParams(params) })
   },
-  async queryRealtime() {
-    return invoke('query_realtime')
+  async queryRealtime(): Promise<RealtimeBucket[]> {
+    return invoke<RealtimeBucket[]>('query_realtime')
   },
-  async queryRealtimeLogs(since?: number) {
-    return invoke('query_realtime_logs', { since: since ?? null })
+  async queryRealtimeLogs(since?: number): Promise<RealtimeRequestLog[]> {
+    return invoke<RealtimeRequestLog[]>('query_realtime_logs', { since: since ?? null })
   },
-  async querySessionsWithCost(params: FilterParams) {
-    return invoke('query_sessions_with_cost', { params: toTauriParams(params) })
+  async querySessionsWithCost(params: FilterParams): Promise<SessionWithCost[]> {
+    return invoke<SessionWithCost[]>('query_sessions_with_cost', { params: toTauriParams(params) })
   },
   // 定价
-  async getAllPricing() {
-    return invoke('get_all_pricing')
+  async getAllPricing(): Promise<PricingData[]> {
+    return invoke<PricingData[]>('get_all_pricing')
   },
-  async setPricingOverride(data: PricingOverrideData) {
-    return invoke('set_pricing_override', {
+  async setPricingOverride(data: PricingOverrideData): Promise<void> {
+    return invoke<void>('set_pricing_override', {
       modelId: data.modelId, input: data.input, output: data.output,
       cacheRead: data.cacheRead, cacheCreation: data.cacheCreation
     })
   },
-  async removePricingOverride(modelId: string) {
-    return invoke('remove_pricing_override', { modelId })
+  async removePricingOverride(modelId: string): Promise<void> {
+    return invoke<void>('remove_pricing_override', { modelId })
   },
-  async addTimePricingRule(data: TimePricingRuleData) {
-    return invoke('add_time_pricing_rule', {
+  async addTimePricingRule(data: TimePricingRuleData): Promise<void> {
+    return invoke<void>('add_time_pricing_rule', {
       modelId: data.modelId, startTime: data.startTime, endTime: data.endTime,
       input: data.input, output: data.output, cacheRead: data.cacheRead,
       cacheCreation: data.cacheCreation, label: data.label
     })
   },
-  async updateTimePricingRule(data: UpdateTimePricingRuleData) {
-    return invoke('update_time_pricing_rule', {
+  async updateTimePricingRule(data: UpdateTimePricingRuleData): Promise<void> {
+    return invoke<void>('update_time_pricing_rule', {
       id: data.id, startTime: data.startTime, endTime: data.endTime,
       input: data.input, output: data.output, cacheRead: data.cacheRead,
       cacheCreation: data.cacheCreation, label: data.label
     })
   },
-  async deleteTimePricingRule(data: { modelId: string; startTime: number; endTime: number; id: number }) {
-    return invoke('delete_time_pricing_rule', {
-      modelId: data.modelId, startTime: data.startTime, endTime: data.endTime, id: data.id
+  async deleteTimePricingRule(data: { id: number }): Promise<void> {
+    return invoke<void>('delete_time_pricing_rule', {
+      id: data.id
     })
   },
-  async refreshPricing() {
-    return invoke('refresh_pricing')
+  async refreshPricing(): Promise<void> {
+    return invoke<void>('refresh_pricing')
   },
-  async saveOverrideContextTier(data: { modelId: string; threshold: number; input: number; output: number; cacheRead: number; cacheCreation: number }) {
-    return invoke('save_override_context_tier', {
+  async saveOverrideContextTier(data: { modelId: string; threshold: number; input: number; output: number; cacheRead: number; cacheCreation: number }): Promise<void> {
+    return invoke<void>('save_override_context_tier', {
       modelId: data.modelId, threshold: data.threshold, input: data.input, output: data.output,
       cacheRead: data.cacheRead, cacheCreation: data.cacheCreation
     })
   },
-  async deleteOverrideContextTier(data: { modelId: string; threshold: number }) {
-    return invoke('delete_override_context_tier', {
+  async deleteOverrideContextTier(data: { modelId: string; threshold: number }): Promise<void> {
+    return invoke<void>('delete_override_context_tier', {
       modelId: data.modelId, threshold: data.threshold
     })
   },
-  async saveTimeRuleContextTier(data: { modelId: string; startTime: number; endTime: number; threshold: number; input: number; output: number; cacheRead: number; cacheCreation: number }) {
-    return invoke('save_time_rule_context_tier', {
+  async saveTimeRuleContextTier(data: { modelId: string; startTime: number; endTime: number; threshold: number; input: number; output: number; cacheRead: number; cacheCreation: number }): Promise<void> {
+    return invoke<void>('save_time_rule_context_tier', {
       modelId: data.modelId, startTime: data.startTime, endTime: data.endTime,
       threshold: data.threshold, input: data.input, output: data.output,
       cacheRead: data.cacheRead, cacheCreation: data.cacheCreation
     })
   },
-  async updateTimeRuleContextTier(data: { id: number; input: number; output: number; cacheRead: number; cacheCreation: number }) {
-    return invoke('update_time_rule_context_tier', {
+  async updateTimeRuleContextTier(data: { id: number; input: number; output: number; cacheRead: number; cacheCreation: number }): Promise<void> {
+    return invoke<void>('update_time_rule_context_tier', {
       id: data.id, input: data.input, output: data.output,
       cacheRead: data.cacheRead, cacheCreation: data.cacheCreation
     })
   },
-  async deleteTimeRuleContextTier(id: number) {
-    return invoke('delete_time_rule_context_tier', { id })
+  async deleteTimeRuleContextTier(id: number): Promise<void> {
+    return invoke<void>('delete_time_rule_context_tier', { id })
   },
-  async fetchCloudPricing() {
-    return invoke('fetch_cloud_pricing')
+  async fetchCloudPricing(): Promise<void> {
+    return invoke<void>('fetch_cloud_pricing')
   },
-  async addUserAlias(modelId: string, alias: string) {
-    return invoke('add_user_alias', { modelId, alias })
+  async addUserAlias(modelId: string, alias: string): Promise<void> {
+    return invoke<void>('add_user_alias', { modelId, alias })
   },
-  async removeUserAlias(modelId: string, alias: string) {
-    return invoke('remove_user_alias', { modelId, alias })
+  async removeUserAlias(modelId: string, alias: string): Promise<void> {
+    return invoke<void>('remove_user_alias', { modelId, alias })
   },
   async getSessionTitles(sessionIds: string[]) {
     return invoke<Record<string, { title: string; project: string }>>('get_session_titles', { sessionIds })

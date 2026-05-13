@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { platformAdapter } from '@/platform'
-import type { SummaryData, ModelBreakdown, ProviderBreakdown } from '@/types/database'
-import type { FilterParams } from '@/types/database'
+import type { SummaryData, ModelBreakdown, ProviderBreakdown, FilterParams } from '@/types/database'
+import type { PrecomputedResult } from '@/types/common'
 
 // 查询结果缓存 store
 export const useQueryStore = defineStore('query', () => {
@@ -10,17 +10,24 @@ export const useQueryStore = defineStore('query', () => {
   const totalCost = ref(0)
   const modelBreakdown = ref<ModelBreakdown[]>([])
   const providerBreakdown = ref<ProviderBreakdown[]>([])
-  const precomputed = ref<any>(null)
+  const precomputed = ref<PrecomputedResult | null>(null)
   const queryVersion = ref(0)  // 防竞态
   const unpricedModels = ref<string[]>([])
   const loading = ref(false)
   let lastParamsKey = ''
 
-  function setResults(data: any): void {
+  interface QueryResults {
+    summary: SummaryData | null
+    modelBreakdown: ModelBreakdown[]
+    providerBreakdown: ProviderBreakdown[]
+    precomputed: PrecomputedResult | null
+  }
+
+  function setResults(data: QueryResults): void {
     queryVersion.value++
     summary.value = data.summary
     totalCost.value = data.precomputed?.modelCosts
-      ? Object.values(data.precomputed.modelCosts as Record<string, number>).reduce((a, b) => a + b, 0)
+      ? Object.values(data.precomputed.modelCosts).reduce((a, b) => a + b, 0)
       : 0
     modelBreakdown.value = data.modelBreakdown || []
     providerBreakdown.value = data.providerBreakdown || []

@@ -135,7 +135,8 @@ import PricingCard from '@/components/pricing/PricingCard.vue'
 import PricingEditDialog from '@/components/pricing/PricingEditDialog.vue'
 import TimePricingDialog from '@/components/pricing/TimePricingDialog.vue'
 import AliasDialog from '@/components/pricing/AliasDialog.vue'
-import type { PricingData, TimePricingRule, CloudPricingTimeRule, ContextTier } from '@/types/pricing'
+import { getActiveRate } from '@/utils/pricing'
+import type { PricingData, TimePricingRule, ContextTier } from '@/types/pricing'
 import { epochToDateStr } from '@/utils/format'
 
 const dbStore = useDatabaseStore()
@@ -236,36 +237,15 @@ interface CardEntry extends PricingData {
 
 const allCards = computed<CardEntry[]>(() => {
   const st = simTokens.value
-  const now = Math.floor(Date.now() / 1000)
   const contextSize = st.input + st.cacheRead
   return pricingStore.pricingData
     .filter(p => !searchModel.value || p.modelId.includes(searchModel.value) || (p.aliases && p.aliases.some((a: string) => a.includes(searchModel.value))))
     .map(p => {
-      let inp: number, out: number, cr: number, cc: number
-      // 优先级：用户时间规则 > 云端时间规则 > 默认定价
-      const rule = p.timeRules?.find(r => now >= r.startTime && now <= r.endTime)
-        || p.cloudTimeRules?.find(r => now >= r.startTime && now <= r.endTime)
-      if (rule) {
-        const tier = resolveTier(rule.contextTiers || [], contextSize)
-        if (tier) {
-          inp = tier.inputCostPerMillion; out = tier.outputCostPerMillion
-          cr = tier.cacheReadCostPerMillion; cc = tier.cacheCreationCostPerMillion
-        } else {
-          inp = rule.inputCostPerMillion; out = rule.outputCostPerMillion
-          cr = rule.cacheReadCostPerMillion; cc = rule.cacheCreationCostPerMillion
-        }
-      } else {
-        const tier = resolveTier(p.contextTiers || [], contextSize)
-        if (tier) {
-          inp = tier.inputCostPerMillion; out = tier.outputCostPerMillion
-          cr = tier.cacheReadCostPerMillion; cc = tier.cacheCreationCostPerMillion
-        } else {
-          inp = p.inputCostPerMillion; out = p.outputCostPerMillion
-          cr = p.cacheReadCostPerMillion; cc = p.cacheCreationCostPerMillion
-        }
-      }
-      const cost = inp * st.input / 1_000_000 + out * st.output / 1_000_000
-        + cr * st.cacheRead / 1_000_000 + cc * st.cacheCreation / 1_000_000
+      const rates = getActiveRate(p, contextSize)
+      const cost = rates.inputRate * st.input / 1_000_000
+        + rates.outputRate * st.output / 1_000_000
+        + rates.cacheReadRate * st.cacheRead / 1_000_000
+        + rates.cacheCreationRate * st.cacheCreation / 1_000_000
       return {
         ...p,
         modelName: p.modelId,
@@ -274,16 +254,6 @@ const allCards = computed<CardEntry[]>(() => {
     })
     .sort((a, b) => b.computedCost - a.computedCost)
 })
-
-function resolveTier(tiers: ContextTier[], contextSize: number): ContextTier | null {
-  let best: ContextTier | null = null
-  for (const tier of tiers) {
-    if (tier.threshold <= contextSize && (!best || tier.threshold > best.threshold)) {
-      best = tier
-    }
-  }
-  return best
-}
 
 const usedCards = computed(() => allCards.value.filter(c => c.isUsed))
 const unusedCards = computed(() => allCards.value.filter(c => !c.isUsed))
@@ -308,7 +278,7 @@ async function loadPricingData(): Promise<void> {
   try {
     const pricing = await platformAdapter.getAllPricing()
     pricingStore.pricingData = pricing
-  } catch { /* ignore */ }
+  } catch (e) { console.error('加载定价数据失败', e) }
 }
 
 // 保存定价覆盖
@@ -465,9 +435,6 @@ async function onConfirmTimeRule(data: { label: string; startTime: number; endTi
 
 async function onDeleteTimeRule(rule: { id: number; modelId: string; startTime: number; endTime: number }): Promise<void> {
   await platformAdapter.deleteTimePricingRule({
-    modelId: rule.modelId,
-    startTime: rule.startTime,
-    endTime: rule.endTime,
     id: rule.id
   })
   await platformAdapter.refreshPricing()

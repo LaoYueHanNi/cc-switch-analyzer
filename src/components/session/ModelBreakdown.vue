@@ -41,7 +41,7 @@ defineProps<{
     cacheCreationCost?: number
     totalCost?: number
     totalTokens?: number
-    contextTierCosts?: Array<{ threshold: number; cost: number }>
+    contextTierCosts?: Array<{ threshold: number; cost: number; tokens: number }>
   }>
 }>()
 

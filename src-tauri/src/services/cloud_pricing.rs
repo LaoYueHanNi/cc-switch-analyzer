@@ -3,6 +3,8 @@ use std::time::Duration;
 use crate::models::CloudPricingData;
 
 const TIMEOUT_SECS: u64 = 5;
+/// 响应体最大字节数（1MB），防止恶意服务器返回巨大 payload 耗尽内存
+const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 
 /// 从云端拉取定价 JSON 并解析
 pub fn fetch_cloud_pricing(url: &str) -> Result<CloudPricingData, String> {
@@ -19,6 +21,8 @@ pub fn fetch_cloud_pricing(url: &str) -> Result<CloudPricingData, String> {
 
     let body: String = response
         .body_mut()
+        .with_config()
+        .limit(MAX_RESPONSE_BYTES)
         .read_to_string()
         .map_err(|e| format!("读取云端定价响应失败: {}", e))?;
 
