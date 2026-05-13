@@ -73,10 +73,15 @@ const filterStore = useFilterStore()
 const queryStore = useQueryStore()
 const { quickDateQuery } = useFilter()
 
-const activeQuickDays = ref<number | null>(30)
+const activeQuickDays = ref<number | null>(1)
 const dateRange = ref<[number, number] | null>(null)
+let skipActiveReset = false
 
 watch(dateRange, (val) => {
+  if (skipActiveReset) {
+    skipActiveReset = false
+    return
+  }
   if (val) {
     filterStore.fromDate = new Date(val[0])
     filterStore.toDate = new Date(val[1])
@@ -92,6 +97,7 @@ watch([() => filterStore.fromDate, () => filterStore.toDate], ([f, t]) => {
   if (f && t) {
     const ts = [f.getTime(), t.getTime()] as [number, number]
     if (!dateRange.value || dateRange.value[0] !== ts[0] || dateRange.value[1] !== ts[1]) {
+      skipActiveReset = true
       dateRange.value = ts
     }
   }

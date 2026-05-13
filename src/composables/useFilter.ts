@@ -10,7 +10,7 @@ export function useFilter() {
   async function quickDateQuery(days: number): Promise<void> {
     const toDate = new Date()
     const fromDate = new Date()
-    fromDate.setDate(fromDate.getDate() - days)
+    fromDate.setDate(fromDate.getDate() - (days - 1))
     filterStore.fromDate = fromDate
     filterStore.toDate = toDate
     await queryStore.executeQuery(filterStore.filterParams)

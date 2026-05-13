@@ -34,15 +34,10 @@ export const useFilterStore = defineStore('filter', () => {
     dateRangeMax.value = maxDate
   }
 
-  // 设置日期范围（首次加载，默认最近 30 天）
+  // 设置日期范围（首次加载，默认当天）
   function setDateRange(min: number, max: number): void {
     const toDateVal = new Date(max * 1000)
-    const fromDateVal = new Date(max * 1000)
-    fromDateVal.setDate(fromDateVal.getDate() - 30)
-    // 确保不超过数据库最早日期
-    const minDate = new Date(min * 1000)
-    if (fromDateVal < minDate) fromDateVal.setTime(minDate.getTime())
-    fromDate.value = fromDateVal
+    fromDate.value = new Date(max * 1000)
     toDate.value = toDateVal
   }
 
