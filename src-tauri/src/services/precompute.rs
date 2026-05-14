@@ -296,67 +296,57 @@ pub fn aggregate_combined_breakdown(combined: &[CombinedBreakdownRow]) -> Combin
     }
 }
 
-/// 将 compute_model_context_tier_costs_from_buckets 的原始结果转换为
-/// HashMap<model, Vec<ContextTierCost>>，过滤零值并按 threshold 排序
-pub fn build_context_tier_costs(
-    tier_buckets: &[ModelContextTierBucket],
-    pricing: &PricingEngine,
-) -> HashMap<String, Vec<ContextTierCost>> {
-    let model_tiers = compute_model_context_tier_costs_from_buckets(tier_buckets, pricing);
-    model_tiers
-        .into_iter()
-        .map(|(model, tiers)| {
-            let mut vec: Vec<ContextTierCost> = tiers
-                .into_iter()
-                .filter(|(_, (c, _))| *c > 0.0)
-                .map(|(threshold, (cost, tokens))| ContextTierCost { threshold, cost, tokens })
-                .collect();
-            vec.sort_by_key(|t| t.threshold);
-            (model, vec)
-        })
-        .collect()
-}
-
-/// 从 SQL 预聚合桶计算上下文档位费用
-/// 返回 HashMap<model, HashMap<threshold, (cost, tokens)>>
-pub fn compute_model_context_tier_costs_from_buckets(
-    buckets: &[crate::models::ModelContextTierBucket],
+/// 从 tier buckets 一次性计算 tier costs + 模型总费用（含四维分解）
+/// 等价于逐条请求调用 get_pricing_at_with_context 后求和
+pub fn build_context_tier_and_model_costs(
+    tier_buckets: &[crate::models::ModelContextTierBucket],
     ps: &PricingEngine,
-) -> HashMap<String, HashMap<i64, (f64, i64)>> {
-    let mut result: HashMap<String, HashMap<i64, (f64, i64)>> = HashMap::new();
-    // 预计算哪些模型有上下文 tier，避免逐桶重复查询
-    let mut has_tiers_cache: HashMap<String, bool> = HashMap::new();
-    for bucket in buckets {
-        // 使用桶的 context_tier（即 SQL CASE 匹配到的阈值）作为上下文大小来做定价查找，
-        // 不能用聚合后的 input_tokens + cache_read（那是整个桶的总和，不代表单次请求的上下文）。
-        // base 桶用 0，分级桶用对应的阈值。
+) -> (HashMap<String, Vec<ContextTierCost>>, HashMap<String, f64>, HashMap<String, Vec<f64>>) {
+    let mut tier_costs_map: HashMap<String, Vec<ContextTierCost>> = HashMap::new();
+    let mut model_costs: HashMap<String, f64> = HashMap::new();
+    let mut model_breakdown: HashMap<String, Vec<f64>> = HashMap::new();
+
+    for bucket in tier_buckets {
         let pricing_context = bucket.context_tier.max(0);
         let pricing = match ps.get_pricing_at_with_context(&bucket.model, bucket.representative_epoch, pricing_context) {
             Some(p) => p,
             None => continue,
         };
-        let cost = ps.calculate_cost(
+        let bd = ps.calculate_cost_breakdown(
             &pricing,
             bucket.input_tokens,
             bucket.output_tokens,
             bucket.cache_read,
             bucket.cache_creation,
         );
-        let tier_key = if *has_tiers_cache.entry(bucket.model.clone()).or_insert_with(|| ps.model_has_context_tiers(&bucket.model)) {
-            // 将全局阈值映射回模型自己的实际 tier
-            ps.get_matched_tier_threshold(&bucket.model, bucket.representative_epoch, pricing_context)
-                .unwrap_or(0)
-        } else {
-            0
-        };
+        let cost = bd[0] + bd[1] + bd[2] + bd[3];
+
+        // 累加四维分解
+        let e = model_breakdown.entry(bucket.model.clone()).or_insert_with(|| vec![0.0, 0.0, 0.0, 0.0]);
+        e[0] += bd[0]; e[1] += bd[1]; e[2] += bd[2]; e[3] += bd[3];
+
+        // 累加 tier costs
+        let tier_key = ps
+            .get_matched_tier_threshold(&bucket.model, bucket.representative_epoch, pricing_context)
+            .unwrap_or(0);
         let tokens = bucket.input_tokens + bucket.output_tokens + bucket.cache_read + bucket.cache_creation;
-        let entry = result
+        let entry = tier_costs_map
             .entry(bucket.model.clone())
-            .or_default()
-            .entry(tier_key)
-            .or_insert((0.0, 0));
-        entry.0 += cost;
-        entry.1 += tokens;
+            .or_default();
+        match entry.iter_mut().find(|t| t.threshold == tier_key) {
+            Some(existing) => { existing.cost += cost; existing.tokens += tokens; }
+            None => entry.push(ContextTierCost { threshold: tier_key, cost, tokens }),
+        }
     }
-    result
+
+    // 模型总费用 = 四维分解之和
+    for (model, bd) in &model_breakdown {
+        model_costs.insert(model.clone(), bd[0] + bd[1] + bd[2] + bd[3]);
+    }
+
+    for tiers in tier_costs_map.values_mut() {
+        tiers.sort_by_key(|t| t.threshold);
+    }
+
+    (tier_costs_map, model_costs, model_breakdown)
 }

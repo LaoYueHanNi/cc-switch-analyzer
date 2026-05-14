@@ -468,42 +468,6 @@ impl PricingEngine {
         self.merged.len()
     }
 
-    /// 判断模型是否有上下文档位定价（含 override / 时间规则 / 云端时间规则中的 tiers）
-    pub fn model_has_context_tiers(&self, model_id: &str) -> bool {
-        let resolved = match self.resolve_model_id(model_id) {
-            Some(r) => r,
-            None => return false,
-        };
-
-        if let Some(tiers) = self.override_tiers.get(&resolved) {
-            if !tiers.is_empty() {
-                return true;
-            }
-        }
-
-        if let Some(rules) = self.time_overrides_by_model.get(&resolved) {
-            for rule in rules {
-                if let Some(tiers) = self.time_rule_tiers.get(&rule.id) {
-                    if !tiers.is_empty() {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        if let Some(rules) = self.cloud_time_rules_by_model.get(&resolved) {
-            for rule in rules {
-                if let Some(tiers) = self.cloud_time_rule_tiers.get(&(resolved.to_owned(), rule.start_time, rule.end_time)) {
-                    if !tiers.is_empty() {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        false
-    }
-
     /// 收集所有已知的上下文档位阈值，用于 SQL 端预聚合
     pub fn get_all_tier_thresholds(&self) -> Vec<i64> {
         let mut thresholds: Vec<i64> = self.override_tiers.values()

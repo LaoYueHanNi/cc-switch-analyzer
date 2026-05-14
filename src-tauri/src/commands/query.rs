@@ -164,8 +164,31 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
     let tz_offset = params.tz_offset.unwrap_or(0);
     let mut precomputed = precompute_costs(&agg.daily_trend, &agg.provider_model_tokens, &pricing, tz_offset);
 
-    // Per-model 上下文档位计费比例
-    precomputed.model_context_tier_costs = build_context_tier_costs(&tier_buckets, &pricing);
+    // Per-model 上下文档位计费比例 + 上下文感知模型费用（替代非上下文感知的 precompute_costs 结果）
+    let (tier_costs, ctx_model_costs, ctx_model_breakdown) = build_context_tier_and_model_costs(&tier_buckets, &pricing);
+    precomputed.model_context_tier_costs = tier_costs;
+    if !ctx_model_costs.is_empty() {
+        // 用上下文感知的费用覆盖非上下文感知的结果
+        precomputed.model_costs = ctx_model_costs;
+        precomputed.model_cost_breakdown = ctx_model_breakdown;
+
+        // 重新按 Token 比例分配供应商费用
+        precomputed.provider_costs.clear();
+        let mut model_total_tokens: HashMap<String, i64> = HashMap::new();
+        for pmt in &agg.provider_model_tokens {
+            let total = pmt.input_tokens + pmt.output_tokens + pmt.cache_read + pmt.cache_creation;
+            *model_total_tokens.entry(pmt.model.clone()).or_insert(0) += total;
+        }
+        for pmt in &agg.provider_model_tokens {
+            let model_cost = precomputed.model_costs.get(&pmt.model).copied().unwrap_or(0.0);
+            if model_cost <= 0.0 { continue; }
+            let pmt_tokens = pmt.input_tokens + pmt.output_tokens + pmt.cache_read + pmt.cache_creation;
+            let total_tokens = model_total_tokens.get(&pmt.model).copied().unwrap_or(0);
+            if total_tokens <= 0 || pmt_tokens <= 0 { continue; }
+            *precomputed.provider_costs.entry(pmt.provider_id.clone()).or_insert(0.0) +=
+                model_cost * (pmt_tokens as f64 / total_tokens as f64);
+        }
+    }
 
     Ok(PrecomputeQueryResult {
         summary,
