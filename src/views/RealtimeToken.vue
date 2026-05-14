@@ -231,6 +231,7 @@ function groupTierLabel(group: SessionGroup): string {
 }
 
 function shortSession(sessionId: string): string {
+  if (sessionId.startsWith('ses_')) return sessionId.slice(0, 8)
   const parts = sessionId.split('-')
   return parts[0] || sessionId.slice(0, 8)
 }

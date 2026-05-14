@@ -57,6 +57,7 @@ const themeOverrides = computed(() => ({
   --color-teal-bg: #e8f8f5;
   --color-blue-bg: #eef5ff;
   --color-purple: #8e44ad;
+  --color-purple-bg: #f3e5f5;
   --color-orange: #f39c12;
   --color-blue: #2980b9;
   --color-dark-orange: #d35400;
@@ -86,6 +87,7 @@ html.dark {
   --color-teal-bg: #1a3a30;
   --color-blue-bg: #1a2a40;
   --color-purple: #b370cf;
+  --color-purple-bg: #2a1a30;
   --color-orange: #ffc857;
   --color-blue: #5dade2;
   --color-dark-orange: #e67e22;

@@ -57,6 +57,10 @@ impl AppDbService {
             self.backup_before_migration(3)?;
             self.migrate_v4()?;
         }
+        if version < 5 {
+            self.backup_before_migration(4)?;
+            self.migrate_v5()?;
+        }
 
         Ok(())
     }
@@ -242,6 +246,14 @@ impl AppDbService {
             }
         }
         self.set_schema_version(4)?;
+        Ok(())
+    }
+
+    fn migrate_v5(&mut self) -> Result<(), String> {
+        // 清空旧 source='ai' 的标题缓存，触发按新 source 逻辑重新拉取
+        self.db.execute_batch("DELETE FROM session_titles WHERE source = 'ai' OR source = ''")
+            .map_err(|e| format!("迁移 v5 清空标题缓存失败: {}", e))?;
+        self.set_schema_version(5)?;
         Ok(())
     }
 
@@ -624,13 +636,13 @@ impl AppDbService {
 
     // ========== 会话标题 ==========
 
-    pub fn get_session_titles(&self, session_ids: &[String]) -> Result<HashMap<String, String>, String> {
+    pub fn get_session_titles(&self, session_ids: &[String]) -> Result<HashMap<String, (String, String)>, String> {
         if session_ids.is_empty() {
             return Ok(HashMap::new());
         }
         let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
         let sql = format!(
-            "SELECT session_id, title FROM session_titles WHERE session_id IN ({})",
+            "SELECT session_id, title, COALESCE(source, '') FROM session_titles WHERE session_id IN ({})",
             placeholders.join(",")
         );
         let refs: Vec<&dyn rusqlite::types::ToSql> = session_ids
@@ -639,20 +651,20 @@ impl AppDbService {
             .collect();
         let mut stmt = self.db.prepare(&sql).map_err(|e| format!("查询会话标题失败: {}", e))?;
         let rows = stmt.query_map(refs.as_slice(), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
         }).map_err(|e| format!("查询会话标题失败: {}", e))?;
         let mut result = HashMap::new();
         for row in rows {
-            let (sid, title) = row.map_err(|e| format!("读取会话标题失败: {}", e))?;
-            result.insert(sid, title);
+            let (sid, title, source) = row.map_err(|e| format!("读取会话标题失败: {}", e))?;
+            result.insert(sid, (title, source));
         }
         Ok(result)
     }
 
-    pub fn save_session_title(&self, session_id: &str, title: &str) -> Result<(), String> {
+    pub fn save_session_title(&self, session_id: &str, title: &str, source: &str) -> Result<(), String> {
         self.db.execute(
-            "INSERT OR REPLACE INTO session_titles (session_id, title, created_at) VALUES (?, ?, strftime('%s','now'))",
-            params![session_id, title],
+            "INSERT OR REPLACE INTO session_titles (session_id, title, source, created_at) VALUES (?, ?, ?, strftime('%s','now'))",
+            params![session_id, title, source],
         ).map_err(|e| format!("保存会话标题失败: {}", e))?;
         Ok(())
     }
@@ -964,6 +976,7 @@ impl AppDbService {
             CREATE TABLE IF NOT EXISTS session_titles (
                 session_id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
                 created_at INTEGER DEFAULT (strftime('%s','now'))
             );
             CREATE TABLE IF NOT EXISTS pricing_overrides (
@@ -1018,7 +1031,7 @@ impl AppDbService {
                 PRIMARY KEY (model_id, alias)
             );"
         ).map_err(|e| format!("初始化内存表失败: {}", e))?;
-        self.set_setting("schema_version", "4")?;
+        self.set_setting("schema_version", "5")?;
         Ok(())
     }
 }
@@ -1115,9 +1128,10 @@ mod tests {
     fn test_session_titles() {
         let db = create_db();
         assert!(db.get_session_titles(&[]).unwrap().is_empty());
-        db.save_session_title("sess-1", "title-1").unwrap();
+        db.save_session_title("sess-1", "title-1", "jsonl").unwrap();
         let titles = db.get_session_titles(&["sess-1".to_string()]).unwrap();
-        assert_eq!(titles.get("sess-1").unwrap(), "title-1");
+        assert_eq!(titles.get("sess-1").unwrap().0, "title-1");
+        assert_eq!(titles.get("sess-1").unwrap().1, "jsonl");
         assert!(titles.get("sess-2").is_none());
     }
 

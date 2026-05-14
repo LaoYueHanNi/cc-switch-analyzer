@@ -28,6 +28,7 @@
         v-bind="s"
         :title="getTitle(s.sessionId)"
         :project="getProject(s.sessionId)"
+        :title-source="getSource(s.sessionId)"
       />
     </div>
   </div>
@@ -46,7 +47,7 @@ import type { SessionModelCostEntry } from '@/types/common'
 
 const dbStore = useDatabaseStore()
 const filterStore = useFilterStore()
-const { getTitle, getProject, fetchTitles } = useSessionTitles()
+const { getTitle, getProject, getSource, fetchTitles } = useSessionTitles()
 const loading = ref(false)
 const sortBy = ref('totalCost')
 const isActive = ref(true)
@@ -72,6 +73,7 @@ interface SessionCardData {
   cacheHitRate: number
   timestamps: number[]
   modelBreakdown: SessionModelCostEntry[]
+  sources: string[]
 }
 
 const sessionsRaw = ref<SessionCardData[]>([])

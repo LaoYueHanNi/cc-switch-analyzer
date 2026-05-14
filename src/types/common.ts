@@ -90,4 +90,5 @@ export interface SessionWithCost {
   durationSec: number
   timestamps: number[]
   modelBreakdown: SessionModelCostEntry[]
+  sources: string[]
 }

@@ -293,7 +293,7 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
 
 #[tauri::command]
 pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionWithCost>, String> {
-    let (sessions, session_request_tokens, session_model_tokens, max_context_widths, timestamps_map) = {
+    let (sessions, session_request_tokens, session_model_tokens, max_context_widths, timestamps_map, session_sources) = {
         let sources = state.data_sources.read().map_err(|e| e.to_string())?;
         require_sources!(sources);
 
@@ -312,6 +312,13 @@ pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) ->
         });
 
         // 合并后取 top N 作为已知 ID 列表
+        let mut session_sources: HashMap<String, Vec<String>> = HashMap::new();
+        for (i, list) in session_lists.iter().enumerate() {
+            let label = sources[i].db_type.label().to_string();
+            for s in list {
+                session_sources.entry(s.session_id.clone()).or_default().push(label.clone());
+            }
+        }
         let mut all_sessions: Vec<SessionBreakdown> = session_lists.into_iter().flatten().collect();
         all_sessions.sort_by(|a, b| b.requests.cmp(&a.requests));
         let top_ids: Vec<String> = all_sessions.iter().take(crate::utils::SESSION_TOP_N as usize).map(|s| s.session_id.clone()).collect();
@@ -351,7 +358,7 @@ pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) ->
             }
         }
 
-        (all_sessions, all_request_tokens, all_model_tokens, max_ctx, ts_map)
+        (all_sessions, all_request_tokens, all_model_tokens, max_ctx, ts_map, session_sources)
     };
 
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
@@ -420,6 +427,7 @@ pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) ->
                 duration_sec,
                 timestamps,
                 model_breakdown,
+                sources: session_sources.get(&s.session_id).cloned().unwrap_or_default(),
             }
         })
         .collect();

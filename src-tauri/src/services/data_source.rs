@@ -35,6 +35,15 @@ pub trait DataSource: Send + Sync {
     fn get_model_context_tier_buckets(&self, params: &FilterParams, thresholds: &[i64]) -> Result<Vec<ModelContextTierBucket>, String>;
     fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String>;
     fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String>;
+
+    /// 从数据源获取会话标题和项目名。默认不提供。
+    /// 返回 HashMap<session_id, (title, project_name)>
+    fn get_session_titles_from_provider(
+        &self,
+        _session_ids: &[String],
+    ) -> Option<Result<HashMap<String, (String, String)>, String>> {
+        None
+    }
 }
 
 #[derive(Debug)]

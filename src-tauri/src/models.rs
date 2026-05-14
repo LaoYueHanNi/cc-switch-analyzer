@@ -359,6 +359,7 @@ pub struct SessionWithCost {
     pub duration_sec: i64,
     pub timestamps: Vec<i64>,
     pub model_breakdown: Vec<SessionModelCostEntry>,
+    pub sources: Vec<String>,
 }
 
 // ========== 刷新检测结果 ==========

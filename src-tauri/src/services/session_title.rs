@@ -1,12 +1,42 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+
+// ========== 可扩展的标题解析接口 ==========
+
+/// 标题解析接口，不同来源可以实现此 trait
+pub trait TitleProvider: Send + Sync {
+    /// 批量获取会话标题。返回能解析的 session_id -> (title, project)
+    fn get_titles(&self, session_ids: &[String]) -> HashMap<String, (String, String)>;
+}
+
+/// 从 Claude 本地 JSONL 文件提取标题
+pub struct ClaudeJsonlTitleProvider;
+
+impl TitleProvider for ClaudeJsonlTitleProvider {
+    fn get_titles(&self, session_ids: &[String]) -> HashMap<String, (String, String)> {
+        let mut result = HashMap::new();
+        for id in session_ids {
+            if let Some((title, project)) = generate_title(id) {
+                result.insert(id.clone(), (title, project));
+            }
+        }
+        result
+    }
+}
+
+// ========== Claude JSONL 文件解析 ==========
 
 fn claude_projects_dir() -> PathBuf {
     dirs::home_dir().expect("无法获取 HOME 目录").join(".claude").join("projects")
 }
 
 pub fn short_session(session_id: &str) -> String {
-    session_id.split('-').next().unwrap_or(&session_id[..8.min(session_id.len())]).to_string()
+    if session_id.starts_with("ses_") {
+        session_id[..8.min(session_id.len())].to_string()
+    } else {
+        session_id.split('-').next().unwrap_or(&session_id[..8.min(session_id.len())]).to_string()
+    }
 }
 
 /// 返回 (jsonl路径, 项目文件夹名)

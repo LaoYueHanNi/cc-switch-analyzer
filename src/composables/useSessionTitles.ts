@@ -4,6 +4,7 @@ import { platformAdapter } from '@/platform'
 interface TitleInfo {
   title: string
   project: string
+  source?: string
 }
 
 export function useSessionTitles() {
@@ -15,6 +16,10 @@ export function useSessionTitles() {
 
   function getProject(sessionId: string): string {
     return sessionTitles.value.get(sessionId)?.project || ''
+  }
+
+  function getSource(sessionId: string): string {
+    return sessionTitles.value.get(sessionId)?.source || ''
   }
 
   async function fetchTitles(sessionIds: string[]): Promise<void> {
@@ -33,5 +38,5 @@ export function useSessionTitles() {
     }
   }
 
-  return { sessionTitles, getTitle, getProject, fetchTitles }
+  return { sessionTitles, getTitle, getProject, getSource, fetchTitles }
 }

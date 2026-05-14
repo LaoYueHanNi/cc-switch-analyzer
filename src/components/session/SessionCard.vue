@@ -2,7 +2,12 @@
   <div class="session-card">
     <!-- 区域一：概览信息 -->
     <div class="session-overview">
-      <div class="session-id" :title="sessionId">{{ shortId }}</div>
+      <div class="session-id-row">
+        <div class="session-id" :title="sessionId">{{ shortId }}</div>
+        <div class="session-sources" v-if="titleSource">
+          <span class="source-tag" :class="'source-' + titleSource">{{ sourceLabel }}</span>
+        </div>
+      </div>
       <div class="session-project" v-if="project" :title="project">{{ project }}</div>
       <div class="session-title" v-if="title" :title="title">{{ truncateText(title, 20) }}</div>
       <div class="session-cost">{{ formatCost(totalCost) }}</div>
@@ -57,6 +62,7 @@ const props = defineProps<{
   maxContextWidth: number
   cacheHitRate: number
   timestamps: number[]
+  titleSource?: string
   modelBreakdown: Array<{
     sessionId: string
     model: string
@@ -74,8 +80,17 @@ const props = defineProps<{
 }>()
 
 const shortId = computed(() => {
-  const parts = props.sessionId.split('-')
-  return parts[0] || props.sessionId.slice(0, 8)
+  const id = props.sessionId
+  if (id.startsWith('ses_')) return id.slice(0, 8)
+  const parts = id.split('-')
+  return parts[0] || id.slice(0, 8)
+})
+
+const sourceLabel = computed(() => {
+  const s = props.titleSource
+  if (s === 'claudecode') return 'ClaudeCode'
+  if (s === 'opencode') return 'OpenCode'
+  return ''
 })
 
 const modelBreakdownWithCosts = computed(() =>
@@ -123,15 +138,47 @@ function formatRange(start: number, end: number): string {
   flex-shrink: 0;
 }
 
+.session-id-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 2px;
+  overflow: hidden;
+}
+
 .session-id {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: 2px;
   cursor: default;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-sources {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.source-tag {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  line-height: 1.4;
+  letter-spacing: 0.3px;
+}
+
+.source-claudecode {
+  background: var(--color-blue-bg);
+  color: var(--color-blue);
+}
+
+.source-opencode {
+  background: var(--color-purple-bg, #f3e5f5);
+  color: var(--color-purple);
 }
 
 .session-project {

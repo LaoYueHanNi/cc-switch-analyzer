@@ -878,6 +878,41 @@ impl OpenCodeDbService {
 
         Self::collect_rows(rows, "读取请求日志")
     }
+
+    pub fn get_session_titles_from_db(
+        &self,
+        session_ids: &[String],
+    ) -> Result<HashMap<String, (String, String)>, String> {
+        if session_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let db = self.db()?;
+        let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "SELECT s.id, s.title, s.directory
+             FROM session s
+             WHERE s.id IN ({})",
+            placeholders.join(",")
+        );
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询会话标题失败: {}", e))?;
+        let refs: Vec<&dyn rusqlite::types::ToSql> = session_ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let rows = stmt
+            .query_map(refs.as_slice(), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| format!("查询会话标题失败: {}", e))?;
+
+        let mut result = HashMap::new();
+        for row in rows {
+            let (id, title, directory) = row.map_err(|e| format!("读取会话标题失败: {}", e))?;
+            result.insert(id, (title, directory));
+        }
+        Ok(result)
+    }
 }
 
 impl super::data_source::DataSource for OpenCodeDbService {
@@ -905,4 +940,10 @@ impl super::data_source::DataSource for OpenCodeDbService {
     fn get_model_context_tier_buckets(&self, params: &FilterParams, thresholds: &[i64]) -> Result<Vec<ModelContextTierBucket>, String> { self.get_model_context_tier_buckets(params, thresholds) }
     fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String> { self.get_minute_level_token_trend() }
     fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String> { self.get_recent_request_logs_raw(since) }
+    fn get_session_titles_from_provider(
+        &self,
+        session_ids: &[String],
+    ) -> Option<Result<HashMap<String, (String, String)>, String>> {
+        Some(self.get_session_titles_from_db(session_ids))
+    }
 }
