@@ -90,7 +90,13 @@ impl ExternalDbService {
         aliased: bool,
     ) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
         let prefix = if aliased { "l." } else { "" };
-        let mut clauses: Vec<String> = vec!["1=1".to_string()];
+        let mut clauses: Vec<String> = vec![
+            "1=1".to_string(),
+            format!(
+                "({prefix}input_tokens > 0 OR {prefix}output_tokens > 0 OR {prefix}cache_read_tokens > 0 OR {prefix}cache_creation_tokens > 0)",
+                prefix = prefix
+            ),
+        ];
         let mut binds: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
         if let Some(from_epoch) = params.from_epoch {
@@ -687,6 +693,7 @@ impl ExternalDbService {
                    SUM(cache_creation_tokens) AS cache_creation
             FROM proxy_request_logs
             WHERE created_at >= ?
+              AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
             GROUP BY bucket
             ORDER BY bucket";
 
@@ -717,6 +724,7 @@ impl ExternalDbService {
                        latency_ms
                 FROM proxy_request_logs
                 WHERE created_at > ?
+                  AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
                 ORDER BY created_at DESC", vec![Box::new(s)]),
             None => ("
                 SELECT session_id, model, provider_id, created_at,
@@ -724,6 +732,7 @@ impl ExternalDbService {
                        cache_read_tokens, cache_creation_tokens,
                        latency_ms
                 FROM proxy_request_logs
+                WHERE (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
                 ORDER BY created_at DESC
                 LIMIT 500", vec![]),
         };
