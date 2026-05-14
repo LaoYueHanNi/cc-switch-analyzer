@@ -109,7 +109,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
+defineOptions({ name: 'RealtimeToken' })
+import { computed, ref, onMounted, onActivated, onDeactivated, watch } from 'vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useRealtimePolling } from '@/composables/useRealtimePolling'
 import { useSessionTitles } from '@/composables/useSessionTitles'
@@ -253,7 +254,11 @@ onMounted(() => {
   if (dbStore.hasDatabase) startPolling()
 })
 
-onBeforeUnmount(() => {
+onActivated(() => {
+  if (dbStore.hasDatabase) startPolling(true)
+})
+
+onDeactivated(() => {
   stopPolling()
 })
 

@@ -12,11 +12,11 @@ export function useRealtimePolling() {
   let timer: ReturnType<typeof setInterval> | null = null
   let prevMaxCreatedAt = 0
 
-  function startPolling(): void {
+  function startPolling(silentFirst: boolean = false): void {
     if (isPolling.value) return
     isPolling.value = true
-    fetchData()
-    timer = setInterval(fetchData, 10_000)
+    fetchData(silentFirst)
+    timer = setInterval(() => fetchData(false), 10_000)
   }
 
   function stopPolling(): void {
@@ -27,23 +27,23 @@ export function useRealtimePolling() {
     }
   }
 
-  async function fetchData(): Promise<void> {
+  async function fetchData(silent: boolean = false): Promise<void> {
     if (isFetchingBusy) return
     isFetchingBusy = true
     try {
       if (prevMaxCreatedAt === 0) {
-        // 首次：全量加载
         const data: RealtimeRequestLog[] = await platformAdapter.queryRealtimeLogs() ?? []
         if (data.length > 0) {
           prevMaxCreatedAt = data[0].createdAt
         }
         logs.value = data
       } else {
-        // 增量：只查 created_at > prevMax 的新行
         const fresh: RealtimeRequestLog[] = await platformAdapter.queryRealtimeLogs(prevMaxCreatedAt) ?? []
         if (fresh.length > 0) {
-          for (const row of fresh) {
-            row.isNew = true
+          if (!silent) {
+            for (const row of fresh) {
+              row.isNew = true
+            }
           }
           logs.value = [...fresh, ...logs.value].slice(0, MAX_LOGS)
           prevMaxCreatedAt = fresh[0].createdAt
@@ -58,10 +58,9 @@ export function useRealtimePolling() {
   }
 
   async function refreshNow(): Promise<void> {
-    // 强制全量刷新
     prevMaxCreatedAt = 0
     logs.value = []
-    await fetchData()
+    await fetchData(false)
   }
 
   onUnmounted(stopPolling)

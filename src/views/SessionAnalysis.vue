@@ -34,6 +34,7 @@
 </template>
 
 <script setup lang="ts">
+defineOptions({ name: 'SessionAnalysis' })
 import { ref, computed, watch } from 'vue'
 import { NSelect, NSpin } from 'naive-ui'
 import { platformAdapter } from '@/platform'

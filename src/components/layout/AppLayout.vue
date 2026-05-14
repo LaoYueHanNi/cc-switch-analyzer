@@ -64,7 +64,11 @@
 
         <!-- 内容区 -->
         <div class="content-area">
-          <router-view />
+          <router-view v-slot="{ Component }">
+            <KeepAlive>
+              <component :is="Component" />
+            </KeepAlive>
+          </router-view>
         </div>
       </div>
     </div>
