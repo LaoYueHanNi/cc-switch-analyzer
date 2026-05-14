@@ -39,8 +39,8 @@ pub fn get_default_db_path() -> Result<std::path::PathBuf, String> {
 
 /// 获取默认 OpenCode 数据库路径
 pub fn get_default_opencode_db_path() -> Result<std::path::PathBuf, String> {
-    let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;
-    Ok(home.join(".local").join("share").join("opencode").join("opencode.db"))
+    let data_dir = dirs::data_dir().ok_or_else(|| "无法获取数据目录".to_string())?;
+    Ok(data_dir.join("opencode").join("opencode.db"))
 }
 
 /// 当前 Unix 秒

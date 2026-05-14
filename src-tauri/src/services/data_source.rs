@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 
 use crate::models::*;
+
+static SOURCE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub trait DataSource: Send + Sync {
     fn open(&mut self, path: &str) -> Result<(), String>;
@@ -101,10 +104,7 @@ pub fn detect_db_type(path: &str) -> Result<DbType, String> {
 
 pub fn create_source_entry(path: &str) -> Result<SourceEntry, String> {
     let db_type = detect_db_type(path)?;
-    let id = format!("{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis());
+    let id = SOURCE_ID_COUNTER.fetch_add(1, Ordering::Relaxed).to_string();
     let mut source = match &db_type {
         DbType::ExternalDb => Box::new(super::external_db::ExternalDbService::new()) as Box<dyn DataSource>,
         DbType::OpenCode => Box::new(super::opencode_db::OpenCodeDbService::new()) as Box<dyn DataSource>,
@@ -223,23 +223,41 @@ pub fn merge_provider_model_tokens(results: Vec<Vec<ProviderModelToken>>) -> Vec
 }
 
 pub fn merge_daily_trends(results: Vec<Vec<DailyTrendRow>>) -> Vec<DailyTrendRow> {
+    struct Acc { requests: i64, weighted_latency: f64 }
+    let mut data: HashMap<(String, String), Acc> = HashMap::new();
     let mut map: HashMap<(String, String), DailyTrendRow> = HashMap::new();
     for list in results {
         for row in list {
             let key = (row.day.clone(), row.model.clone());
-            map.entry(key)
+            map.entry(key.clone())
                 .and_modify(|e| {
                     e.requests += row.requests;
                     e.input_tokens += row.input_tokens;
                     e.output_tokens += row.output_tokens;
                     e.cache_read += row.cache_read;
                     e.cache_creation += row.cache_creation;
-                    // avg_latency 加权（后续重算）
                 })
-                .or_insert(row);
+                .or_insert_with(|| DailyTrendRow {
+                    day: row.day.clone(),
+                    model: row.model.clone(),
+                    requests: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_read: 0,
+                    cache_creation: 0,
+                    avg_latency: 0.0,
+                });
+            let acc = data.entry(key).or_insert(Acc { requests: 0, weighted_latency: 0.0 });
+            acc.requests += row.requests;
+            acc.weighted_latency += row.avg_latency * row.requests as f64;
         }
     }
-    let mut v: Vec<_> = map.into_values().collect();
+    let mut v: Vec<_> = map.into_values().map(|mut row| {
+        if let Some(acc) = data.get(&(row.day.clone(), row.model.clone())) {
+            row.avg_latency = if acc.requests > 0 { acc.weighted_latency / acc.requests as f64 } else { 0.0 };
+        }
+        row
+    }).collect();
     v.sort_by(|a, b| (&a.day, &a.model).cmp(&(&b.day, &b.model)));
     v
 }

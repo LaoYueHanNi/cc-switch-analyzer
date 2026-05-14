@@ -733,40 +733,46 @@ impl OpenCodeDbService {
                    OR CAST(json_extract(data, '$.tokens.output') AS INTEGER) > 0
                    OR CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER) > 0
                    OR CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER) > 0)";
-        let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
-            Some(s) => (format!(
-                "SELECT session_id,
-                       json_extract(data, '$.modelID'),
-                       json_extract(data, '$.providerID'),
-                       (time_created / 1000),
-                       CAST(json_extract(data, '$.tokens.input') AS INTEGER),
-                       CAST(json_extract(data, '$.tokens.output') AS INTEGER),
-                       CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
-                       CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
-                       (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
-                FROM message
-                WHERE (time_created / 1000) > ?
-                  AND {}
-                ORDER BY time_created DESC", base_filter).leak(),
-                vec![Box::new(s)]),
-            None => (format!(
-                "SELECT session_id,
-                       json_extract(data, '$.modelID'),
-                       json_extract(data, '$.providerID'),
-                       (time_created / 1000),
-                       CAST(json_extract(data, '$.tokens.input') AS INTEGER),
-                       CAST(json_extract(data, '$.tokens.output') AS INTEGER),
-                       CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
-                       CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
-                       (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
-                FROM message
-                WHERE {}
-                ORDER BY time_created DESC
-                LIMIT 500", base_filter).leak(),
-                vec![]),
+
+        let sql;
+        let params: Vec<Box<dyn rusqlite::types::ToSql>> = match since {
+            Some(s) => {
+                sql = format!(
+                    "SELECT session_id,
+                           json_extract(data, '$.modelID'),
+                           json_extract(data, '$.providerID'),
+                           (time_created / 1000),
+                           CAST(json_extract(data, '$.tokens.input') AS INTEGER),
+                           CAST(json_extract(data, '$.tokens.output') AS INTEGER),
+                           CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
+                           CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
+                           (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
+                    FROM message
+                    WHERE (time_created / 1000) > ?
+                      AND {}
+                    ORDER BY time_created DESC", base_filter);
+                vec![Box::new(s)]
+            }
+            None => {
+                sql = format!(
+                    "SELECT session_id,
+                           json_extract(data, '$.modelID'),
+                           json_extract(data, '$.providerID'),
+                           (time_created / 1000),
+                           CAST(json_extract(data, '$.tokens.input') AS INTEGER),
+                           CAST(json_extract(data, '$.tokens.output') AS INTEGER),
+                           CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
+                           CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
+                           (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
+                    FROM message
+                    WHERE {}
+                    ORDER BY time_created DESC
+                    LIMIT 500", base_filter);
+                vec![]
+            }
         };
 
-        let mut stmt = db.prepare(sql).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
         let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(params_refs.as_slice(), |row| {
             Ok((

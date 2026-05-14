@@ -14,14 +14,22 @@ macro_rules! require_sources {
     };
 }
 
+macro_rules! collect_from_sources {
+    ($sources:expr, $entry:ident, $method:ident($($arg:expr),*), $label:expr) => {
+        $sources.iter().filter_map(|$entry| {
+            $entry.source.$method($($arg),*).map_err(|e| {
+                log::warn!("[QUERY] {} 数据源({}) 查询失败: {}", $label, $entry.db_type.label(), e);
+                e
+            }).ok()
+        }).collect()
+    };
+}
+
 #[tauri::command]
 pub fn query_summary(params: FilterParams, state: State<AppState>) -> Result<SummaryData, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<SummaryData> = sources.iter()
-        .filter_map(|e| e.source.get_summary(&params).ok())
-        .collect();
-    if results.is_empty() { return Err("查询失败".to_string()); }
+    let results: Vec<SummaryData> = collect_from_sources!(sources, e, get_summary(&params), "summary");
     Ok(merge_summaries(results))
 }
 
@@ -29,9 +37,7 @@ pub fn query_summary(params: FilterParams, state: State<AppState>) -> Result<Sum
 pub fn query_by_model(params: FilterParams, state: State<AppState>) -> Result<Vec<ModelBreakdown>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<ModelBreakdown>> = sources.iter()
-        .filter_map(|e| e.source.get_model_breakdown(&params).ok())
-        .collect();
+    let results: Vec<Vec<ModelBreakdown>> = collect_from_sources!(sources, e, get_model_breakdown(&params), "model_breakdown");
     Ok(merge_model_breakdowns(results))
 }
 
@@ -39,9 +45,7 @@ pub fn query_by_model(params: FilterParams, state: State<AppState>) -> Result<Ve
 pub fn query_by_provider(params: FilterParams, state: State<AppState>) -> Result<Vec<ProviderBreakdown>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<ProviderBreakdown>> = sources.iter()
-        .filter_map(|e| e.source.get_provider_breakdown(&params).ok())
-        .collect();
+    let results: Vec<Vec<ProviderBreakdown>> = collect_from_sources!(sources, e, get_provider_breakdown(&params), "provider_breakdown");
     Ok(merge_provider_breakdowns(results))
 }
 
@@ -49,9 +53,7 @@ pub fn query_by_provider(params: FilterParams, state: State<AppState>) -> Result
 pub fn query_provider_model_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<ProviderModelToken>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<ProviderModelToken>> = sources.iter()
-        .filter_map(|e| e.source.get_provider_model_tokens(&params).ok())
-        .collect();
+    let results: Vec<Vec<ProviderModelToken>> = collect_from_sources!(sources, e, get_provider_model_tokens(&params), "provider_model_tokens");
     Ok(merge_provider_model_tokens(results))
 }
 
@@ -59,9 +61,7 @@ pub fn query_provider_model_tokens(params: FilterParams, state: State<AppState>)
 pub fn query_daily_trend(params: FilterParams, state: State<AppState>) -> Result<Vec<DailyTrendRow>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<DailyTrendRow>> = sources.iter()
-        .filter_map(|e| e.source.get_daily_trend(&params).ok())
-        .collect();
+    let results: Vec<Vec<DailyTrendRow>> = collect_from_sources!(sources, e, get_daily_trend(&params), "daily_trend");
     Ok(merge_daily_trends(results))
 }
 
@@ -71,8 +71,9 @@ pub fn query_sessions(params: FilterParams, state: State<AppState>) -> Result<Ve
     require_sources!(sources);
     let mut all = Vec::new();
     for entry in sources.iter() {
-        if let Ok(sessions) = entry.source.get_session_breakdown(&params) {
-            all.extend(sessions);
+        match entry.source.get_session_breakdown(&params) {
+            Ok(sessions) => all.extend(sessions),
+            Err(e) => log::warn!("[QUERY] session_breakdown 数据源({}) 查询失败: {}", entry.db_type.label(), e),
         }
     }
     all.sort_by(|a, b| b.requests.cmp(&a.requests));
@@ -86,8 +87,9 @@ pub fn query_session_model_tokens(params: FilterParams, state: State<AppState>) 
     require_sources!(sources);
     let mut all = Vec::new();
     for entry in sources.iter() {
-        if let Ok(tokens) = entry.source.get_session_model_tokens(&params) {
-            all.extend(tokens);
+        match entry.source.get_session_model_tokens(&params) {
+            Ok(tokens) => all.extend(tokens),
+            Err(e) => log::warn!("[QUERY] session_model_tokens 数据源({}) 查询失败: {}", entry.db_type.label(), e),
         }
     }
     Ok(all)
@@ -99,8 +101,9 @@ pub fn query_session_request_tokens(params: FilterParams, state: State<AppState>
     require_sources!(sources);
     let mut all = Vec::new();
     for entry in sources.iter() {
-        if let Ok(tokens) = entry.source.get_session_request_tokens(&params) {
-            all.extend(tokens);
+        match entry.source.get_session_request_tokens(&params) {
+            Ok(tokens) => all.extend(tokens),
+            Err(e) => log::warn!("[QUERY] session_request_tokens 数据源({}) 查询失败: {}", entry.db_type.label(), e),
         }
     }
     Ok(all)
@@ -112,10 +115,13 @@ pub fn query_session_timestamps(session_ids: Vec<String>, state: State<AppState>
     require_sources!(sources);
     let mut result = HashMap::new();
     for entry in sources.iter() {
-        if let Ok(map) = entry.source.get_session_timestamps(&session_ids) {
-            for (k, v) in map {
-                result.entry(k).or_insert_with(Vec::new).extend(v);
+        match entry.source.get_session_timestamps(&session_ids) {
+            Ok(map) => {
+                for (k, v) in map {
+                    result.entry(k).or_insert_with(Vec::new).extend(v);
+                }
             }
+            Err(e) => log::warn!("[QUERY] session_timestamps 数据源({}) 查询失败: {}", entry.db_type.label(), e),
         }
     }
     Ok(result)
@@ -125,9 +131,7 @@ pub fn query_session_timestamps(session_ids: Vec<String>, state: State<AppState>
 pub fn query_realtime(state: State<AppState>) -> Result<Vec<RealtimeBucket>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<RealtimeBucket>> = sources.iter()
-        .filter_map(|e| e.source.get_minute_level_token_trend().ok())
-        .collect();
+    let results: Vec<Vec<RealtimeBucket>> = collect_from_sources!(sources, e, get_minute_level_token_trend(), "realtime");
     Ok(merge_realtime_buckets(results))
 }
 
@@ -137,8 +141,9 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     require_sources!(sources);
     let mut all_raw = Vec::new();
     for entry in sources.iter() {
-        if let Ok(raw) = entry.source.get_recent_request_logs_raw(since) {
-            all_raw.extend(raw);
+        match entry.source.get_recent_request_logs_raw(since) {
+            Ok(raw) => all_raw.extend(raw),
+            Err(e) => log::warn!("[QUERY] recent_request_logs 数据源({}) 查询失败: {}", entry.db_type.label(), e),
         }
     }
     drop(sources);
@@ -175,17 +180,13 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
 pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<PrecomputeQueryResult, String> {
     log::debug!("[QUERY] query_precompute: params={:?}", params);
 
-    // Phase 1: DB queries from all sources
     let (summary, provider_breakdown, combined, tier_buckets) = {
         let sources = state.data_sources.read().map_err(|e| e.to_string())?;
         require_sources!(sources);
 
-        let summaries: Vec<SummaryData> = sources.iter()
-            .filter_map(|e| e.source.get_summary(&params).ok()).collect();
-        let provider_results: Vec<Vec<ProviderBreakdown>> = sources.iter()
-            .filter_map(|e| e.source.get_provider_breakdown(&params).ok()).collect();
-        let combined_results: Vec<Vec<CombinedBreakdownRow>> = sources.iter()
-            .filter_map(|e| e.source.get_combined_breakdown(&params).ok()).collect();
+        let summaries: Vec<SummaryData> = collect_from_sources!(sources, e, get_summary(&params), "summary");
+        let provider_results: Vec<Vec<ProviderBreakdown>> = collect_from_sources!(sources, e, get_provider_breakdown(&params), "provider_breakdown");
+        let combined_results: Vec<Vec<CombinedBreakdownRow>> = collect_from_sources!(sources, e, get_combined_breakdown(&params), "combined_breakdown");
 
         let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
         let thresholds = pricing.get_all_tier_thresholds();
@@ -194,12 +195,9 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
         let tier_results: Vec<Vec<ModelContextTierBucket>> = if thresholds.is_empty() {
             Vec::new()
         } else {
-            sources.iter()
-                .filter_map(|e| e.source.get_model_context_tier_buckets(&params, &thresholds).ok())
-                .collect()
+            collect_from_sources!(sources, e, get_model_context_tier_buckets(&params, &thresholds), "tier_buckets")
         };
 
-        // Merge
         let s = merge_summaries(summaries);
         let pb = merge_provider_breakdowns(provider_results);
         let cb = merge_combined(combined_results);
@@ -228,7 +226,6 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
 
     let agg = aggregate_combined_breakdown(&combined);
 
-    // Phase 2: Pricing computation
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
     log::debug!("[QUERY] 定价引擎模型数={}", pricing.size());
 
@@ -268,7 +265,6 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
 
 #[tauri::command]
 pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionWithCost>, String> {
-    // Phase 1: DB queries from all sources
     let (sessions, max_context_widths, session_request_tokens, session_model_tokens, timestamps_map) = {
         let sources = state.data_sources.read().map_err(|e| e.to_string())?;
         require_sources!(sources);
@@ -306,7 +302,6 @@ pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) ->
         (all_sessions, max_ctx, all_request_tokens, all_model_tokens, ts_map)
     };
 
-    // Phase 2: Pricing computation
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
 
     let session_costs = compute_session_costs(&session_request_tokens, &pricing);

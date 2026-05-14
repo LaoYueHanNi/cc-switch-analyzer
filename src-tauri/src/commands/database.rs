@@ -110,6 +110,14 @@ pub fn add_database(file_path: String, state: State<AppState>) -> Result<Vec<Sou
     let canonical_str = canonical.to_string_lossy().to_string();
     log::info!("[DB] add_database: {}", canonical_str);
 
+    // 检查是否已加载，避免重复
+    {
+        let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+        if sources.iter().any(|s| s.path == canonical_str) {
+            return Err(format!("数据库已加载: {}", canonical_str));
+        }
+    }
+
     let entry = create_source_entry(&canonical_str)?;
     log::info!("[DB] 添加成功 ({})", entry.db_type.label());
 
