@@ -596,6 +596,96 @@ impl ExternalDbService {
         Self::collect_rows(rows, "读取会话请求Token")
     }
 
+    /// 按已知 session IDs 查询请求级 token（无子查询）
+    pub fn get_session_request_tokens_for_ids(&self, params: &FilterParams, session_ids: &[String]) -> Result<Vec<SessionRequestToken>, String> {
+        if session_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let db = self.db()?;
+        let (where_sql, mut binds) = Self::build_where_clause(params, true);
+        let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
+        for sid in session_ids {
+            binds.push(Box::new(sid.clone()));
+        }
+        let sql = format!(
+            "SELECT
+                l.session_id,
+                l.model,
+                l.created_at,
+                l.input_tokens,
+                l.output_tokens,
+                l.cache_read_tokens,
+                l.cache_creation_tokens
+             FROM proxy_request_logs l
+             {}
+               AND l.session_id IN ({})
+             ORDER BY l.session_id, l.created_at",
+            where_sql, placeholders.join(",")
+        );
+
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询会话请求Token失败: {}", e))?;
+        let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+        let rows = stmt
+            .query_map(refs.as_slice(), |row| {
+                Ok(SessionRequestToken {
+                    session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    created_at: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                })
+            })
+            .map_err(|e| format!("查询会话请求Token失败: {}", e))?;
+
+        Self::collect_rows(rows, "读取会话请求Token")
+    }
+
+    /// 按已知 session IDs 查询模型级 token（无子查询）
+    pub fn get_session_model_tokens_for_ids(&self, params: &FilterParams, session_ids: &[String]) -> Result<Vec<SessionModelToken>, String> {
+        if session_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let db = self.db()?;
+        let (where_sql, mut binds) = Self::build_where_clause(params, true);
+        let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
+        for sid in session_ids {
+            binds.push(Box::new(sid.clone()));
+        }
+        let sql = format!(
+            "SELECT
+                l.session_id,
+                l.model,
+                SUM(l.input_tokens) AS input_tokens,
+                SUM(l.output_tokens) AS output_tokens,
+                SUM(l.cache_read_tokens) AS cache_read,
+                SUM(l.cache_creation_tokens) AS cache_creation
+             FROM proxy_request_logs l
+             {}
+               AND l.session_id IN ({})
+             GROUP BY l.session_id, l.model",
+            where_sql, placeholders.join(",")
+        );
+
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询会话模型Token失败: {}", e))?;
+        let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+        let rows = stmt
+            .query_map(refs.as_slice(), |row| {
+                Ok(SessionModelToken {
+                    session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    input_tokens: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                })
+            })
+            .map_err(|e| format!("查询会话模型Token失败: {}", e))?;
+
+        Self::collect_rows(rows, "读取会话模型Token")
+    }
+
     /// 按 (model, day, context_tier_bucket) 预聚合，用于上下文档位费用计算
     pub fn get_model_context_tier_buckets(
         &self,
@@ -776,6 +866,8 @@ impl super::data_source::DataSource for ExternalDbService {
     fn get_session_max_context_widths(&self, ids: &[String]) -> Result<HashMap<String, i64>, String> { self.get_session_max_context_widths(ids) }
     fn get_session_model_tokens(&self, params: &FilterParams) -> Result<Vec<SessionModelToken>, String> { self.get_session_model_tokens(params) }
     fn get_session_request_tokens(&self, params: &FilterParams) -> Result<Vec<SessionRequestToken>, String> { self.get_session_request_tokens(params) }
+    fn get_session_request_tokens_for_ids(&self, params: &FilterParams, session_ids: &[String]) -> Result<Vec<SessionRequestToken>, String> { self.get_session_request_tokens_for_ids(params, session_ids) }
+    fn get_session_model_tokens_for_ids(&self, params: &FilterParams, session_ids: &[String]) -> Result<Vec<SessionModelToken>, String> { self.get_session_model_tokens_for_ids(params, session_ids) }
     fn get_session_timestamps(&self, ids: &[String]) -> Result<HashMap<String, Vec<i64>>, String> { self.get_session_timestamps(ids) }
     fn get_model_context_tier_buckets(&self, params: &FilterParams, thresholds: &[i64]) -> Result<Vec<ModelContextTierBucket>, String> { self.get_model_context_tier_buckets(params, thresholds) }
     fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String> { self.get_minute_level_token_trend() }

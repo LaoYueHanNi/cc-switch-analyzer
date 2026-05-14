@@ -293,51 +293,65 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
 
 #[tauri::command]
 pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionWithCost>, String> {
-    let (sessions, max_context_widths, session_request_tokens, session_model_tokens, timestamps_map) = {
+    let (sessions, session_request_tokens, session_model_tokens, max_context_widths, timestamps_map) = {
         let sources = state.data_sources.read().map_err(|e| e.to_string())?;
         require_sources!(sources);
 
-        // 并行查询每个数据源的 session 数据
-        let source_data: Vec<_> = std::thread::scope(|s| {
+        // 第一轮：只查 session_breakdown，拿到每个数据源的 top N
+        let session_lists: Vec<Vec<SessionBreakdown>> = std::thread::scope(|s| {
             let handles: Vec<_> = sources.iter().map(|entry| {
                 let p = params.clone();
                 let label = entry.db_type.label().to_string();
                 s.spawn(move || {
-                    let sessions = entry.source.get_session_breakdown(&p).map_err(|e| {
+                    entry.source.get_session_breakdown(&p).map_err(|e| {
                         log::warn!("[QUERY] session_breakdown 数据源({}) 查询失败: {}", label, e); e
-                    }).ok();
-                    let request_tokens = entry.source.get_session_request_tokens(&p).map_err(|e| {
-                        log::warn!("[QUERY] session_request_tokens 数据源({}) 查询失败: {}", label, e); e
-                    }).ok();
-                    let model_tokens = entry.source.get_session_model_tokens(&p).map_err(|e| {
-                        log::warn!("[QUERY] session_model_tokens 数据源({}) 查询失败: {}", label, e); e
-                    }).ok();
-                    (sessions, request_tokens, model_tokens)
+                    }).ok().unwrap_or_default()
                 })
             }).collect();
             handles.into_iter().map(|h| h.join().unwrap()).collect()
         });
 
-        let mut all_sessions: Vec<SessionBreakdown> = source_data.iter().filter_map(|r| r.0.clone()).flatten().collect();
-        let all_request_tokens: Vec<SessionRequestToken> = source_data.iter().filter_map(|r| r.1.clone()).flatten().collect();
-        let all_model_tokens: Vec<SessionModelToken> = source_data.iter().filter_map(|r| r.2.clone()).flatten().collect();
-
+        // 合并后取 top N 作为已知 ID 列表
+        let mut all_sessions: Vec<SessionBreakdown> = session_lists.into_iter().flatten().collect();
         all_sessions.sort_by(|a, b| b.requests.cmp(&a.requests));
-        let top_session_ids: Vec<String> = all_sessions.iter().take(20).map(|s| s.session_id.clone()).collect();
+        let top_ids: Vec<String> = all_sessions.iter().take(crate::utils::SESSION_TOP_N as usize).map(|s| s.session_id.clone()).collect();
 
-        // 第二轮：按 top session IDs 查询（数据量小，串行即可）
+        // 第二轮：用已知 IDs 查 request_tokens 和 model_tokens，无需子查询
+        let detail_data: Vec<_> = std::thread::scope(|s| {
+            let handles: Vec<_> = sources.iter().map(|entry| {
+                let p = params.clone();
+                let ids = top_ids.clone();
+                let label = entry.db_type.label().to_string();
+                s.spawn(move || {
+                    let req = entry.source.get_session_request_tokens_for_ids(&p, &ids).map_err(|e| {
+                        log::warn!("[QUERY] session_request_tokens_for_ids 数据源({}) 查询失败: {}", label, e); e
+                    }).ok();
+                    let mdl = entry.source.get_session_model_tokens_for_ids(&p, &ids).map_err(|e| {
+                        log::warn!("[QUERY] session_model_tokens_for_ids 数据源({}) 查询失败: {}", label, e); e
+                    }).ok();
+                    (req, mdl)
+                })
+            }).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        let all_request_tokens: Vec<SessionRequestToken> = detail_data.iter().filter_map(|r| r.0.clone()).flatten().collect();
+        let all_model_tokens: Vec<SessionModelToken> = detail_data.iter().filter_map(|r| r.1.clone()).flatten().collect();
+
+        // 第三轮：top 20 的额外信息（max_ctx、timestamps）
+        let top20_ids: Vec<String> = all_sessions.iter().take(20).map(|s| s.session_id.clone()).collect();
         let mut max_ctx = HashMap::new();
         let mut ts_map = HashMap::new();
         for entry in sources.iter() {
-            if let Ok(m) = entry.source.get_session_max_context_widths(&top_session_ids) {
+            if let Ok(m) = entry.source.get_session_max_context_widths(&top20_ids) {
                 for (k, v) in m { max_ctx.insert(k, v); }
             }
-            if let Ok(t) = entry.source.get_session_timestamps(&top_session_ids) {
+            if let Ok(t) = entry.source.get_session_timestamps(&top20_ids) {
                 for (k, v) in t { ts_map.entry(k).or_insert_with(Vec::new).extend(v); }
             }
         }
 
-        (all_sessions, max_ctx, all_request_tokens, all_model_tokens, ts_map)
+        (all_sessions, all_request_tokens, all_model_tokens, max_ctx, ts_map)
     };
 
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
