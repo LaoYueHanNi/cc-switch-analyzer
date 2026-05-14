@@ -10,6 +10,13 @@ export interface DbResult {
   models: string[]
 }
 
+export interface SourceInfo {
+  id: string
+  path: string
+  dbType: string
+  recordCount: number
+}
+
 export interface RefreshResult {
   hasNew: boolean
   recordCount: number | null
@@ -79,8 +86,13 @@ export interface DeleteTimePricingRuleData {
 export interface PlatformAdapter {
   // 数据库
   selectDatabase(): Promise<DbResult | null>
-  autoLoadDatabase(): Promise<DbResult | null>
+  autoLoadDatabase(): Promise<SourceInfo[]>
+  addDatabase(filePath: string): Promise<SourceInfo[]>
+  removeDatabase(sourceId: string): Promise<SourceInfo[]>
+  listDatabases(): Promise<SourceInfo[]>
+  pickDatabaseFile(defaultPath?: string): Promise<string | null>
   refreshDatabase(): Promise<RefreshResult>
+  getFilterOptions(): Promise<{ providers: { id: string; name: string }[]; models: string[]; dateRange: { min: number; max: number } }>
   // 查询
   querySummary(params: FilterParams): Promise<SummaryData>
   queryByModel(params: FilterParams): Promise<ModelBreakdown[]>

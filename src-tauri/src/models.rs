@@ -422,3 +422,14 @@ pub struct FilterOptions {
     pub models: Vec<String>,
     pub date_range: DateRange,
 }
+
+// ========== 数据源信息 ==========
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceInfo {
+    pub id: String,
+    pub path: String,
+    pub db_type: String,
+    pub record_count: i64,
+}

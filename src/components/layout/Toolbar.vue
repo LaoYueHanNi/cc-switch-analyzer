@@ -1,30 +1,26 @@
 <template>
   <div class="toolbar">
     <div class="toolbar-left">
-      <n-button size="tiny" type="primary" @click="onSelectDb">
-        <template #icon>
-          <n-icon size="14"><folder-open-outline /></n-icon>
-        </template>
-        选择数据库
-      </n-button>
-      <span class="db-path" v-if="dbStore.hasDatabase">
-        {{ dbStore.dbPath }} | 共 {{ dbStore.recordCount }} 条记录
+      <button class="toolbar-btn" :disabled="!dbStore.hasDatabase" @click="showManager = true">
+        <n-icon size="14"><settings-outline /></n-icon>
+      </button>
+      <span class="db-info" v-if="dbStore.hasDatabase">
+        {{ dbStore.sources.length }} 个数据源 · {{ dbStore.recordCount }} 条记录
       </span>
     </div>
+    <DataSourceManager v-model:show="showManager" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { NButton, NIcon } from 'naive-ui'
-import { FolderOpenOutline } from '@vicons/ionicons5'
+import { ref } from 'vue'
+import { NIcon } from 'naive-ui'
+import { SettingsOutline } from '@vicons/ionicons5'
 import { useDatabaseStore } from '@/stores/database'
-import { useDatabase } from '@/composables/useDatabase'
-const dbStore = useDatabaseStore()
-const { selectDatabase } = useDatabase()
+import DataSourceManager from './DataSourceManager.vue'
 
-async function onSelectDb(): Promise<void> {
-  await selectDatabase()
-}
+const dbStore = useDatabaseStore()
+const showManager = ref(false)
 </script>
 
 <style scoped>
@@ -33,22 +29,39 @@ async function onSelectDb(): Promise<void> {
   align-items: center;
   justify-content: space-between;
   padding: 6px 12px;
-  gap: 8px;
 }
 
-.toolbar-left,
-.toolbar-right {
+.toolbar-left {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.db-path {
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  border: 1px solid var(--border-main);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.toolbar-btn:hover:not(:disabled) {
+  border-color: var(--color-blue);
+  color: var(--color-blue);
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.db-info {
   font-size: 12px;
   color: var(--text-tertiary);
-  max-width: 500px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 </style>

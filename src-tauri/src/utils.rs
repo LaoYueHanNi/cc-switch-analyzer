@@ -37,6 +37,12 @@ pub fn get_default_db_path() -> Result<std::path::PathBuf, String> {
     Ok(home.join(".cc-switch").join("cc-switch.db"))
 }
 
+/// 获取默认 OpenCode 数据库路径
+pub fn get_default_opencode_db_path() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;
+    Ok(home.join(".local").join("share").join("opencode").join("opencode.db"))
+}
+
 /// 当前 Unix 秒
 pub fn now_epoch_seconds() -> i64 {
     chrono::Utc::now().timestamp()

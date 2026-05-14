@@ -4,41 +4,27 @@ import { useFilterStore } from '@/stores/filter'
 import { useQueryStore } from '@/stores/query'
 import { usePricingStore } from '@/stores/pricing'
 
-// 数据库操作 composable
 export function useDatabase() {
   const dbStore = useDatabaseStore()
   const filterStore = useFilterStore()
   const queryStore = useQueryStore()
   const pricingStore = usePricingStore()
 
-  // 自动加载默认数据库（启动时调用）
   async function autoLoadDatabase(): Promise<boolean> {
     try {
       console.log('[useDatabase] 尝试自动加载默认数据库...')
-      const result = await platformAdapter.autoLoadDatabase()
-      if (!result) {
-        console.log('[useDatabase] 默认数据库不存在，等待手动选择')
+      const sources = await platformAdapter.autoLoadDatabase()
+      if (!sources || sources.length === 0) {
+        console.log('[useDatabase] 无可加载的数据库')
         return false
       }
 
-      dbStore.setLoaded(result.path, result.recordCount)
-
-      if (result.dateRange) {
-        filterStore.setOptions(
-          result.providers || [],
-          result.models || [],
-          result.dateRange.min,
-          result.dateRange.max
-        )
-        filterStore.setDateRange(result.dateRange.min, result.dateRange.max)
-      }
-
-      await loadPricing()
       queryStore.reset()
+      await updateFilterOptions()
+      await loadPricing()
+      dbStore.setSources(sources)
 
-      // 异步拉取云端定价（不阻塞启动）
       platformAdapter.fetchCloudPricing().catch(() => {})
-
       return true
     } catch (err: any) {
       console.error('[useDatabase] 自动加载异常:', err)
@@ -46,41 +32,24 @@ export function useDatabase() {
     }
   }
 
-  // 选择数据库文件
   async function selectDatabase(): Promise<boolean> {
     dbStore.setLoading(true)
     try {
-      console.log('[useDatabase] 打开文件对话框...')
       const result = await platformAdapter.selectDatabase()
-
       if (!result) {
         console.log('[useDatabase] 用户取消选择')
         dbStore.setLoading(false)
         return false
       }
 
-      console.log('[useDatabase] 选择的文件:', result.path)
-
-      dbStore.setLoaded(result.path, result.recordCount)
-      console.log('[useDatabase] setLoaded 完成, isLoaded=', dbStore.isLoaded)
-
-      if (result.dateRange) {
-        filterStore.setOptions(
-          result.providers || [],
-          result.models || [],
-          result.dateRange.min,
-          result.dateRange.max
-        )
-        filterStore.setDateRange(result.dateRange.min, result.dateRange.max)
-        console.log('[useDatabase] 筛选选项已设置')
-      }
-
-      await loadPricing()
+      // selectDatabase 内部已经 load 了，从后端刷新 source 列表
+      const sources = await platformAdapter.listDatabases()
       queryStore.reset()
+      await updateFilterOptions()
+      await loadPricing()
+      dbStore.setSources(sources)
 
-      // 异步拉取云端定价（不阻塞启动）
       platformAdapter.fetchCloudPricing().catch(() => {})
-
       return true
     } catch (err: any) {
       console.error('[useDatabase] 异常:', err)
@@ -89,12 +58,42 @@ export function useDatabase() {
     }
   }
 
-  // 刷新数据库
+  async function addDatabase(filePath: string): Promise<boolean> {
+    try {
+      const sources = await platformAdapter.addDatabase(filePath)
+      queryStore.reset()
+      await updateFilterOptions()
+      await loadPricing()
+      dbStore.setSources(sources)
+
+      platformAdapter.fetchCloudPricing().catch(() => {})
+      return true
+    } catch (err: any) {
+      console.error('[useDatabase] 添加数据源失败:', err)
+      dbStore.setError(err.message || '添加数据源失败')
+      return false
+    }
+  }
+
+  async function removeDatabase(sourceId: string): Promise<void> {
+    try {
+      const sources = await platformAdapter.removeDatabase(sourceId)
+      if (sources.length > 0) {
+        await updateFilterOptions()
+        queryStore.reset()
+      }
+      dbStore.setSources(sources)
+    } catch (err: any) {
+      console.error('[useDatabase] 移除数据源失败:', err)
+    }
+  }
+
   async function refreshDatabase(): Promise<void> {
     try {
       const result = await platformAdapter.refreshDatabase()
       if (result.hasNew && result.recordCount != null) {
-        dbStore.recordCount = result.recordCount
+        const sources = await platformAdapter.listDatabases()
+        dbStore.setSources(sources)
         dbStore.refreshVersion++
       }
     } catch (err: any) {
@@ -102,12 +101,27 @@ export function useDatabase() {
     }
   }
 
-  // 加载定价数据
+  async function updateFilterOptions(): Promise<void> {
+    try {
+      const options = await platformAdapter.getFilterOptions()
+      if (options.dateRange && options.dateRange.min > 0) {
+        filterStore.setOptions(
+          options.providers || [],
+          options.models || [],
+          options.dateRange.min,
+          options.dateRange.max
+        )
+        filterStore.setDateRange(options.dateRange.min, options.dateRange.max)
+      }
+    } catch (err: any) {
+      console.error('[useDatabase] 更新筛选选项失败:', err)
+    }
+  }
+
   async function loadPricing(): Promise<void> {
     try {
       const pricing = await platformAdapter.getAllPricing()
       pricingStore.pricingData = pricing
-      console.log('[useDatabase] 定价加载完成, 数量:', pricing.length)
     } catch (err: any) {
       console.error('定价加载失败:', err)
     }
@@ -116,6 +130,8 @@ export function useDatabase() {
   return {
     autoLoadDatabase,
     selectDatabase,
+    addDatabase,
+    removeDatabase,
     refreshDatabase,
     loadPricing
   }

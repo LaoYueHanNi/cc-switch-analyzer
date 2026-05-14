@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { PlatformAdapter, DbResult, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData } from './types'
+import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData } from './types'
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
 import type { PricingData } from '@/types/pricing'
@@ -35,19 +35,45 @@ export const platformAdapter: PlatformAdapter = {
   // 数据库 — Tauri 在前端开对话框，再传路径给后端
   async selectDatabase(): Promise<DbResult | null> {
     const selected = await open({
-      title: '选择 CC-Switch 数据库文件',
-      filters: [{ name: 'SQLite 数据库', extensions: ['db'] }],
+      title: '选择数据库文件',
+      filters: [{ name: 'SQLite 数据库', extensions: ['db', 'sqlite', 'sqlite3'] }],
       multiple: false
     })
     if (!selected) return null
     const filePath = typeof selected === 'string' ? selected : (selected as any).path
-    return invoke<DbResult>('load_database', { filePath })
+    const sources = await invoke<SourceInfo[]>('load_database', { filePath })
+    // 兼容旧接口：返回第一个 source 的 DbResult
+    if (sources.length === 0) return null
+    const info = sources[0]
+    return { path: info.path, recordCount: info.recordCount, dateRange: { min: 0, max: 0 }, providers: [], models: [] }
   },
-  async autoLoadDatabase(): Promise<DbResult | null> {
-    return invoke<DbResult | null>('auto_load_database')
+  async autoLoadDatabase(): Promise<SourceInfo[]> {
+    return invoke<SourceInfo[]>('auto_load_database')
+  },
+  async addDatabase(filePath: string): Promise<SourceInfo[]> {
+    return invoke<SourceInfo[]>('add_database', { filePath })
+  },
+  async removeDatabase(sourceId: string): Promise<SourceInfo[]> {
+    return invoke<SourceInfo[]>('remove_database', { sourceId })
+  },
+  async listDatabases(): Promise<SourceInfo[]> {
+    return invoke<SourceInfo[]>('list_databases')
+  },
+  async pickDatabaseFile(defaultPath?: string): Promise<string | null> {
+    const selected = await open({
+      title: '选择数据库文件',
+      filters: [{ name: 'SQLite 数据库', extensions: ['db', 'sqlite', 'sqlite3'] }],
+      multiple: false,
+      defaultPath
+    })
+    if (!selected) return null
+    return typeof selected === 'string' ? selected : (selected as any).path
   },
   async refreshDatabase(): Promise<RefreshResult> {
     return invoke<RefreshResult>('refresh_database')
+  },
+  async getFilterOptions() {
+    return invoke<{ providers: { id: string; name: string }[]; models: string[]; dateRange: { min: number; max: number } }>('get_filter_options')
   },
   // 查询 — 日期转字符串给 Rust
   async querySummary(params: FilterParams): Promise<SummaryData> {

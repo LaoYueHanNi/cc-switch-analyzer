@@ -6,14 +6,14 @@ mod utils;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use services::app_db::AppDbService;
-use services::data_source::{create_data_source, DataSource, DbType};
+use services::data_source::SourceEntry;
 use services::pricing_engine::PricingEngine;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder};
 use tauri::{Manager, RunEvent, WindowEvent};
 
 // 全局应用状态
 pub struct AppState {
-    data_source: RwLock<Box<dyn DataSource>>,
+    data_sources: RwLock<Vec<SourceEntry>>,
     app_db: Mutex<AppDbService>,
     pricing_engine: RwLock<PricingEngine>,
     db_latest_timestamp: Mutex<Option<i64>>,
@@ -22,11 +22,10 @@ pub struct AppState {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_db = AppDbService::new().expect("初始化应用数据库失败");
-    let data_source: Box<dyn DataSource> = create_data_source(&DbType::ExternalDb);
     let pricing_engine = PricingEngine::new();
 
     let state = AppState {
-        data_source: RwLock::new(data_source),
+        data_sources: RwLock::new(Vec::new()),
         app_db: Mutex::new(app_db),
         pricing_engine: RwLock::new(pricing_engine),
         db_latest_timestamp: Mutex::new(None),
@@ -115,8 +114,12 @@ pub fn run() {
             // 数据库操作
             commands::database::auto_load_database,
             commands::database::load_database,
+            commands::database::add_database,
+            commands::database::remove_database,
+            commands::database::list_databases,
             commands::database::refresh_database,
             commands::database::get_filter_options,
+            commands::database::get_default_paths,
             // 数据查询
             commands::query::query_summary,
             commands::query::query_by_model,

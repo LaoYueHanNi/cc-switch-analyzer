@@ -5,7 +5,7 @@ use crate::models::*;
 
 #[tauri::command]
 pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, String> {
-    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
     log::debug!("[PRICING] get_all_pricing: 引擎模型数={}", pricing.size());
@@ -13,9 +13,9 @@ pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, Strin
     let user_alias_map = app_db.get_user_aliases().unwrap_or_default();
 
     let mut used_models: std::collections::HashSet<String> = std::collections::HashSet::new();
-    if ext_db.is_open() {
-        if let Ok(models) = ext_db.get_models() {
-            used_models = models.into_iter().collect();
+    for entry in sources.iter() {
+        if let Ok(models) = entry.source.get_models() {
+            used_models.extend(models);
         }
     }
 

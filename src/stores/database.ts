@@ -1,25 +1,25 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import type { SourceInfo } from '@/platform/types'
 
-// 数据库状态管理
 export const useDatabaseStore = defineStore('database', () => {
-  const dbPath = ref('')
-  const recordCount = ref(0)
+  const sources = ref<SourceInfo[]>([])
   const isLoading = ref(false)
   const isLoaded = ref(false)
   const error = ref('')
   const refreshVersion = ref(0)
 
-  const hasDatabase = computed(() => isLoaded.value && dbPath.value !== '')
+  const hasDatabase = computed(() => sources.value.length > 0)
+  const dbPath = computed(() => sources.value.map(s => s.path).join(', '))
+  const recordCount = computed(() => sources.value.reduce((s, d) => s + d.recordCount, 0))
 
   function setLoading(loading: boolean): void {
     isLoading.value = loading
   }
 
-  function setLoaded(path: string, count: number): void {
-    dbPath.value = path
-    recordCount.value = count
-    isLoaded.value = true
+  function setSources(list: SourceInfo[]): void {
+    sources.value = list
+    isLoaded.value = list.length > 0
     isLoading.value = false
     error.value = ''
   }
@@ -30,23 +30,23 @@ export const useDatabaseStore = defineStore('database', () => {
   }
 
   function reset(): void {
-    dbPath.value = ''
-    recordCount.value = 0
+    sources.value = []
     isLoaded.value = false
     isLoading.value = false
     error.value = ''
   }
 
   return {
-    dbPath,
-    recordCount,
+    sources,
     isLoading,
     isLoaded,
     error,
     hasDatabase,
+    dbPath,
+    recordCount,
     refreshVersion,
     setLoading,
-    setLoaded,
+    setSources,
     setError,
     reset
   }

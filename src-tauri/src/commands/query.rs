@@ -3,96 +3,149 @@ use tauri::State;
 
 use crate::AppState;
 use crate::models::*;
+use crate::services::data_source::*;
 use crate::services::precompute::*;
 
-macro_rules! require_db {
-    ($ext_db:expr) => {
-        if !$ext_db.is_open() {
-            return Err("数据库未打开".to_string());
+macro_rules! require_sources {
+    ($sources:expr) => {
+        if $sources.is_empty() {
+            return Err("未加载数据库".to_string());
         }
     };
 }
 
 #[tauri::command]
 pub fn query_summary(params: FilterParams, state: State<AppState>) -> Result<SummaryData, String> {
-    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
-    require_db!(ext_db);
-    ext_db.get_summary(&params)
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+    let results: Vec<SummaryData> = sources.iter()
+        .filter_map(|e| e.source.get_summary(&params).ok())
+        .collect();
+    if results.is_empty() { return Err("查询失败".to_string()); }
+    Ok(merge_summaries(results))
 }
 
 #[tauri::command]
 pub fn query_by_model(params: FilterParams, state: State<AppState>) -> Result<Vec<ModelBreakdown>, String> {
-    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
-    require_db!(ext_db);
-    ext_db.get_model_breakdown(&params)
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+    let results: Vec<Vec<ModelBreakdown>> = sources.iter()
+        .filter_map(|e| e.source.get_model_breakdown(&params).ok())
+        .collect();
+    Ok(merge_model_breakdowns(results))
 }
 
 #[tauri::command]
 pub fn query_by_provider(params: FilterParams, state: State<AppState>) -> Result<Vec<ProviderBreakdown>, String> {
-    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
-    require_db!(ext_db);
-    ext_db.get_provider_breakdown(&params)
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+    let results: Vec<Vec<ProviderBreakdown>> = sources.iter()
+        .filter_map(|e| e.source.get_provider_breakdown(&params).ok())
+        .collect();
+    Ok(merge_provider_breakdowns(results))
 }
 
 #[tauri::command]
 pub fn query_provider_model_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<ProviderModelToken>, String> {
-    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
-    require_db!(ext_db);
-    ext_db.get_provider_model_tokens(&params)
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+    let results: Vec<Vec<ProviderModelToken>> = sources.iter()
+        .filter_map(|e| e.source.get_provider_model_tokens(&params).ok())
+        .collect();
+    Ok(merge_provider_model_tokens(results))
 }
 
 #[tauri::command]
 pub fn query_daily_trend(params: FilterParams, state: State<AppState>) -> Result<Vec<DailyTrendRow>, String> {
-    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
-    require_db!(ext_db);
-    ext_db.get_daily_trend(&params)
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+    let results: Vec<Vec<DailyTrendRow>> = sources.iter()
+        .filter_map(|e| e.source.get_daily_trend(&params).ok())
+        .collect();
+    Ok(merge_daily_trends(results))
 }
 
 #[tauri::command]
 pub fn query_sessions(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionBreakdown>, String> {
-    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
-    require_db!(ext_db);
-    ext_db.get_session_breakdown(&params)
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+    let mut all = Vec::new();
+    for entry in sources.iter() {
+        if let Ok(sessions) = entry.source.get_session_breakdown(&params) {
+            all.extend(sessions);
+        }
+    }
+    all.sort_by(|a, b| b.requests.cmp(&a.requests));
+    all.truncate(crate::utils::SESSION_TOP_N as usize);
+    Ok(all)
 }
 
 #[tauri::command]
 pub fn query_session_model_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionModelToken>, String> {
-    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
-    require_db!(ext_db);
-    ext_db.get_session_model_tokens(&params)
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+    let mut all = Vec::new();
+    for entry in sources.iter() {
+        if let Ok(tokens) = entry.source.get_session_model_tokens(&params) {
+            all.extend(tokens);
+        }
+    }
+    Ok(all)
 }
 
 #[tauri::command]
 pub fn query_session_request_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionRequestToken>, String> {
-    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
-    require_db!(ext_db);
-    ext_db.get_session_request_tokens(&params)
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+    let mut all = Vec::new();
+    for entry in sources.iter() {
+        if let Ok(tokens) = entry.source.get_session_request_tokens(&params) {
+            all.extend(tokens);
+        }
+    }
+    Ok(all)
 }
 
 #[tauri::command]
 pub fn query_session_timestamps(session_ids: Vec<String>, state: State<AppState>) -> Result<HashMap<String, Vec<i64>>, String> {
-    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
-    require_db!(ext_db);
-    ext_db.get_session_timestamps(&session_ids)
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+    let mut result = HashMap::new();
+    for entry in sources.iter() {
+        if let Ok(map) = entry.source.get_session_timestamps(&session_ids) {
+            for (k, v) in map {
+                result.entry(k).or_insert_with(Vec::new).extend(v);
+            }
+        }
+    }
+    Ok(result)
 }
 
 #[tauri::command]
 pub fn query_realtime(state: State<AppState>) -> Result<Vec<RealtimeBucket>, String> {
-    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
-    require_db!(ext_db);
-    ext_db.get_minute_level_token_trend()
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+    let results: Vec<Vec<RealtimeBucket>> = sources.iter()
+        .filter_map(|e| e.source.get_minute_level_token_trend().ok())
+        .collect();
+    Ok(merge_realtime_buckets(results))
 }
 
 #[tauri::command]
 pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result<Vec<RealtimeRequestLog>, String> {
-    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
-    require_db!(ext_db);
-    let raw = ext_db.get_recent_request_logs_raw(since)?;
-    drop(ext_db);
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+    let mut all_raw = Vec::new();
+    for entry in sources.iter() {
+        if let Ok(raw) = entry.source.get_recent_request_logs_raw(since) {
+            all_raw.extend(raw);
+        }
+    }
+    drop(sources);
 
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
 
-    let result: Vec<RealtimeRequestLog> = raw.into_iter().map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms)| {
+    let result: Vec<RealtimeRequestLog> = all_raw.into_iter().map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms)| {
         let context_size = input_tokens + cache_read_tokens;
         let (input_cost, output_cost, cache_read_cost, cache_creation_cost) =
             if let Some(p) = pricing.get_pricing_at_with_context(&model, created_at, context_size) {
@@ -107,19 +160,9 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
             };
         let context_tier_threshold = pricing.get_matched_tier_threshold(&model, created_at, context_size);
         RealtimeRequestLog {
-            session_id,
-            model,
-            provider_id,
-            created_at,
-            input_tokens,
-            output_tokens,
-            cache_read_tokens,
-            cache_creation_tokens,
-            latency_ms,
-            input_cost,
-            output_cost,
-            cache_read_cost,
-            cache_creation_cost,
+            session_id, model, provider_id, created_at,
+            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+            latency_ms, input_cost, output_cost, cache_read_cost, cache_creation_cost,
             total_cost: input_cost + output_cost + cache_read_cost + cache_creation_cost,
             context_tier_threshold,
         }
@@ -132,47 +175,72 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
 pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<PrecomputeQueryResult, String> {
     log::debug!("[QUERY] query_precompute: params={:?}", params);
 
-    // Phase 1: DB queries only
+    // Phase 1: DB queries from all sources
     let (summary, provider_breakdown, combined, tier_buckets) = {
-        let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
-        require_db!(ext_db);
-        let s = ext_db.get_summary(&params)?;
-        let pb = ext_db.get_provider_breakdown(&params)?;
-        let cb = ext_db.get_combined_breakdown(&params)?;
+        let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+        require_sources!(sources);
 
-        // 获取 tier 阈值用于 SQL 端聚合
+        let summaries: Vec<SummaryData> = sources.iter()
+            .filter_map(|e| e.source.get_summary(&params).ok()).collect();
+        let provider_results: Vec<Vec<ProviderBreakdown>> = sources.iter()
+            .filter_map(|e| e.source.get_provider_breakdown(&params).ok()).collect();
+        let combined_results: Vec<Vec<CombinedBreakdownRow>> = sources.iter()
+            .filter_map(|e| e.source.get_combined_breakdown(&params).ok()).collect();
+
         let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
         let thresholds = pricing.get_all_tier_thresholds();
         drop(pricing);
-        let tb = if thresholds.is_empty() {
+
+        let tier_results: Vec<Vec<ModelContextTierBucket>> = if thresholds.is_empty() {
             Vec::new()
         } else {
-            ext_db.get_model_context_tier_buckets(&params, &thresholds)?
+            sources.iter()
+                .filter_map(|e| e.source.get_model_context_tier_buckets(&params, &thresholds).ok())
+                .collect()
         };
 
-        log::debug!("[QUERY] summary.requests={}, providers={}, combined_rows={}, tier_buckets={}", s.total_requests, pb.len(), cb.len(), tb.len());
-        (s, pb, cb, tb)
-    }; // ext_db lock dropped
+        // Merge
+        let s = merge_summaries(summaries);
+        let pb = merge_provider_breakdowns(provider_results);
+        let cb = merge_combined(combined_results);
+        let tb: Vec<ModelContextTierBucket> = {
+            let mut map: HashMap<(String, String, i64), ModelContextTierBucket> = HashMap::new();
+            for list in tier_results {
+                for row in list {
+                    let key = (row.model.clone(), row.day.clone(), row.context_tier);
+                    map.entry(key)
+                        .and_modify(|e| {
+                            e.input_tokens += row.input_tokens;
+                            e.output_tokens += row.output_tokens;
+                            e.cache_read += row.cache_read;
+                            e.cache_creation += row.cache_creation;
+                        })
+                        .or_insert(row);
+                }
+            }
+            map.into_values().collect()
+        };
 
-    // 从合并查询结果派生 model_breakdown, daily_trend, provider_model_tokens
+        log::debug!("[QUERY] summary.requests={}, providers={}, combined_rows={}, tier_buckets={}",
+            s.total_requests, pb.len(), cb.len(), tb.len());
+        (s, pb, cb, tb)
+    };
+
     let agg = aggregate_combined_breakdown(&combined);
 
-    // Phase 2: Pricing computation only
+    // Phase 2: Pricing computation
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
     log::debug!("[QUERY] 定价引擎模型数={}", pricing.size());
 
     let tz_offset = params.tz_offset.unwrap_or(0);
     let mut precomputed = precompute_costs(&agg.daily_trend, &agg.provider_model_tokens, &pricing, tz_offset);
 
-    // Per-model 上下文档位计费比例 + 上下文感知模型费用（替代非上下文感知的 precompute_costs 结果）
     let (tier_costs, ctx_model_costs, ctx_model_breakdown) = build_context_tier_and_model_costs(&tier_buckets, &pricing);
     precomputed.model_context_tier_costs = tier_costs;
     if !ctx_model_costs.is_empty() {
-        // 用上下文感知的费用覆盖非上下文感知的结果
         precomputed.model_costs = ctx_model_costs;
         precomputed.model_cost_breakdown = ctx_model_breakdown;
 
-        // 重新按 Token 比例分配供应商费用
         precomputed.provider_costs.clear();
         let mut model_total_tokens: HashMap<String, i64> = HashMap::new();
         for pmt in &agg.provider_model_tokens {
@@ -200,20 +268,45 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
 
 #[tauri::command]
 pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionWithCost>, String> {
-    // Phase 1: DB queries only
+    // Phase 1: DB queries from all sources
     let (sessions, max_context_widths, session_request_tokens, session_model_tokens, timestamps_map) = {
-        let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
-        require_db!(ext_db);
-        let sessions = ext_db.get_session_breakdown(&params)?;
-        let top_session_ids: Vec<String> = sessions.iter().take(20).map(|s| s.session_id.clone()).collect();
-        let max_context_widths = ext_db.get_session_max_context_widths(&top_session_ids)?;
-        let timestamps_map = ext_db.get_session_timestamps(&top_session_ids)?;
-        let session_request_tokens = ext_db.get_session_request_tokens(&params)?;
-        let session_model_tokens = ext_db.get_session_model_tokens(&params)?;
-        (sessions, max_context_widths, session_request_tokens, session_model_tokens, timestamps_map)
-    }; // ext_db lock dropped
+        let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+        require_sources!(sources);
 
-    // Phase 2: Pricing computation only
+        let mut all_sessions = Vec::new();
+        let mut all_request_tokens = Vec::new();
+        let mut all_model_tokens = Vec::new();
+
+        for entry in sources.iter() {
+            if let Ok(s) = entry.source.get_session_breakdown(&params) {
+                all_sessions.extend(s);
+            }
+            if let Ok(r) = entry.source.get_session_request_tokens(&params) {
+                all_request_tokens.extend(r);
+            }
+            if let Ok(m) = entry.source.get_session_model_tokens(&params) {
+                all_model_tokens.extend(m);
+            }
+        }
+
+        all_sessions.sort_by(|a, b| b.requests.cmp(&a.requests));
+        let top_session_ids: Vec<String> = all_sessions.iter().take(20).map(|s| s.session_id.clone()).collect();
+
+        let mut max_ctx = HashMap::new();
+        let mut ts_map = HashMap::new();
+        for entry in sources.iter() {
+            if let Ok(m) = entry.source.get_session_max_context_widths(&top_session_ids) {
+                for (k, v) in m { max_ctx.insert(k, v); }
+            }
+            if let Ok(t) = entry.source.get_session_timestamps(&top_session_ids) {
+                for (k, v) in t { ts_map.entry(k).or_insert_with(Vec::new).extend(v); }
+            }
+        }
+
+        (all_sessions, max_ctx, all_request_tokens, all_model_tokens, ts_map)
+    };
+
+    // Phase 2: Pricing computation
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
 
     let session_costs = compute_session_costs(&session_request_tokens, &pricing);
@@ -237,7 +330,6 @@ pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) ->
                 .map(|mc| {
                     mc.iter()
                         .map(|(model, data)| {
-                            // 将 tier_costs HashMap 转为排序后的 Vec，过滤零值
                             let mut tier_vec: Vec<ContextTierCost> = data
                                 .tier_costs
                                 .iter()
