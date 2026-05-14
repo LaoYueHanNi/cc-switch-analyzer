@@ -73,7 +73,10 @@ const filterStore = useFilterStore()
 const queryStore = useQueryStore()
 const { quickDateQuery } = useFilter()
 
-const activeQuickDays = ref<number | null>(1)
+const activeQuickDays = computed({
+  get: () => filterStore.activeQuickDays,
+  set: (v) => { filterStore.activeQuickDays = v }
+})
 const dateRange = ref<[number, number] | null>(null)
 let skipActiveReset = false
 
@@ -128,7 +131,6 @@ async function onQuery(): Promise<void> {
 function onReset(): void {
   filterStore.reset()
   dateRange.value = null
-  activeQuickDays.value = null
 }
 
 async function onQuickDate(days: number): Promise<void> {

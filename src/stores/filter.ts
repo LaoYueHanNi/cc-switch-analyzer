@@ -6,6 +6,7 @@ import type { FilterParams } from '@/types/database'
 export const useFilterStore = defineStore('filter', () => {
   const fromDate = ref<Date | null>(null)
   const toDate = ref<Date | null>(null)
+  const activeQuickDays = ref<number | null>(1)
   const providerId = ref('')
   const modelId = ref('')
   const providerOptions = ref<{ label: string; value: string }[]>([])
@@ -44,6 +45,7 @@ export const useFilterStore = defineStore('filter', () => {
   function reset(): void {
     fromDate.value = null
     toDate.value = null
+    activeQuickDays.value = null
     providerId.value = ''
     modelId.value = ''
   }
@@ -51,6 +53,7 @@ export const useFilterStore = defineStore('filter', () => {
   return {
     fromDate,
     toDate,
+    activeQuickDays,
     providerId,
     modelId,
     providerOptions,
