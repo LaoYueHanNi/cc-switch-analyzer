@@ -5,7 +5,7 @@ use crate::models::*;
 
 #[tauri::command]
 pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, String> {
-    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
     log::debug!("[PRICING] get_all_pricing: 引擎模型数={}", pricing.size());

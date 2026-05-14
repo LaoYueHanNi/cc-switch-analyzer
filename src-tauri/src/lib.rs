@@ -6,6 +6,7 @@ mod utils;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use services::app_db::AppDbService;
+use services::data_source::DataSource;
 use services::external_db::ExternalDbService;
 use services::pricing_engine::PricingEngine;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder};
@@ -13,7 +14,7 @@ use tauri::{Manager, RunEvent, WindowEvent};
 
 // 全局应用状态
 pub struct AppState {
-    external_db: RwLock<ExternalDbService>,
+    data_source: RwLock<Box<dyn DataSource>>,
     app_db: Mutex<AppDbService>,
     pricing_engine: RwLock<PricingEngine>,
     db_latest_timestamp: Mutex<Option<i64>>,
@@ -22,11 +23,11 @@ pub struct AppState {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_db = AppDbService::new().expect("初始化应用数据库失败");
-    let external_db = ExternalDbService::new();
+    let data_source: Box<dyn DataSource> = Box::new(ExternalDbService::new());
     let pricing_engine = PricingEngine::new();
 
     let state = AppState {
-        external_db: RwLock::new(external_db),
+        data_source: RwLock::new(data_source),
         app_db: Mutex::new(app_db),
         pricing_engine: RwLock::new(pricing_engine),
         db_latest_timestamp: Mutex::new(None),

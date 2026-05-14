@@ -15,77 +15,77 @@ macro_rules! require_db {
 
 #[tauri::command]
 pub fn query_summary(params: FilterParams, state: State<AppState>) -> Result<SummaryData, String> {
-    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
     require_db!(ext_db);
     ext_db.get_summary(&params)
 }
 
 #[tauri::command]
 pub fn query_by_model(params: FilterParams, state: State<AppState>) -> Result<Vec<ModelBreakdown>, String> {
-    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
     require_db!(ext_db);
     ext_db.get_model_breakdown(&params)
 }
 
 #[tauri::command]
 pub fn query_by_provider(params: FilterParams, state: State<AppState>) -> Result<Vec<ProviderBreakdown>, String> {
-    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
     require_db!(ext_db);
     ext_db.get_provider_breakdown(&params)
 }
 
 #[tauri::command]
 pub fn query_provider_model_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<ProviderModelToken>, String> {
-    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
     require_db!(ext_db);
     ext_db.get_provider_model_tokens(&params)
 }
 
 #[tauri::command]
 pub fn query_daily_trend(params: FilterParams, state: State<AppState>) -> Result<Vec<DailyTrendRow>, String> {
-    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
     require_db!(ext_db);
     ext_db.get_daily_trend(&params)
 }
 
 #[tauri::command]
 pub fn query_sessions(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionBreakdown>, String> {
-    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
     require_db!(ext_db);
     ext_db.get_session_breakdown(&params)
 }
 
 #[tauri::command]
 pub fn query_session_model_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionModelToken>, String> {
-    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
     require_db!(ext_db);
     ext_db.get_session_model_tokens(&params)
 }
 
 #[tauri::command]
 pub fn query_session_request_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionRequestToken>, String> {
-    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
     require_db!(ext_db);
     ext_db.get_session_request_tokens(&params)
 }
 
 #[tauri::command]
 pub fn query_session_timestamps(session_ids: Vec<String>, state: State<AppState>) -> Result<HashMap<String, Vec<i64>>, String> {
-    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
     require_db!(ext_db);
     ext_db.get_session_timestamps(&session_ids)
 }
 
 #[tauri::command]
 pub fn query_realtime(state: State<AppState>) -> Result<Vec<RealtimeBucket>, String> {
-    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
     require_db!(ext_db);
     ext_db.get_minute_level_token_trend()
 }
 
 #[tauri::command]
 pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result<Vec<RealtimeRequestLog>, String> {
-    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
     require_db!(ext_db);
     let raw = ext_db.get_recent_request_logs_raw(since)?;
     drop(ext_db);
@@ -134,7 +134,7 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
 
     // Phase 1: DB queries only
     let (summary, provider_breakdown, combined, tier_buckets) = {
-        let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+        let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
         require_db!(ext_db);
         let s = ext_db.get_summary(&params)?;
         let pb = ext_db.get_provider_breakdown(&params)?;
@@ -202,7 +202,7 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
 pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionWithCost>, String> {
     // Phase 1: DB queries only
     let (sessions, max_context_widths, session_request_tokens, session_model_tokens, timestamps_map) = {
-        let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+        let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
         require_db!(ext_db);
         let sessions = ext_db.get_session_breakdown(&params)?;
         let top_session_ids: Vec<String> = sessions.iter().take(20).map(|s| s.session_id.clone()).collect();

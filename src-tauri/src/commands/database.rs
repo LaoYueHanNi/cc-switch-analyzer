@@ -28,7 +28,7 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Option<DatabaseInfo>
         return Ok(None);
     }
 
-    let mut ext_db = state.external_db.write().map_err(|e| e.to_string())?;
+    let mut ext_db = state.data_source.write().map_err(|e| e.to_string())?;
     ext_db.open(&db_path).map_err(|e| {
         log::error!("[DB] 数据库打开失败: {}", e);
         "打开数据库失败，请检查文件路径".to_string()
@@ -93,7 +93,7 @@ pub fn load_database(file_path: String, state: State<AppState>) -> Result<Databa
     let canonical_path = validate_db_path(&file_path)?;
     let canonical_str = canonical_path.to_string_lossy().to_string();
     log::info!("[DB] load_database: {}", canonical_str);
-    let mut ext_db = state.external_db.write().map_err(|e| e.to_string())?;
+    let mut ext_db = state.data_source.write().map_err(|e| e.to_string())?;
     ext_db.open(&canonical_str).map_err(|e| {
         log::error!("[DB] 数据库打开失败: {}", e);
         "打开数据库失败，请检查文件路径".to_string()
@@ -135,7 +135,7 @@ pub fn load_database(file_path: String, state: State<AppState>) -> Result<Databa
 
 #[tauri::command]
 pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String> {
-    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
     if !ext_db.is_open() {
         return Ok(RefreshResult {
             has_new: false,
@@ -163,7 +163,7 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
 
 #[tauri::command]
 pub fn get_filter_options(state: State<AppState>) -> Result<FilterOptions, String> {
-    let ext_db = state.external_db.read().map_err(|e| e.to_string())?;
+    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
     if !ext_db.is_open() {
         return Ok(FilterOptions {
             providers: Vec::new(),
