@@ -160,11 +160,37 @@ pub fn list_databases(state: State<AppState>) -> Result<Vec<SourceInfo>, String>
 
 #[tauri::command]
 pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String> {
-    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
-    if sources.is_empty() {
-        return Ok(RefreshResult { has_new: false, record_count: None });
+    // Phase 1: 快速检查文件 mtime，无变化则直接返回
+    {
+        let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+        if sources.is_empty() {
+            return Ok(RefreshResult { has_new: false, record_count: None });
+        }
+
+        let mut mtimes = state.db_file_mtimes.lock().map_err(|e| e.to_string())?;
+        let mut any_changed = false;
+        for entry in sources.iter() {
+            let mtime = std::fs::metadata(&entry.path)
+                .ok()
+                .and_then(|m| m.modified().ok());
+            let prev = mtimes.get(&entry.path).copied();
+            if mtime != prev {
+                any_changed = true;
+                if let Some(t) = mtime {
+                    mtimes.insert(entry.path.clone(), t);
+                }
+            }
+        }
+        drop(sources);
+        drop(mtimes);
+
+        if !any_changed {
+            return Ok(RefreshResult { has_new: false, record_count: None });
+        }
     }
 
+    // Phase 2: 文件有变化，走 SQL 查询确认
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     let current_max = sources.iter()
         .filter_map(|s| s.source.get_latest_timestamp())
         .max();

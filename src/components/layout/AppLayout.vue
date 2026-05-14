@@ -137,9 +137,13 @@ const syncLayoutHeight = () => {
   appLayoutRef.value.style.height = `${window.innerHeight / 1.1}px`
 }
 
-// 集中查询触发：筛选变化、数据库加载、刷新时统一执行一次 queryPrecompute
+// 集中查询触发：筛选变化（防抖 300ms）、数据库加载、刷新时统一执行一次 queryPrecompute
+let filterTimer: ReturnType<typeof setTimeout> | null = null
 watch(() => filterStore.filterParams, () => {
-  if (dbStore.hasDatabase) queryStore.executeQuery(filterStore.filterParams)
+  if (filterTimer) clearTimeout(filterTimer)
+  filterTimer = setTimeout(() => {
+    if (dbStore.hasDatabase) queryStore.executeQuery(filterStore.filterParams)
+  }, 300)
 }, { deep: true })
 watch(() => dbStore.hasDatabase, (val) => {
   if (val) queryStore.executeQuery(filterStore.filterParams)

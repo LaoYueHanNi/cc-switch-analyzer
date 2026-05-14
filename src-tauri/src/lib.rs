@@ -5,6 +5,7 @@ mod utils;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::collections::HashMap;
 use services::app_db::AppDbService;
 use services::data_source::SourceEntry;
 use services::pricing_engine::PricingEngine;
@@ -17,6 +18,7 @@ pub struct AppState {
     app_db: Mutex<AppDbService>,
     pricing_engine: RwLock<PricingEngine>,
     db_latest_timestamp: Mutex<Option<i64>>,
+    db_file_mtimes: Mutex<HashMap<String, std::time::SystemTime>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -29,6 +31,7 @@ pub fn run() {
         app_db: Mutex::new(app_db),
         pricing_engine: RwLock::new(pricing_engine),
         db_latest_timestamp: Mutex::new(None),
+        db_file_mtimes: Mutex::new(HashMap::new()),
     };
 
     // macOS Cmd+Q 先触发 ExitRequested 再触发 CloseRequested

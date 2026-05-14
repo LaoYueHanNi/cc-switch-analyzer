@@ -35,7 +35,7 @@
 
 <script setup lang="ts">
 defineOptions({ name: 'SessionAnalysis' })
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onActivated, onDeactivated } from 'vue'
 import { NSelect, NSpin } from 'naive-ui'
 import { platformAdapter } from '@/platform'
 import { useDatabaseStore } from '@/stores/database'
@@ -49,6 +49,8 @@ const filterStore = useFilterStore()
 const { getTitle, getProject, fetchTitles } = useSessionTitles()
 const loading = ref(false)
 const sortBy = ref('totalCost')
+const isActive = ref(true)
+const needsRefresh = ref(false)
 
 const sortOptions = [
   { label: '费用', value: 'totalCost' },
@@ -107,9 +109,34 @@ async function loadData(): Promise<void> {
   }
 }
 
-watch(() => dbStore.hasDatabase, (val) => { if (val) loadData() }, { immediate: true })
-watch(() => filterStore.filterParams, () => loadData(), { deep: true })
-watch(() => dbStore.refreshVersion, () => { if (dbStore.hasDatabase) loadData() })
+function tryLoadData(): void {
+  if (isActive.value) {
+    loadData()
+  } else {
+    needsRefresh.value = true
+  }
+}
+
+let sessionFilterTimer: ReturnType<typeof setTimeout> | null = null
+
+watch(() => dbStore.hasDatabase, (val) => { if (val) tryLoadData() }, { immediate: true })
+watch(() => filterStore.filterParams, () => {
+  if (sessionFilterTimer) clearTimeout(sessionFilterTimer)
+  sessionFilterTimer = setTimeout(() => tryLoadData(), 300)
+}, { deep: true })
+watch(() => dbStore.refreshVersion, () => { if (dbStore.hasDatabase) tryLoadData() })
+
+onActivated(() => {
+  isActive.value = true
+  if (needsRefresh.value) {
+    needsRefresh.value = false
+    loadData()
+  }
+})
+
+onDeactivated(() => {
+  isActive.value = false
+})
 </script>
 
 <style scoped>

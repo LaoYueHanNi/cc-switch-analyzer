@@ -184,19 +184,47 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
         let sources = state.data_sources.read().map_err(|e| e.to_string())?;
         require_sources!(sources);
 
-        let summaries: Vec<SummaryData> = collect_from_sources!(sources, e, get_summary(&params), "summary");
-        let provider_results: Vec<Vec<ProviderBreakdown>> = collect_from_sources!(sources, e, get_provider_breakdown(&params), "provider_breakdown");
-        let combined_results: Vec<Vec<CombinedBreakdownRow>> = collect_from_sources!(sources, e, get_combined_breakdown(&params), "combined_breakdown");
-
         let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
         let thresholds = pricing.get_all_tier_thresholds();
         drop(pricing);
 
-        let tier_results: Vec<Vec<ModelContextTierBucket>> = if thresholds.is_empty() {
-            Vec::new()
-        } else {
-            collect_from_sources!(sources, e, get_model_context_tier_buckets(&params, &thresholds), "tier_buckets")
-        };
+        // 每个数据源在一个线程中串行执行所有查询，不同数据源之间并行
+        let source_results: Vec<_> = std::thread::scope(|s| {
+            let handles: Vec<_> = sources.iter().map(|entry| {
+                let p = params.clone();
+                let th = thresholds.clone();
+                let label = entry.db_type.label().to_string();
+                s.spawn(move || {
+                    let summary = entry.source.get_summary(&p).map_err(|e| {
+                        log::warn!("[QUERY] summary 数据源({}) 查询失败: {}", label, e);
+                        e
+                    }).ok();
+                    let provider = entry.source.get_provider_breakdown(&p).map_err(|e| {
+                        log::warn!("[QUERY] provider_breakdown 数据源({}) 查询失败: {}", label, e);
+                        e
+                    }).ok();
+                    let combined = entry.source.get_combined_breakdown(&p).map_err(|e| {
+                        log::warn!("[QUERY] combined_breakdown 数据源({}) 查询失败: {}", label, e);
+                        e
+                    }).ok();
+                    let tier = if th.is_empty() {
+                        Ok(Vec::new())
+                    } else {
+                        entry.source.get_model_context_tier_buckets(&p, &th).map_err(|e| {
+                            log::warn!("[QUERY] tier_buckets 数据源({}) 查询失败: {}", label, e);
+                            e
+                        })
+                    }.ok();
+                    (summary, provider, combined, tier)
+                })
+            }).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        let summaries: Vec<SummaryData> = source_results.iter().filter_map(|r| r.0.clone()).collect();
+        let provider_results: Vec<Vec<ProviderBreakdown>> = source_results.iter().filter_map(|r| r.1.clone()).collect();
+        let combined_results: Vec<Vec<CombinedBreakdownRow>> = source_results.iter().filter_map(|r| r.2.clone()).collect();
+        let tier_results: Vec<Vec<ModelContextTierBucket>> = source_results.iter().filter_map(|r| r.3.clone()).collect();
 
         let s = merge_summaries(summaries);
         let pb = merge_provider_breakdowns(provider_results);
@@ -269,25 +297,35 @@ pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) ->
         let sources = state.data_sources.read().map_err(|e| e.to_string())?;
         require_sources!(sources);
 
-        let mut all_sessions = Vec::new();
-        let mut all_request_tokens = Vec::new();
-        let mut all_model_tokens = Vec::new();
+        // 并行查询每个数据源的 session 数据
+        let source_data: Vec<_> = std::thread::scope(|s| {
+            let handles: Vec<_> = sources.iter().map(|entry| {
+                let p = params.clone();
+                let label = entry.db_type.label().to_string();
+                s.spawn(move || {
+                    let sessions = entry.source.get_session_breakdown(&p).map_err(|e| {
+                        log::warn!("[QUERY] session_breakdown 数据源({}) 查询失败: {}", label, e); e
+                    }).ok();
+                    let request_tokens = entry.source.get_session_request_tokens(&p).map_err(|e| {
+                        log::warn!("[QUERY] session_request_tokens 数据源({}) 查询失败: {}", label, e); e
+                    }).ok();
+                    let model_tokens = entry.source.get_session_model_tokens(&p).map_err(|e| {
+                        log::warn!("[QUERY] session_model_tokens 数据源({}) 查询失败: {}", label, e); e
+                    }).ok();
+                    (sessions, request_tokens, model_tokens)
+                })
+            }).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
 
-        for entry in sources.iter() {
-            if let Ok(s) = entry.source.get_session_breakdown(&params) {
-                all_sessions.extend(s);
-            }
-            if let Ok(r) = entry.source.get_session_request_tokens(&params) {
-                all_request_tokens.extend(r);
-            }
-            if let Ok(m) = entry.source.get_session_model_tokens(&params) {
-                all_model_tokens.extend(m);
-            }
-        }
+        let mut all_sessions: Vec<SessionBreakdown> = source_data.iter().filter_map(|r| r.0.clone()).flatten().collect();
+        let all_request_tokens: Vec<SessionRequestToken> = source_data.iter().filter_map(|r| r.1.clone()).flatten().collect();
+        let all_model_tokens: Vec<SessionModelToken> = source_data.iter().filter_map(|r| r.2.clone()).flatten().collect();
 
         all_sessions.sort_by(|a, b| b.requests.cmp(&a.requests));
         let top_session_ids: Vec<String> = all_sessions.iter().take(20).map(|s| s.session_id.clone()).collect();
 
+        // 第二轮：按 top session IDs 查询（数据量小，串行即可）
         let mut max_ctx = HashMap::new();
         let mut ts_map = HashMap::new();
         for entry in sources.iter() {
