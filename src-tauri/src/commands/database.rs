@@ -2,6 +2,7 @@ use tauri::State;
 
 use crate::AppState;
 use crate::models::*;
+use crate::services::data_source::{create_data_source, detect_db_type};
 
 // ========== 数据库操作命令 ==========
 
@@ -28,17 +29,20 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Option<DatabaseInfo>
         return Ok(None);
     }
 
-    let mut ext_db = state.data_source.write().map_err(|e| e.to_string())?;
-    ext_db.open(&db_path).map_err(|e| {
+    let db_type = detect_db_type(&db_path)?;
+    log::info!("[DB] 检测到数据库类型: {:?}", db_type);
+    let mut ds = state.data_source.write().map_err(|e| e.to_string())?;
+    *ds = create_data_source(&db_type);
+    ds.open(&db_path).map_err(|e| {
         log::error!("[DB] 数据库打开失败: {}", e);
         "打开数据库失败，请检查文件路径".to_string()
     })?;
     log::info!("[DB] 数据库打开成功");
 
-    let count = ext_db.get_record_count()?;
-    let date_range = ext_db.get_date_range()?;
-    let providers = ext_db.get_providers()?;
-    let models = ext_db.get_models()?;
+    let count = ds.get_record_count()?;
+    let date_range = ds.get_date_range()?;
+    let providers = ds.get_providers()?;
+    let models = ds.get_models()?;
     log::info!("[DB] 记录数={}, 日期范围={:?}, 供应商={}, 模型={}", count, date_range, providers.len(), models.len());
 
     // 刷新定价引擎
@@ -93,17 +97,21 @@ pub fn load_database(file_path: String, state: State<AppState>) -> Result<Databa
     let canonical_path = validate_db_path(&file_path)?;
     let canonical_str = canonical_path.to_string_lossy().to_string();
     log::info!("[DB] load_database: {}", canonical_str);
-    let mut ext_db = state.data_source.write().map_err(|e| e.to_string())?;
-    ext_db.open(&canonical_str).map_err(|e| {
+
+    let db_type = detect_db_type(&canonical_str)?;
+    log::info!("[DB] 检测到数据库类型: {:?}", db_type);
+    let mut ds = state.data_source.write().map_err(|e| e.to_string())?;
+    *ds = create_data_source(&db_type);
+    ds.open(&canonical_str).map_err(|e| {
         log::error!("[DB] 数据库打开失败: {}", e);
         "打开数据库失败，请检查文件路径".to_string()
     })?;
     log::info!("[DB] 数据库打开成功");
 
-    let count = ext_db.get_record_count()?;
-    let date_range = ext_db.get_date_range()?;
-    let providers = ext_db.get_providers()?;
-    let models = ext_db.get_models()?;
+    let count = ds.get_record_count()?;
+    let date_range = ds.get_date_range()?;
+    let providers = ds.get_providers()?;
+    let models = ds.get_models()?;
     log::info!("[DB] 记录数={}, 供应商={}, 模型={}", count, providers.len(), models.len());
 
     // 刷新定价引擎
@@ -135,20 +143,20 @@ pub fn load_database(file_path: String, state: State<AppState>) -> Result<Databa
 
 #[tauri::command]
 pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String> {
-    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
-    if !ext_db.is_open() {
+    let ds = state.data_source.read().map_err(|e| e.to_string())?;
+    if !ds.is_open() {
         return Ok(RefreshResult {
             has_new: false,
             record_count: None,
         });
     }
 
-    let current_max = ext_db.get_latest_timestamp();
+    let current_max = ds.get_latest_timestamp();
     let prev_max = *state.db_latest_timestamp.lock().map_err(|e| e.to_string())?;
 
     if current_max != prev_max {
         *state.db_latest_timestamp.lock().map_err(|e| e.to_string())? = current_max;
-        let count = ext_db.get_record_count()?;
+        let count = ds.get_record_count()?;
         Ok(RefreshResult {
             has_new: true,
             record_count: Some(count),
@@ -163,17 +171,17 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
 
 #[tauri::command]
 pub fn get_filter_options(state: State<AppState>) -> Result<FilterOptions, String> {
-    let ext_db = state.data_source.read().map_err(|e| e.to_string())?;
-    if !ext_db.is_open() {
+    let ds = state.data_source.read().map_err(|e| e.to_string())?;
+    if !ds.is_open() {
         return Ok(FilterOptions {
             providers: Vec::new(),
             models: Vec::new(),
             date_range: DateRange { min: 0, max: 0 },
         });
     }
-    let providers = ext_db.get_providers()?;
-    let models = ext_db.get_models()?;
-    let date_range = ext_db.get_date_range()?;
+    let providers = ds.get_providers()?;
+    let models = ds.get_models()?;
+    let date_range = ds.get_date_range()?;
     Ok(FilterOptions {
         providers,
         models,

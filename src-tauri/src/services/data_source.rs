@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+use rusqlite::{Connection, OpenFlags};
+use std::path::Path;
+
 use crate::models::*;
 
 pub trait DataSource: Send + Sync {
@@ -27,4 +30,51 @@ pub trait DataSource: Send + Sync {
     fn get_model_context_tier_buckets(&self, params: &FilterParams, thresholds: &[i64]) -> Result<Vec<ModelContextTierBucket>, String>;
     fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String>;
     fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String>;
+}
+
+#[derive(Debug)]
+pub enum DbType {
+    ExternalDb,
+    OpenCode,
+}
+
+pub fn detect_db_type(path: &str) -> Result<DbType, String> {
+    let conn = Connection::open_with_flags(
+        Path::new(path),
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|e| format!("无法打开数据库: {}", e))?;
+
+    let has_proxy_logs: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='proxy_request_logs'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+
+    if has_proxy_logs {
+        return Ok(DbType::ExternalDb);
+    }
+
+    let has_message: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='message'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+
+    if has_message {
+        return Ok(DbType::OpenCode);
+    }
+
+    Err("无法识别数据库类型".to_string())
+}
+
+pub fn create_data_source(db_type: &DbType) -> Box<dyn DataSource> {
+    match db_type {
+        DbType::ExternalDb => Box::new(super::external_db::ExternalDbService::new()),
+        DbType::OpenCode => Box::new(super::opencode_db::OpenCodeDbService::new()),
+    }
 }
