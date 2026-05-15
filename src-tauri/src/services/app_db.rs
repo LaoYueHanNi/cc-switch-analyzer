@@ -250,8 +250,11 @@ impl AppDbService {
     }
 
     fn migrate_v5(&mut self) -> Result<(), String> {
-        // 清空旧 source='ai' 的标题缓存，触发按新 source 逻辑重新拉取
-        self.db.execute_batch("DELETE FROM session_titles WHERE source = 'ai' OR source = ''")
+        // 先添加 source 列（0.5.1 的 session_titles 没有此列）
+        self.db.execute_batch("ALTER TABLE session_titles ADD COLUMN source TEXT NOT NULL DEFAULT ''")
+            .map_err(|e| format!("迁移 v5 添加 source 列失败: {}", e))?;
+        // 清空旧标题缓存，触发按新 source 逻辑重新拉取
+        self.db.execute_batch("DELETE FROM session_titles")
             .map_err(|e| format!("迁移 v5 清空标题缓存失败: {}", e))?;
         self.set_schema_version(5)?;
         Ok(())

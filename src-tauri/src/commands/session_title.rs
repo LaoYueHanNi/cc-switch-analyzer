@@ -49,10 +49,11 @@ pub fn get_session_titles(
                 .collect();
             if remaining.is_empty() { break; }
 
+            let tag = source_entry.source.title_source_tag().unwrap_or("");
             if let Some(titles_result) = source_entry.source.get_session_titles_from_provider(&remaining) {
                 if let Ok(titles) = titles_result {
                     for (id, (title, project)) in titles {
-                        resolved.insert(id, (title, project, "opencode".to_string()));
+                        resolved.insert(id, (title, project, tag.to_string()));
                     }
                 }
             }

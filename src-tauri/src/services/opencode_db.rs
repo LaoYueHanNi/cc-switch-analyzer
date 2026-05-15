@@ -940,6 +940,7 @@ impl super::data_source::DataSource for OpenCodeDbService {
     fn get_model_context_tier_buckets(&self, params: &FilterParams, thresholds: &[i64]) -> Result<Vec<ModelContextTierBucket>, String> { self.get_model_context_tier_buckets(params, thresholds) }
     fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String> { self.get_minute_level_token_trend() }
     fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String> { self.get_recent_request_logs_raw(since) }
+    fn title_source_tag(&self) -> Option<&'static str> { Some("opencode") }
     fn get_session_titles_from_provider(
         &self,
         session_ids: &[String],

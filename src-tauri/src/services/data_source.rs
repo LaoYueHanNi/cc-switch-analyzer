@@ -36,6 +36,10 @@ pub trait DataSource: Send + Sync {
     fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String>;
     fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String>;
 
+    /// 数据源提供的标题来源标签，用于 UI 展示。
+    /// CC-Switch 返回 None（标题由 JSONL 或其他 provider 解析），OpenCode 返回 "opencode"。
+    fn title_source_tag(&self) -> Option<&'static str> { None }
+
     /// 从数据源获取会话标题和项目名。默认不提供。
     /// 返回 HashMap<session_id, (title, project_name)>
     fn get_session_titles_from_provider(
