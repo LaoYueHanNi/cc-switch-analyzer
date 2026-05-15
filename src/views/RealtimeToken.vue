@@ -42,7 +42,7 @@
 
     <!-- 请求日志列表 -->
     <div v-if="logs.length > 0" class="log-list">
-      <template v-for="(group, gi) in sessionGroups" :key="group.sessionId">
+      <template v-for="(group, gi) in visibleGroups" :key="group.sessionId">
         <!-- Session 分组头 -->
         <div class="session-header" :class="{ 'session-new': groupHasNew(group) }" @click="toggleGroup(group.sessionId)">
           <span class="sh-arrow" :class="{ collapsed: collapsedSessions.has(group.sessionId) }">▾</span>
@@ -119,7 +119,7 @@ import type { RealtimeRequestLog } from '@/types/database'
 
 const dbStore = useDatabaseStore()
 const { logs, lastRefreshTime, startPolling, stopPolling, refreshNow } = useRealtimePolling()
-const { getTitle, getProject, fetchTitles } = useSessionTitles()
+const { sessionTitles, getTitle, getProject, getSource, fetchTitles } = useSessionTitles()
 
 const collapsedSessions = ref<Set<string>>(new Set())
 
@@ -145,15 +145,17 @@ const summaryStats = computed(() => {
   let cacheCreationCost = 0
   let inputTokens = 0
   let cacheReadTokens = 0
-  for (const r of logs.value) {
-    cost += r.totalCost
-    tokens += r.inputTokens + r.outputTokens + r.cacheReadTokens + r.cacheCreationTokens
-    inputCost += r.inputCost
-    outputCost += r.outputCost
-    cacheReadCost += r.cacheReadCost
-    cacheCreationCost += r.cacheCreationCost
-    inputTokens += r.inputTokens
-    cacheReadTokens += r.cacheReadTokens
+  for (const group of visibleGroups.value) {
+    for (const r of group.rows) {
+      cost += r.totalCost
+      tokens += r.inputTokens + r.outputTokens + r.cacheReadTokens + r.cacheCreationTokens
+      inputCost += r.inputCost
+      outputCost += r.outputCost
+      cacheReadCost += r.cacheReadCost
+      cacheCreationCost += r.cacheCreationCost
+      inputTokens += r.inputTokens
+      cacheReadTokens += r.cacheReadTokens
+    }
   }
   return {
     totalCost: cost,
@@ -202,6 +204,16 @@ const sessionGroups = computed<SessionGroup[]>(() => {
   // 按组内最新时间倒序
   groups.sort((a, b) => b.rows[0].createdAt - a.rows[0].createdAt)
   return groups
+})
+
+const visibleGroups = computed<SessionGroup[]>(() => {
+  return sessionGroups.value.filter(g => {
+    if (g.rows.length > 1) return true
+    // 标题尚未查询，暂不过滤，避免闪烁
+    const titleInfo = sessionTitles.value.get(g.sessionId)
+    if (!titleInfo) return true
+    return titleInfo.source !== ''
+  })
 })
 
 function formatTime(epoch: number): string {
