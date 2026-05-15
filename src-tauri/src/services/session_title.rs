@@ -94,8 +94,50 @@ fn clean_title(text: &str) -> String {
     text.trim().trim_start_matches('/').split('\n').next().unwrap_or("").trim().to_string()
 }
 
+// ========== usage-data/session-meta 文件解析 ==========
+
+fn claude_session_meta_dir() -> PathBuf {
+    dirs::home_dir().expect("无法获取 HOME 目录")
+        .join(".claude").join("usage-data").join("session-meta")
+}
+
+/// 从 session-meta JSON 文件提取 (标题, 项目名)
+fn find_session_meta(session_id: &str) -> Option<(String, String)> {
+    let meta_path = claude_session_meta_dir().join(format!("{}.json", session_id));
+    if !meta_path.exists() { return None; }
+    let content = fs::read_to_string(&meta_path).ok()?;
+    let obj: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let prompt = obj.get("first_prompt")?.as_str()?;
+    let title = clean_title(prompt);
+    if title.is_empty() { return None; }
+
+    let project = obj.get("project_path")
+        .and_then(|v| v.as_str())
+        .map(extract_project_name)
+        .unwrap_or_default();
+
+    Some((title, project))
+}
+
+/// 从完整路径中提取项目名，取最后两段
+fn extract_project_name(path: &str) -> String {
+    let parts: Vec<&str> = path.split(&['\\', '/'][..]).filter(|s| !s.is_empty()).collect();
+    if parts.len() >= 2 {
+        format!("{}/{}", parts[parts.len() - 2], parts[parts.len() - 1])
+    } else {
+        parts.last().unwrap_or(&"").to_string()
+    }
+}
+
 /// 返回 (标题, 项目名)
+/// 优先从 session-meta 获取，兜底从 projects/*.jsonl 获取
 pub fn generate_title(session_id: &str) -> Option<(String, String)> {
+    // 1. 尝试 session-meta
+    if let Some(result) = find_session_meta(session_id) {
+        return Some(result);
+    }
+    // 2. 兜底 jsonl
     let (path, project_name) = find_jsonl(session_id)?;
     let message = extract_first_user_message(&path)?;
     let title = clean_title(&message);
