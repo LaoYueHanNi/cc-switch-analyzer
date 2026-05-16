@@ -126,11 +126,9 @@ async function loadData(): Promise<void> {
   try {
     const params = filterStore.filterParams
     const project = selectedProject.value || undefined
-    console.log('[SessionAnalysis] 查询会话', project ? `(目录: ${project})` : '')
     const result = await platformAdapter.querySessionsWithCost(params, project)
     sessionsRaw.value = result?.sessions || []
     availableProjects.value = result?.availableProjects || []
-    console.log('[SessionAnalysis] 会话结果数:', sessionsRaw.value.length, '可用目录:', availableProjects.value.length)
     if (sessionsRaw.value.length > 0) {
       fetchTitles(sessionsRaw.value.map(s => s.sessionId).filter(Boolean))
     }
@@ -185,18 +183,6 @@ onDeactivated(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.tab-loading,
-.tab-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 60px 0;
-  color: var(--text-muted);
-  gap: 12px;
-  flex: 1;
 }
 
 .session-list {

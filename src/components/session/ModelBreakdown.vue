@@ -26,7 +26,6 @@
 
 <script setup lang="ts">
 import { formatNum, formatCost, formatPercent } from '@/utils/format'
-import { COLORS } from '@/utils/constants'
 
 defineProps<{
   items: Array<{
@@ -46,7 +45,7 @@ defineProps<{
 }>()
 
 function truncate(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max) + '...' : s
+  return s.length > max ? s.slice(0, max) + '…' : s
 }
 
 function rows(item: {
@@ -54,10 +53,10 @@ function rows(item: {
   inputCost?: number; outputCost?: number; cacheReadCost?: number; cacheCreationCost?: number
 }) {
   return [
-    { label: '输入', tokens: formatNum(item.inputTokens), cost: formatCost(item.inputCost || 0), color: COLORS.PURPLE },
-    { label: '输出', tokens: formatNum(item.outputTokens), cost: formatCost(item.outputCost || 0), color: COLORS.ORANGE },
-    { label: '缓存读', tokens: formatNum(item.cacheRead), cost: formatCost(item.cacheReadCost || 0), color: COLORS.BLUE },
-    { label: '缓存写', tokens: formatNum(item.cacheCreation), cost: formatCost(item.cacheCreationCost || 0), color: COLORS.DARK_ORANGE }
+    { label: '输入', tokens: formatNum(item.inputTokens), cost: formatCost(item.inputCost || 0), color: 'var(--color-purple)' },
+    { label: '输出', tokens: formatNum(item.outputTokens), cost: formatCost(item.outputCost || 0), color: 'var(--color-orange)' },
+    { label: '缓存读', tokens: formatNum(item.cacheRead), cost: formatCost(item.cacheReadCost || 0), color: 'var(--color-blue)' },
+    { label: '缓存写', tokens: formatNum(item.cacheCreation), cost: formatCost(item.cacheCreationCost || 0), color: 'var(--color-dark-orange)' }
   ]
 }
 

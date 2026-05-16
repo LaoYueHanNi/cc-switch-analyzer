@@ -12,7 +12,6 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { COLORS } from '@/utils/constants'
 import { formatNum, formatCost, formatRate } from '@/utils/format'
 
 interface PricingItem {
@@ -36,8 +35,6 @@ const props = defineProps<{
   outputRate?: string
   cacheReadRate?: string
   cacheCreationRate?: string
-  showCost?: boolean
-  showTokens?: boolean
 }>()
 
 const items = computed<PricingItem[]>(() => [
@@ -46,28 +43,28 @@ const items = computed<PricingItem[]>(() => [
     tokens: formatNum(props.inputTokens ?? 0),
     cost: formatCost(props.inputCost ?? 0),
     rate: props.inputRate ?? '-',
-    color: COLORS.PURPLE
+    color: 'var(--color-purple)'
   },
   {
     label: '输出',
     tokens: formatNum(props.outputTokens ?? 0),
     cost: formatCost(props.outputCost ?? 0),
     rate: props.outputRate ?? '-',
-    color: COLORS.ORANGE
+    color: 'var(--color-orange)'
   },
   {
     label: '缓存读取',
     tokens: formatNum(props.cacheReadTokens ?? 0),
     cost: formatCost(props.cacheReadCost ?? 0),
     rate: props.cacheReadRate ?? '-',
-    color: COLORS.BLUE
+    color: 'var(--color-blue)'
   },
   {
     label: '缓存写入',
     tokens: formatNum(props.cacheCreationTokens ?? 0),
     cost: formatCost(props.cacheCreationCost ?? 0),
     rate: props.cacheCreationRate ?? '-',
-    color: COLORS.DARK_ORANGE
+    color: 'var(--color-dark-orange)'
   }
 ])
 </script>

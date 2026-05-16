@@ -127,7 +127,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
-import { NSelect, NInputNumber, NIcon } from 'naive-ui'
+import { NSelect, NInputNumber, NIcon, useMessage } from 'naive-ui'
 import { ChevronDownOutline, ChevronUpOutline } from '@vicons/ionicons5'
 import { platformAdapter } from '@/platform'
 import { useDatabaseStore } from '@/stores/database'
@@ -142,6 +142,7 @@ import { epochToDateStr } from '@/utils/format'
 
 const dbStore = useDatabaseStore()
 const pricingStore = usePricingStore()
+const message = useMessage()
 
 const searchModel = ref<string | null>(null)
 const simInput = ref(1)
@@ -350,7 +351,7 @@ async function onConfirmTimeRule(data: { label: string; startTime: number; endTi
 
   const cloudConflict = cloudRules.find(r => data.startTime < r.endTime && data.endTime > r.startTime)
   if (cloudConflict) {
-    alert(`时间区间与云端规则「${cloudConflict.label || '时段定价'}」（${epochToDateStr(cloudConflict.startTime)} ~ ${epochToDateStr(cloudConflict.endTime)}）冲突，请调整时间范围`)
+    message.warning(`时间区间与云端规则「${cloudConflict.label || '时段定价'}」（${epochToDateStr(cloudConflict.startTime)} ~ ${epochToDateStr(cloudConflict.endTime)}）冲突，请调整时间范围`)
     return
   }
 
@@ -360,7 +361,7 @@ async function onConfirmTimeRule(data: { label: string; startTime: number; endTi
     : userRules
   const userConflict = otherUserRules.find(r => data.startTime < r.endTime && data.endTime > r.startTime)
   if (userConflict) {
-    alert(`时间区间与已有规则「${userConflict.label || '时段定价'}」（${epochToDateStr(userConflict.startTime)} ~ ${epochToDateStr(userConflict.endTime)}）冲突，请调整时间范围`)
+    message.warning(`时间区间与已有规则「${userConflict.label || '时段定价'}」（${epochToDateStr(userConflict.startTime)} ~ ${epochToDateStr(userConflict.endTime)}）冲突，请调整时间范围`)
     return
   }
 

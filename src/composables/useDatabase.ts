@@ -12,10 +12,8 @@ export function useDatabase() {
 
   async function autoLoadDatabase(): Promise<boolean> {
     try {
-      console.log('[useDatabase] 尝试自动加载默认数据库...')
       const sources = await platformAdapter.autoLoadDatabase()
       if (!sources || sources.length === 0) {
-        console.log('[useDatabase] 无可加载的数据库')
         return false
       }
 
@@ -37,7 +35,6 @@ export function useDatabase() {
     try {
       const result = await platformAdapter.selectDatabase()
       if (!result) {
-        console.log('[useDatabase] 用户取消选择')
         dbStore.setLoading(false)
         return false
       }

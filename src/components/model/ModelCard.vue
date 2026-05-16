@@ -153,11 +153,11 @@ function getRateStr(field: RateField): string {
   padding: 10px;
   min-width: 0;
   overflow: hidden;
-  transition: box-shadow 0.2s;
+  transition: box-shadow var(--transition-speed);
 }
 
 .model-card:hover {
-  box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+  box-shadow: var(--shadow-card);
 }
 
 .card-header {
@@ -200,14 +200,14 @@ function getRateStr(field: RateField): string {
 }
 
 .cost-value {
-  font-size: 17px;
+  font-size: var(--font-size-cost);
   font-weight: 700;
   color: var(--color-cost);
   cursor: pointer;
   text-decoration: underline;
   text-decoration-style: dotted;
   text-underline-offset: 3px;
-  transition: opacity 0.2s;
+  transition: opacity var(--transition-speed);
 }
 
 .cost-value:hover {

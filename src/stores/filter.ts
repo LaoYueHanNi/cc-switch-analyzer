@@ -36,6 +36,9 @@ export const useFilterStore = defineStore('filter', () => {
   }
 
   // 设置日期范围（首次加载，默认当天）
+  // 注意：fromDate 也设为 max 是有意为之——配合 activeQuickDays=1 的按钮高亮状态，
+  // 首次查询通过 filterParams 走的是 fromDate/toDate，而非 quickDateQuery。
+  // 所以 fromDate=toDate=max 实现了"只查今天"的效果。
   function setDateRange(min: number, max: number): void {
     const toDateVal = new Date(max * 1000)
     fromDate.value = new Date(max * 1000)

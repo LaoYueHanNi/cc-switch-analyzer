@@ -27,11 +27,11 @@ defineProps<{
   padding: 10px;
   min-width: 0;
   overflow: hidden;
-  transition: box-shadow 0.2s;
+  transition: box-shadow var(--transition-speed);
 }
 
 .provider-card:hover {
-  box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+  box-shadow: var(--shadow-card);
 }
 
 .provider-name {
@@ -52,7 +52,7 @@ defineProps<{
 }
 
 .cost-value {
-  font-size: 17px;
+  font-size: var(--font-size-cost);
   font-weight: 700;
   color: var(--color-cost);
 }

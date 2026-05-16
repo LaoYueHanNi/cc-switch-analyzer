@@ -125,12 +125,17 @@ function formatRange(start: number, end: number): string {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  padding: 12px;
+  padding: var(--card-padding);
   background: var(--bg-card);
   border-radius: 8px;
   border: 1px solid var(--border-main);
   margin-bottom: 10px;
   align-items: center;
+  transition: border-color var(--transition-speed);
+}
+
+.session-card:hover {
+  border-color: var(--color-blue);
 }
 
 .session-overview {
@@ -201,7 +206,7 @@ function formatRange(start: number, end: number): string {
 }
 
 .session-cost {
-  font-size: 18px;
+  font-size: var(--font-size-cost);
   font-weight: 700;
   color: var(--color-cost);
 }

@@ -81,8 +81,8 @@ const items = computed(() => {
   gap: 6px;
   padding: 4px 12px;
   margin: 0 12px;
-  background: rgba(250, 173, 20, 0.1);
-  border: 1px solid rgba(250, 173, 20, 0.3);
+  background: var(--color-amber-bg);
+  border: 1px solid var(--color-amber);
   border-radius: 4px;
   font-size: 12px;
   color: var(--text-muted);
@@ -95,7 +95,7 @@ const items = computed(() => {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #faad14;
+  background: var(--color-amber);
   color: #fff;
   font-size: 11px;
   font-weight: 700;

@@ -41,10 +41,10 @@
       <div v-for="tier in displayTiers" :key="tier.threshold" class="context-tier">
         <span class="tier-threshold">>= {{ Math.round(tier.threshold / 1000) }}K</span>
         <span class="tier-rates">
-          <span class="tier-rate" :style="{ color: COLORS.PURPLE }">{{ formatRate(tier.inputCostPerMillion) }}</span>
-          <span class="tier-rate" :style="{ color: COLORS.ORANGE }">{{ formatRate(tier.outputCostPerMillion) }}</span>
-          <span class="tier-rate" :style="{ color: COLORS.BLUE }">{{ formatRate(tier.cacheReadCostPerMillion) }}</span>
-          <span class="tier-rate" :style="{ color: COLORS.DARK_ORANGE }">{{ formatRate(tier.cacheCreationCostPerMillion) }}</span>
+          <span class="tier-rate" :style="{ color: 'var(--color-purple)' }">{{ formatRate(tier.inputCostPerMillion) }}</span>
+          <span class="tier-rate" :style="{ color: 'var(--color-orange)' }">{{ formatRate(tier.outputCostPerMillion) }}</span>
+          <span class="tier-rate" :style="{ color: 'var(--color-blue)' }">{{ formatRate(tier.cacheReadCostPerMillion) }}</span>
+          <span class="tier-rate" :style="{ color: 'var(--color-dark-orange)' }">{{ formatRate(tier.cacheCreationCostPerMillion) }}</span>
         </span>
       </div>
     </div>
@@ -86,7 +86,6 @@ import { NButton, NIcon } from 'naive-ui'
 import { TimeOutline, CreateOutline, TrashOutline, AddOutline } from '@vicons/ionicons5'
 import { formatRate } from '@/utils/format'
 import { epochToDateStr } from '@/utils/format'
-import { COLORS } from '@/utils/constants'
 import PricingGrid from '@/components/common/PricingGrid.vue'
 import { getActiveRate } from '@/utils/pricing'
 import type { PricingData, TimePricingRule, CloudPricingTimeRule, ContextTier } from '@/types/pricing'
@@ -209,9 +208,14 @@ function formatDate(ts: number): string {
   background: var(--bg-card);
   border-radius: 6px;
   border: 1px solid var(--border-main);
-  padding: 8px;
+  padding: var(--card-padding);
   min-width: 0;
   overflow: hidden;
+  transition: border-color var(--transition-speed);
+}
+
+.pricing-card:hover {
+  border-color: var(--color-blue);
 }
 
 .pricing-header {
@@ -258,7 +262,7 @@ function formatDate(ts: number): string {
 }
 
 .pricing-cost {
-  font-size: 15px;
+  font-size: var(--font-size-cost);
   font-weight: 700;
   color: var(--color-cost);
   margin-bottom: 5px;

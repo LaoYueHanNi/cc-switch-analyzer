@@ -6,7 +6,7 @@
     </div>
 
     <div v-else-if="providerCards.length === 0" class="tab-empty">
-      <p>暂无数据</p>
+      <p>暂无数据，请调整筛选条件</p>
     </div>
 
     <div v-else class="card-grid">
@@ -52,17 +52,6 @@ const providerCards = computed<ProviderCardData[]>(() => {
 <style scoped>
 .by-provider {
   min-height: 200px;
-}
-
-.tab-loading,
-.tab-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 60px 0;
-  color: var(--text-muted);
-  gap: 12px;
 }
 
 .card-grid {

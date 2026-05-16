@@ -13,7 +13,7 @@
 
     <!-- 无数据库提示 -->
     <div v-else-if="!dbStore.isLoaded" class="overlay no-db-overlay">
-      <n-icon size="48" :color="themeStore.isDark ? '#666' : '#ccc'"><server-outline /></n-icon>
+      <n-icon size="48" class="no-db-icon"><server-outline /></n-icon>
       <p class="overlay-text">请选择 CC-Switch 数据库文件</p>
       <n-button type="primary" size="medium" @click="onSelectDb">
         <template #icon>
@@ -207,6 +207,10 @@ onUnmounted(() => {
   word-break: break-all;
 }
 
+.no-db-icon {
+  color: var(--text-faint);
+}
+
 /* 主区域 */
 .main-body {
   flex: 1;
@@ -237,7 +241,7 @@ onUnmounted(() => {
   border-radius: 6px;
   cursor: pointer;
   color: var(--text-muted);
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--transition-speed), color var(--transition-speed);
   position: relative;
 }
 

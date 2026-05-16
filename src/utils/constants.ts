@@ -1,26 +1,14 @@
 // UI 常量（参考 Java 版 Styles.java + AppConstants.java）
 
-// 功能色
-export const COLORS = {
-  COST_RED: '#e74c3c',
-  PRIMARY_BLUE: '#4a90d9',
-  GREEN: '#27ae60',
-  PURPLE: '#8e44ad',
-  ORANGE: '#f39c12',
-  TEAL: '#16a085',
-  BLUE: '#2980b9',
-  DARK_ORANGE: '#d35400'
-} as const
-
-// 摘要统计条指标配置
+// 摘要统计条指标配置（颜色使用 CSS 变量以支持暗色模式）
 export const SUMMARY_ITEMS = [
-  { key: 'totalRequests', label: '总请求数', color: COLORS.PRIMARY_BLUE },
-  { key: 'totalCost', label: '总费用（¥）', color: COLORS.COST_RED },
-  { key: 'totalInput', label: '输入', color: COLORS.PURPLE },
-  { key: 'totalOutput', label: '输出', color: COLORS.ORANGE },
-  { key: 'totalCacheRead', label: '缓存命中', color: COLORS.BLUE },
-  { key: 'totalCacheCreation', label: '缓存写入', color: COLORS.DARK_ORANGE },
-  { key: 'totalTokens', label: '总Token', color: COLORS.GREEN }
+  { key: 'totalRequests', label: '总请求数', color: 'var(--color-blue)' },
+  { key: 'totalCost', label: '总费用（¥）', color: 'var(--color-cost)' },
+  { key: 'totalInput', label: '输入', color: 'var(--color-purple)' },
+  { key: 'totalOutput', label: '输出', color: 'var(--color-orange)' },
+  { key: 'totalCacheRead', label: '缓存命中', color: 'var(--color-blue)' },
+  { key: 'totalCacheCreation', label: '缓存写入', color: 'var(--color-dark-orange)' },
+  { key: 'totalTokens', label: '总Token', color: 'var(--color-green)' }
 ] as const
 
 // 自动刷新间隔选项

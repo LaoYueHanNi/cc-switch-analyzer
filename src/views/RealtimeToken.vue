@@ -13,20 +13,20 @@
           <span class="stat-value">{{ formatNum(totalTokens) }}</span>
         </div>
         <div class="realtime-stat">
-          <span class="stat-label" style="color: var(--color-purple)">输入费用</span>
-          <span class="stat-value" style="color: var(--color-purple)">{{ formatCost(totalInputCost) }}</span>
+          <span class="stat-label label-purple">输入费用</span>
+          <span class="stat-value value-purple">{{ formatCost(totalInputCost) }}</span>
         </div>
         <div class="realtime-stat">
-          <span class="stat-label" style="color: var(--color-orange)">输出费用</span>
-          <span class="stat-value" style="color: var(--color-orange)">{{ formatCost(totalOutputCost) }}</span>
+          <span class="stat-label label-orange">输出费用</span>
+          <span class="stat-value value-orange">{{ formatCost(totalOutputCost) }}</span>
         </div>
         <div class="realtime-stat">
-          <span class="stat-label" style="color: var(--color-blue)">缓存读费用</span>
-          <span class="stat-value" style="color: var(--color-blue)">{{ formatCost(totalCacheReadCost) }}</span>
+          <span class="stat-label label-blue">缓存读费用</span>
+          <span class="stat-value value-blue">{{ formatCost(totalCacheReadCost) }}</span>
         </div>
         <div class="realtime-stat">
-          <span class="stat-label" style="color: var(--color-dark-orange)">缓存写费用</span>
-          <span class="stat-value" style="color: var(--color-dark-orange)">{{ formatCost(totalCacheCreationCost) }}</span>
+          <span class="stat-label label-dark-orange">缓存写费用</span>
+          <span class="stat-value value-dark-orange">{{ formatCost(totalCacheCreationCost) }}</span>
         </div>
         <div class="realtime-stat">
           <span class="stat-label">缓存命中率</span>
@@ -250,7 +250,7 @@ function shortSession(sessionId: string): string {
 
 function shortModel(name: string): string {
   if (name.length <= 24) return name
-  return name.slice(0, 22) + '...'
+  return name.slice(0, 22) + '…'
 }
 
 function formatLatency(ms: number): string {
@@ -336,7 +336,7 @@ watch(() => dbStore.hasDatabase, (val) => {
 .session-new { animation: row-flash 1.5s ease-out; }
 .sh-arrow {
   width: 14px; flex-shrink: 0;
-  font-size: 10px; color: var(--text-muted); transition: transform 0.15s;
+  font-size: 10px; color: var(--text-muted); transition: transform var(--transition-speed);
 }
 .sh-arrow.collapsed { transform: rotate(-90deg); }
 .sh-project {
@@ -444,4 +444,10 @@ watch(() => dbStore.hasDatabase, (val) => {
 .realtime-empty {
   flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-muted);
 }
+
+/* 彩色统计标签 */
+.label-purple, .value-purple { color: var(--color-purple); }
+.label-orange, .value-orange { color: var(--color-orange); }
+.label-blue, .value-blue { color: var(--color-blue); }
+.label-dark-orange, .value-dark-orange { color: var(--color-dark-orange); }
 </style>

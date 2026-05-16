@@ -1,12 +1,14 @@
 <template>
   <n-config-provider :locale="zhCN" :date-locale="dateZhCN" :theme="themeStore.isDark ? darkTheme : undefined" :theme-overrides="themeOverrides">
-    <AppLayout />
+    <n-message-provider>
+      <AppLayout />
+    </n-message-provider>
   </n-config-provider>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
-import { zhCN, dateZhCN, NConfigProvider, darkTheme } from 'naive-ui'
+import { zhCN, dateZhCN, NConfigProvider, NMessageProvider, darkTheme } from 'naive-ui'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useThemeStore } from '@/stores/theme'
 
@@ -61,6 +63,14 @@ const themeOverrides = computed(() => ({
   --color-orange: #f39c12;
   --color-blue: #2980b9;
   --color-dark-orange: #d35400;
+
+  --shadow-card: 0 2px 6px rgba(0,0,0,0.06);
+
+  /* 设计 token */
+  --card-padding: 10px;
+  --card-gap: 10px;
+  --font-size-cost: 17px;
+  --transition-speed: 0.2s;
 }
 
 html.dark {
@@ -91,6 +101,8 @@ html.dark {
   --color-orange: #ffc857;
   --color-blue: #5dade2;
   --color-dark-orange: #e67e22;
+
+  --shadow-card: 0 2px 6px rgba(0,0,0,0.3);
 }
 
 html, body {
@@ -123,7 +135,19 @@ body {
 }
 
 /* 全局缩小下拉菜单 */
-.n-base-selection-option__content {
-  font-size: 11px !important;
+body .n-base-selection-option__content {
+  font-size: 11px;
+}
+
+/* 全局加载/空状态 */
+.tab-loading,
+.tab-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 0;
+  color: var(--text-muted);
+  gap: 12px;
 }
 </style>

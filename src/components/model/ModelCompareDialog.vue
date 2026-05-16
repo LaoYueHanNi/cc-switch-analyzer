@@ -82,7 +82,6 @@
 import { ref, computed, watch } from 'vue'
 import { NModal, NCard, NSelect, NButton } from 'naive-ui'
 import { formatCost, formatRate } from '@/utils/format'
-import { COLORS } from '@/utils/constants'
 import { getActiveRate } from '@/utils/pricing'
 import type { ModelBreakdown } from '@/types/database'
 import type { PricingData } from '@/types/pricing'
@@ -123,7 +122,7 @@ const comparisonResult = computed(() => {
   if (!targetPricing) return null
 
   const labels = ['输入', '输出', '缓存读取', '缓存写入']
-  const colors = [COLORS.PURPLE, COLORS.ORANGE, COLORS.BLUE, COLORS.DARK_ORANGE]
+  const colors = ['var(--color-purple)', 'var(--color-orange)', 'var(--color-blue)', 'var(--color-dark-orange)']
 
   let targetCost = 0
   const targetBreakdown = [0, 0, 0, 0]
@@ -252,7 +251,7 @@ watch(() => props.show, (val) => {
 }
 
 .cost-num {
-  font-size: 18px;
+  font-size: var(--font-size-cost);
   font-weight: 600;
   color: var(--color-cost);
 }

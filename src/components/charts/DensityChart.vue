@@ -6,6 +6,7 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import * as echarts from 'echarts'
 import { epochToTimeStr } from '@/utils/format'
+import { useThemeStore } from '@/stores/theme'
 
 const props = defineProps<{
   timestamps: number[]
@@ -13,8 +14,16 @@ const props = defineProps<{
   endTime: number
 }>()
 
+const themeStore = useThemeStore()
 const chartRef = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
+
+function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return `rgba(${r},${g},${b},${alpha})`
+}
 
 function renderChart(): void {
   if (!chartRef.value || props.timestamps.length === 0) return
@@ -63,8 +72,8 @@ function renderChart(): void {
       lineStyle: { color: colorCost, width: 1.5 },
       areaStyle: {
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: 'rgba(231,76,60,0.35)' },
-          { offset: 1, color: 'rgba(231,76,60,0.02)' }
+          { offset: 0, color: hexToRgba(colorCost, 0.35) },
+          { offset: 1, color: hexToRgba(colorCost, 0.02) }
         ])
       }
     }],
@@ -75,15 +84,24 @@ function renderChart(): void {
   }, true)
 }
 
-onMounted(renderChart)
+onMounted(() => {
+  renderChart()
+  window.addEventListener('resize', handleResize)
+})
 watch(() => props.timestamps, renderChart, { deep: true })
+watch(() => themeStore.isDark, renderChart)
 
 onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
   if (chart) {
     chart.dispose()
     chart = null
   }
 })
+
+function handleResize(): void {
+  chart?.resize()
+}
 </script>
 
 <style scoped>

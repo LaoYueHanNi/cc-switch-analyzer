@@ -146,17 +146,6 @@ function onSetPricing(_modelId: string): void {
   min-height: 200px;
 }
 
-.tab-loading,
-.tab-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 60px 0;
-  color: var(--text-muted);
-  gap: 12px;
-}
-
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
