@@ -10,11 +10,17 @@
         <n-select
           v-model:value="targetModel"
           :options="modelOptions"
+          :filter="fuzzyFilter"
           filterable
           placeholder="选择要对比的模型"
           clearable
           style="margin-bottom: 12px"
         />
+
+        <!-- 缓存回退提示 -->
+        <div v-if="cacheFallbackUsed" class="cache-fallback-hint">
+          目标模型不支持缓存计费，缓存命中 token 已计入输入费用
+        </div>
 
         <!-- 对比结果 -->
         <div v-if="comparisonResult" class="compare-result">
@@ -77,9 +83,10 @@ import { ref, computed, watch } from 'vue'
 import { NModal, NCard, NSelect, NButton } from 'naive-ui'
 import { formatCost, formatRate } from '@/utils/format'
 import { COLORS } from '@/utils/constants'
-import { getActiveRate, ALL_RATE_FIELDS } from '@/utils/pricing'
+import { getActiveRate } from '@/utils/pricing'
 import type { ModelBreakdown } from '@/types/database'
 import type { PricingData } from '@/types/pricing'
+import type { CompareBucket } from '@/types/common'
 
 const props = defineProps<{
   show: boolean
@@ -87,6 +94,7 @@ const props = defineProps<{
   sourceCost: number
   sourceCostBreakdown: [number, number, number, number]
   modelData: ModelBreakdown | null
+  compareBuckets: CompareBucket[]
   allModels: PricingData[]
 }>()
 
@@ -102,6 +110,13 @@ const modelOptions = computed(() =>
     .map(m => ({ label: m.modelId, value: m.modelId }))
 )
 
+// 模糊搜索：忽略 - . _ 等分隔符
+const normalize = (s: string) => s.replace(/[-_.]/g, '').toLowerCase()
+const fuzzyFilter = (pattern: string, option: { label: string }) =>
+  normalize(option.label).includes(normalize(pattern))
+
+const cacheFallbackUsed = ref(false)
+
 const comparisonResult = computed(() => {
   if (!targetModel.value || !props.modelData) return null
 
@@ -109,39 +124,85 @@ const comparisonResult = computed(() => {
   const targetPricing = props.allModels.find(m => m.modelId === targetModel.value)
   if (!targetPricing) return null
 
-  const tokens = {
-    input: props.modelData.inputTokens,
-    output: props.modelData.outputTokens,
-    cacheRead: props.modelData.cacheRead,
-    cacheCreation: props.modelData.cacheCreation
-  }
-
-  const contextSize = tokens.input + tokens.cacheRead
-  const tokenKeys: (keyof typeof tokens)[] = ['input', 'output', 'cacheRead', 'cacheCreation']
-
-  // 用目标模型的当前有效单价计算费用
-  const targetRates = getActiveRate(targetPricing, contextSize)
-  const targetRateArr = [targetRates.inputRate, targetRates.outputRate, targetRates.cacheReadRate, targetRates.cacheCreationRate]
-  const targetCosts = ALL_RATE_FIELDS.map((_, i) => tokens[tokenKeys[i]] * targetRateArr[i] / 1_000_000)
-  const targetCost = targetCosts.reduce((a, b) => a + b, 0)
-
-  const ratio = props.sourceCost > 0 ? targetCost / props.sourceCost : 0
-
-  const sourceRates = getActiveRate(sourcePricing, contextSize)
-  const sourceRateArr = [sourceRates.inputRate, sourceRates.outputRate, sourceRates.cacheReadRate, sourceRates.cacheCreationRate]
-
-  const bd = props.sourceCostBreakdown
   const labels = ['输入', '输出', '缓存读取', '缓存写入']
   const colors = [COLORS.PURPLE, COLORS.ORANGE, COLORS.BLUE, COLORS.DARK_ORANGE]
 
+  let targetCost = 0
+  const targetBreakdown = [0, 0, 0, 0]
+  let fallbackUsed = false
+
+  if (props.compareBuckets.length > 0) {
+    // 逐桶计算
+    for (const bucket of props.compareBuckets) {
+      const rates = getActiveRate(targetPricing, bucket.threshold, bucket.representativeEpoch)
+
+      // 缓存回退：目标模型标记为 noCacheSupport 时，cacheRead token 并入 input
+      let effectiveInput = bucket.inputTokens
+      let effectiveCacheRead = bucket.cacheRead
+      if (targetPricing.noCacheSupport && bucket.cacheRead > 0) {
+        effectiveInput += bucket.cacheRead
+        effectiveCacheRead = 0
+        fallbackUsed = true
+      }
+
+      const tokens = [effectiveInput, bucket.outputTokens, effectiveCacheRead, bucket.cacheCreation]
+      const rateArr = [rates.inputRate, rates.outputRate, rates.cacheReadRate, rates.cacheCreationRate]
+
+      for (let i = 0; i < 4; i++) {
+        const c = tokens[i] * rateArr[i] / 1_000_000
+        targetBreakdown[i] += c
+        targetCost += c
+      }
+    }
+  } else {
+    // 降级：用汇总数据计算（但仍应用缓存回退）
+    const tokens = {
+      input: props.modelData.inputTokens,
+      output: props.modelData.outputTokens,
+      cacheRead: props.modelData.cacheRead,
+      cacheCreation: props.modelData.cacheCreation
+    }
+    const contextSize = tokens.input + tokens.cacheRead
+    const rates = getActiveRate(targetPricing, contextSize)
+
+    let effectiveInput = tokens.input
+    let effectiveCacheRead = tokens.cacheRead
+    if (targetPricing.noCacheSupport && tokens.cacheRead > 0) {
+      effectiveInput += tokens.cacheRead
+      effectiveCacheRead = 0
+      fallbackUsed = true
+    }
+
+    const effectiveTokens = [effectiveInput, tokens.output, effectiveCacheRead, tokens.cacheCreation]
+    const rateArr = [rates.inputRate, rates.outputRate, rates.cacheReadRate, rates.cacheCreationRate]
+    for (let i = 0; i < 4; i++) {
+      const c = effectiveTokens[i] * rateArr[i] / 1_000_000
+      targetBreakdown[i] = c
+      targetCost += c
+    }
+  }
+
+  cacheFallbackUsed.value = fallbackUsed
+
+  const ratio = props.sourceCost > 0 ? targetCost / props.sourceCost : 0
+
+  // 获取源模型的有效单价（用于展示）
+  const sourceRates = getActiveRate(sourcePricing, props.modelData.inputTokens + props.modelData.cacheRead)
+  const sourceRateArr = [sourceRates.inputRate, sourceRates.outputRate, sourceRates.cacheReadRate, sourceRates.cacheCreationRate]
+
+  // 获取目标模型的有效单价（用于展示，用汇总的 contextSize）
+  const targetDisplayRates = getActiveRate(targetPricing, props.modelData.inputTokens + props.modelData.cacheRead)
+  const targetDisplayRateArr = [targetDisplayRates.inputRate, targetDisplayRates.outputRate, targetDisplayRates.cacheReadRate, targetDisplayRates.cacheCreationRate]
+
+  const bd = props.sourceCostBreakdown
   const items = labels.map((label, i) => ({
     label,
     cost: bd[i],
-    targetCost: targetCosts[i],
+    targetCost: targetBreakdown[i],
     sourceRate: sourceRateArr[i],
-    targetRate: targetRateArr[i],
+    targetRate: targetDisplayRateArr[i],
     color: colors[i],
-    ratio: bd[i] > 0 ? targetCosts[i] / bd[i] : 0
+    ratio: bd[i] > 0 ? targetBreakdown[i] / bd[i] : 0
   }))
 
   return { targetCost, ratio, items }
@@ -149,7 +210,10 @@ const comparisonResult = computed(() => {
 
 // 关闭时重置
 watch(() => props.show, (val) => {
-  if (!val) targetModel.value = null
+  if (!val) {
+    targetModel.value = null
+    cacheFallbackUsed.value = false
+  }
 })
 </script>
 
@@ -161,6 +225,15 @@ watch(() => props.show, (val) => {
 .compare-desc {
   font-size: 13px;
   color: var(--text-tertiary);
+  margin-bottom: 12px;
+}
+
+.cache-fallback-hint {
+  font-size: 12px;
+  color: var(--color-orange);
+  background: var(--color-orange-bg, rgba(255, 165, 0, 0.1));
+  padding: 6px 10px;
+  border-radius: 4px;
   margin-bottom: 12px;
 }
 

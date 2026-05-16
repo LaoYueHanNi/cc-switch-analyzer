@@ -75,6 +75,7 @@ export interface PricingData {
   contextTiers: ContextTier[]
   aliases: string[]
   userAliases: string[]
+  noCacheSupport?: boolean
 }
 
 export interface TokenDimensions {

@@ -4,6 +4,7 @@ use tauri::State;
 
 use crate::AppState;
 use crate::models::*;
+use crate::models::CompareBucket;
 use crate::services::data_source::*;
 use crate::services::precompute::*;
 
@@ -258,11 +259,52 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
     log::debug!("[QUERY] 定价引擎模型数={}", pricing.size());
 
+    // 别名解析：将 combined 和 tier_buckets 中的别名模型统一为主模型 ID
+    let combined = {
+        let mut resolved: Vec<crate::models::CombinedBreakdownRow> = combined;
+        for row in &mut resolved {
+            if let Some(canonical) = pricing.resolve_model_id(&row.model) {
+                row.model = canonical;
+            }
+        }
+        resolved
+    };
+    let tier_buckets = {
+        let mut resolved = tier_buckets;
+        for bucket in &mut resolved {
+            if let Some(canonical) = pricing.resolve_model_id(&bucket.model) {
+                bucket.model = canonical;
+            }
+        }
+        resolved
+    };
+    // 别名合并后重新聚合
+    let agg = aggregate_combined_breakdown(&combined);
+
     let tz_offset = params.tz_offset.unwrap_or(0);
     let mut precomputed = precompute_costs(&agg.daily_trend, &agg.provider_model_tokens, &pricing, tz_offset);
 
     let (tier_costs, ctx_model_costs, ctx_model_breakdown) = build_context_tier_and_model_costs(&tier_buckets, &pricing);
     precomputed.model_context_tier_costs = tier_costs;
+
+    // 将 tier_buckets 转换为 CompareBucket map，供前端费用比较使用
+    let mut compare_buckets_map: HashMap<String, Vec<CompareBucket>> = HashMap::new();
+    for bucket in &tier_buckets {
+        let cb = CompareBucket {
+            threshold: bucket.context_tier.max(0),
+            representative_epoch: bucket.representative_epoch,
+            input_tokens: bucket.input_tokens,
+            output_tokens: bucket.output_tokens,
+            cache_read: bucket.cache_read,
+            cache_creation: bucket.cache_creation,
+        };
+        compare_buckets_map
+            .entry(bucket.model.clone())
+            .or_default()
+            .push(cb);
+    }
+    precomputed.model_compare_buckets = compare_buckets_map;
+
     if !ctx_model_costs.is_empty() {
         precomputed.model_costs = ctx_model_costs;
         precomputed.model_cost_breakdown = ctx_model_breakdown;

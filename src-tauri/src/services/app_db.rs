@@ -61,6 +61,10 @@ impl AppDbService {
             self.backup_before_migration(4)?;
             self.migrate_v5()?;
         }
+        if version < 6 {
+            self.backup_before_migration(5)?;
+            self.migrate_v6()?;
+        }
 
         Ok(())
     }
@@ -257,6 +261,20 @@ impl AppDbService {
         self.db.execute_batch("DELETE FROM session_titles")
             .map_err(|e| format!("迁移 v5 清空标题缓存失败: {}", e))?;
         self.set_schema_version(5)?;
+        Ok(())
+    }
+
+    fn migrate_v6(&mut self) -> Result<(), String> {
+        // cloud_pricing_cache 加 no_cache_support 列
+        let has_no_cache = self.db
+            .prepare("SELECT no_cache_support FROM cloud_pricing_cache LIMIT 0")
+            .is_ok();
+        if !has_no_cache {
+            self.db.execute_batch(
+                "ALTER TABLE cloud_pricing_cache ADD COLUMN no_cache_support INTEGER NOT NULL DEFAULT 0;"
+            ).map_err(|e| format!("迁移 v6 (no_cache_support) 失败: {}", e))?;
+        }
+        self.set_schema_version(6)?;
         Ok(())
     }
 
@@ -688,8 +706,8 @@ impl AppDbService {
             tx.execute(
                 "INSERT INTO cloud_pricing_cache
                     (model_id, display_name, input_cost_per_million, output_cost_per_million,
-                     cache_read_cost_per_million, cache_creation_cost_per_million, threshold, aliases)
-                 VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+                     cache_read_cost_per_million, cache_creation_cost_per_million, threshold, aliases, no_cache_support)
+                 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
                 params![
                     model.model_id,
                     model.model_id,
@@ -698,6 +716,7 @@ impl AppDbService {
                     model.cache_read_cost_per_million,
                     model.cache_creation_cost_per_million,
                     aliases_str,
+                    model.no_cache_support,
                 ],
             ).map_err(|e| format!("写入云端定价缓存失败: {}", e))?;
 
@@ -778,14 +797,14 @@ impl AppDbService {
     }
 
     /// 从缓存读取云端定价（返回基础行 + 按模型分组的上下文档位 + 按 model_id 分组的云端时间规则 + 云端别名）
-    pub fn load_cloud_pricing(&self) -> Result<(Vec<ModelPricing>, HashMap<String, Vec<ContextTier>>, HashMap<String, Vec<crate::models::CloudPricingTimeRule>>, HashMap<String, Vec<String>>), String> {
+    pub fn load_cloud_pricing(&self) -> Result<(Vec<ModelPricing>, HashMap<String, Vec<ContextTier>>, HashMap<String, Vec<crate::models::CloudPricingTimeRule>>, HashMap<String, Vec<String>>, Vec<String>), String> {
         // 读取基础行 (threshold = 0)
         let mut stmt = self.db
             .prepare(
                 "SELECT model_id,
                         input_cost_per_million, output_cost_per_million,
                         cache_read_cost_per_million, cache_creation_cost_per_million,
-                        aliases
+                        aliases, no_cache_support
                  FROM cloud_pricing_cache WHERE threshold = 0 ORDER BY model_id"
             )
             .map_err(|e| format!("查询云端定价缓存失败: {}", e))?;
@@ -800,19 +819,22 @@ impl AppDbService {
                     cache_creation_cost_per_million: row.get("cache_creation_cost_per_million")?,
                 },
                 row.get::<_, String>("aliases")?,
+                row.get::<_, bool>("no_cache_support")?,
             ))
         }).map_err(|e| format!("查询云端定价缓存失败: {}", e))?;
 
         let mut base = Vec::new();
         let mut cloud_aliases: HashMap<String, Vec<String>> = HashMap::new();
+        let mut no_cache_models: Vec<String> = Vec::new();
         for row in base_rows {
-            let (pricing, aliases_str) = row.map_err(|e| format!("读取云端定价缓存失败: {}", e))?;
+            let (pricing, aliases_str, no_cache) = row.map_err(|e| format!("读取云端定价缓存失败: {}", e))?;
             let aliases: Vec<String> = if aliases_str.is_empty() {
                 Vec::new()
             } else {
                 aliases_str.split(',').map(|s| s.to_string()).collect()
             };
             cloud_aliases.insert(pricing.model_id.clone(), aliases);
+            if no_cache { no_cache_models.push(pricing.model_id.clone()); }
             base.push(pricing);
         }
 
@@ -849,7 +871,7 @@ impl AppDbService {
         // 读取云端时间规则
         let cloud_time_rules = self.load_cloud_time_rules()?;
 
-        Ok((base, tiers, cloud_time_rules, cloud_aliases))
+        Ok((base, tiers, cloud_time_rules, cloud_aliases, no_cache_models))
     }
 
     /// 从缓存读取云端时间规则（按 model_id 分组）

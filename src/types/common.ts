@@ -8,6 +8,15 @@ export interface ContextTierCost {
   tokens: number
 }
 
+export interface CompareBucket {
+  threshold: number
+  representativeEpoch: number
+  inputTokens: number
+  outputTokens: number
+  cacheRead: number
+  cacheCreation: number
+}
+
 export interface PrecomputedResult {
   modelCosts: Record<string, number>
   modelCostBreakdown: Record<string, number[]>
@@ -20,6 +29,7 @@ export interface PrecomputedResult {
   dayLatencyCount: Record<string, number>
   dailyByModel: Record<string, DailyTrendRow[]>
   modelContextTierCosts?: Record<string, ContextTierCost[]>
+  modelCompareBuckets?: Record<string, CompareBucket[]>
   unpricedModels?: string[]
 }
 

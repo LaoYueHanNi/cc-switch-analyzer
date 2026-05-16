@@ -33,6 +33,7 @@ pub struct PricingEngine {
     cloud_time_rule_tiers: HashMap<(String, i64, i64), Vec<ContextTier>>,
     alias_to_model_id: HashMap<String, String>,
     model_aliases: HashMap<String, Vec<String>>,
+    no_cache_models: std::collections::HashSet<String>,
 }
 
 impl PricingEngine {
@@ -47,6 +48,7 @@ impl PricingEngine {
             cloud_time_rule_tiers: HashMap::new(),
             alias_to_model_id: HashMap::new(),
             model_aliases: HashMap::new(),
+            no_cache_models: std::collections::HashSet::new(),
         }
     }
 
@@ -90,7 +92,7 @@ impl PricingEngine {
     // 刷新全部定价数据
     pub fn refresh(&mut self, app_db: &AppDbService) -> Result<(), String> {
         // 1. 加载云端定价：优先在线拉取，失败则读缓存
-        let (base, cloud_tiers, cloud_time_rules, cloud_aliases) = self.load_cloud_base(app_db);
+        let (base, cloud_tiers, cloud_time_rules, cloud_aliases, no_cache_models) = self.load_cloud_base(app_db);
 
         // 2. 先构建云端别名反向映射（统一小写 key），供 merge 和 resolve 使用
         self.alias_to_model_id.clear();
@@ -118,6 +120,7 @@ impl PricingEngine {
 
         // 4. 合并 + 提取覆盖上下文档位（override model_id 通过别名映射解析）
         self.override_tiers.clear();
+        self.no_cache_models = no_cache_models.into_iter().collect();
         self.merge(base, cloud_tiers, overrides);
 
         // 5. 加载云端时间规则（已按 model_id 分组）+ 排序上下文档位
@@ -157,16 +160,16 @@ impl PricingEngine {
     }
 
     /// 从本地缓存加载云端基础定价（无网络请求）
-    fn load_cloud_base(&self, app_db: &AppDbService) -> (Vec<ModelPricing>, HashMap<String, Vec<ContextTier>>, HashMap<String, Vec<CloudPricingTimeRule>>, HashMap<String, Vec<String>>) {
+    fn load_cloud_base(&self, app_db: &AppDbService) -> (Vec<ModelPricing>, HashMap<String, Vec<ContextTier>>, HashMap<String, Vec<CloudPricingTimeRule>>, HashMap<String, Vec<String>>, Vec<String>) {
         match app_db.load_cloud_pricing() {
-            Ok((base, tiers, cloud_time_rules, cloud_aliases)) => {
+            Ok((base, tiers, cloud_time_rules, cloud_aliases, no_cache_models)) => {
                 let time_rule_count: usize = cloud_time_rules.values().map(|v| v.len()).sum();
-                log::info!("[PRICING] 从缓存加载云端定价: {} 个模型, {} 条时间规则", base.len(), time_rule_count);
-                (base, tiers, cloud_time_rules, cloud_aliases)
+                log::info!("[PRICING] 从缓存加载云端定价: {} 个模型, {} 条时间规则, {} 个无缓存模型", base.len(), time_rule_count, no_cache_models.len());
+                (base, tiers, cloud_time_rules, cloud_aliases, no_cache_models)
             }
             Err(e) => {
                 log::error!("[PRICING] 读取云端定价缓存失败: {}", e);
-                (Vec::new(), HashMap::new(), HashMap::new(), HashMap::new())
+                (Vec::new(), HashMap::new(), HashMap::new(), HashMap::new(), Vec::new())
             }
         }
     }
@@ -246,6 +249,10 @@ impl PricingEngine {
     // 获取某模型的所有别名（云端 + 用户）
     pub fn get_aliases(&self, model_id: &str) -> Vec<String> {
         self.model_aliases.get(model_id).cloned().unwrap_or_default()
+    }
+
+    pub fn get_no_cache_support(&self, model_id: &str) -> bool {
+        self.no_cache_models.contains(model_id)
     }
 
     // 获取固定合并定价

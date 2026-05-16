@@ -283,6 +283,19 @@ pub struct PricingData {
     pub aliases: Vec<String>,
     #[serde(default)]
     pub user_aliases: Vec<String>,
+    #[serde(default)]
+    pub no_cache_support: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareBucket {
+    pub threshold: i64,
+    pub representative_epoch: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read: i64,
+    pub cache_creation: i64,
 }
 
 // ========== 预计算结果 ==========
@@ -304,6 +317,8 @@ pub struct PrecomputedResult {
     pub model_context_tier_costs: std::collections::HashMap<String, Vec<ContextTierCost>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unpriced_models: Vec<String>,
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub model_compare_buckets: std::collections::HashMap<String, Vec<CompareBucket>>,
 }
 
 // ========== 组合查询结果 ==========
@@ -403,6 +418,8 @@ pub struct CloudPricingModel {
     pub time_rules: Vec<CloudPricingTimeRule>,
     #[serde(default)]
     pub aliases: Vec<String>,
+    #[serde(default)]
+    pub no_cache_support: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -45,6 +45,7 @@ pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, Strin
                 cloud_time_rules: pricing.get_cloud_time_rules(&p.model_id),
                 aliases: pricing.get_aliases(&p.model_id),
                 user_aliases: user_alias_map.get(&p.model_id).cloned().unwrap_or_default(),
+                no_cache_support: pricing.get_no_cache_support(&p.model_id),
             }
         })
         .collect())

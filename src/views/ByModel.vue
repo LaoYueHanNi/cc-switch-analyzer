@@ -36,6 +36,7 @@
       :source-cost="compareSourceCost"
       :source-cost-breakdown="compareCostBreakdown"
       :model-data="compareModelData"
+      :compare-buckets="compareBuckets"
       :all-models="pricingStore.pricingData"
     />
   </div>
@@ -50,6 +51,7 @@ import ModelCard from '@/components/model/ModelCard.vue'
 import ModelCompareDialog from '@/components/model/ModelCompareDialog.vue'
 import type { ModelBreakdown } from '@/types/database'
 import type { PricingData, TimePricingRule, CloudPricingTimeRule } from '@/types/pricing'
+import type { CompareBucket } from '@/types/common'
 
 const queryStore = useQueryStore()
 const pricingStore = usePricingStore()
@@ -116,14 +118,17 @@ const compareSourceModel = ref('')
 const compareSourceCost = ref(0)
 const compareCostBreakdown = ref<[number, number, number, number]>([0, 0, 0, 0])
 const compareModelData = ref<ModelBreakdown | null>(null)
+const compareBuckets = ref<CompareBucket[]>([])
 
 function onCompare(modelId: string): void {
   const card = modelCards.value.find(c => c.modelData.model === modelId)
   if (!card) return
+  const pre = queryStore.precomputed
   compareSourceModel.value = modelId
   compareSourceCost.value = card.totalCost
   compareCostBreakdown.value = card.costBreakdown
   compareModelData.value = card.modelData
+  compareBuckets.value = pre?.modelCompareBuckets?.[modelId] || []
   showCompare.value = true
 }
 

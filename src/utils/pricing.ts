@@ -43,10 +43,10 @@ export interface ActiveRates {
  * @param pricing     模型定价数据
  * @param contextSize 可选，上下文大小（input + cacheRead），用于查找上下文档位
  */
-export function getActiveRate(pricing: PricingData | undefined, contextSize?: number): ActiveRates {
+export function getActiveRate(pricing: PricingData | undefined, contextSize?: number, timestamp?: number): ActiveRates {
   if (!pricing) return { inputRate: 0, outputRate: 0, cacheReadRate: 0, cacheCreationRate: 0 }
 
-  const now = Math.floor(Date.now() / 1000)
+  const now = timestamp ?? Math.floor(Date.now() / 1000)
 
   // 1. 时间规则（用户 > 云端）
   const rule = pricing.timeRules?.find(r => now >= r.startTime && now <= r.endTime)

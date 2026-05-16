@@ -111,6 +111,7 @@ pub fn precompute_costs(
         day_latency_count,
         daily_by_model,
         model_context_tier_costs: HashMap::new(),
+        model_compare_buckets: HashMap::new(),
         unpriced_models,
     }
 }
