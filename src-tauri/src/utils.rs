@@ -4,7 +4,7 @@
 pub const CLOUD_PRICING_URL: &str = "https://gitee.com/oyw125/model-price-table/raw/master/model_pricing.json";
 
 /// 会话分析 Top N
-pub const SESSION_TOP_N: i64 = 50;
+pub const SESSION_TOP_N: i64 = 500;
 
 /// 实时监控窗口（秒）
 pub const REALTIME_WINDOW_SEC: i64 = 3600;

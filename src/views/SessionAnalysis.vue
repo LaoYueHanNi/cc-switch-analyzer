@@ -1,7 +1,18 @@
 <template>
   <div class="session-analysis">
-    <!-- 排序选择器 -->
+    <!-- 工具栏 -->
     <div class="session-toolbar">
+      <n-select
+        v-model:value="selectedProject"
+        :options="projectOptions"
+        :render-option="renderProjectOption"
+        size="tiny"
+        style="width: 200px"
+        placeholder="目录筛选"
+        clearable
+        filterable
+        teleport-disabled
+      />
       <n-select
         v-model:value="sortBy"
         :options="sortOptions"
@@ -17,8 +28,12 @@
       <p>正在查询会话数据...</p>
     </div>
 
-    <div v-else-if="sessionCards.length === 0" class="tab-empty">
+    <div v-else-if="sessionsRaw.length === 0" class="tab-empty">
       <p>{{ dbStore.hasDatabase ? '暂无会话数据' : '请先选择数据库文件' }}</p>
+    </div>
+
+    <div v-else-if="sessionCards.length === 0" class="tab-empty">
+      <p>所有会话均被过滤</p>
     </div>
 
     <div v-else class="session-list">
@@ -36,8 +51,8 @@
 
 <script setup lang="ts">
 defineOptions({ name: 'SessionAnalysis' })
-import { ref, computed, watch, onActivated, onDeactivated } from 'vue'
-import { NSelect, NSpin } from 'naive-ui'
+import { ref, computed, watch, onActivated, onDeactivated, type VNode } from 'vue'
+import { NSelect, NSpin, type SelectOption } from 'naive-ui'
 import { platformAdapter } from '@/platform'
 import { useDatabaseStore } from '@/stores/database'
 import { useFilterStore } from '@/stores/filter'
@@ -50,6 +65,7 @@ const filterStore = useFilterStore()
 const { getTitle, getProject, getSource, fetchTitles } = useSessionTitles()
 const loading = ref(false)
 const sortBy = ref('totalCost')
+const selectedProject = ref<string | null>(null)
 const isActive = ref(true)
 const needsRefresh = ref(false)
 
@@ -77,15 +93,28 @@ interface SessionCardData {
 }
 
 const sessionsRaw = ref<SessionCardData[]>([])
+const availableProjects = ref<string[]>([])
+
+const projectOptions = computed(() => {
+  return [
+    { label: '全部目录', value: '' },
+    ...availableProjects.value.map(p => ({ label: p, value: p }))
+  ]
+})
+
+function renderProjectOption({ node, option }: { node: VNode; option: SelectOption }) {
+  if (option.value !== '' && node.props) {
+    node.props.title = option.label as string
+  }
+  return node
+}
 
 const sessionCards = computed<SessionCardData[]>(() => {
   const list = sessionsRaw.value.map(s => {
-    // 每个会话内的模型固定按费用降序
     const sortedModels = [...s.modelBreakdown].sort((a, b) => (b.cost || 0) - (a.cost || 0))
     return { ...s, modelBreakdown: sortedModels }
   })
 
-  // 对会话列表排序
   const sk = sortBy.value as keyof SessionCardData
   list.sort((a, b) => (b[sk] as number) - (a[sk] as number))
   return list
@@ -96,12 +125,14 @@ async function loadData(): Promise<void> {
   loading.value = true
   try {
     const params = filterStore.filterParams
-    console.log('[SessionAnalysis] 查询会话')
-    const result = await platformAdapter.querySessionsWithCost(params)
-    console.log('[SessionAnalysis] 会话结果数:', result?.length || 0)
-    sessionsRaw.value = result || []
-    if (result && result.length > 0) {
-      fetchTitles(result.map(s => s.sessionId).filter(Boolean))
+    const project = selectedProject.value || undefined
+    console.log('[SessionAnalysis] 查询会话', project ? `(目录: ${project})` : '')
+    const result = await platformAdapter.querySessionsWithCost(params, project)
+    sessionsRaw.value = result?.sessions || []
+    availableProjects.value = result?.availableProjects || []
+    console.log('[SessionAnalysis] 会话结果数:', sessionsRaw.value.length, '可用目录:', availableProjects.value.length)
+    if (sessionsRaw.value.length > 0) {
+      fetchTitles(sessionsRaw.value.map(s => s.sessionId).filter(Boolean))
     }
   } catch (err: any) {
     console.error('[SessionAnalysis] 会话查询失败:', err.message || err)
@@ -127,6 +158,7 @@ watch(() => filterStore.filterParams, () => {
   sessionFilterTimer = setTimeout(() => tryLoadData(), 300)
 }, { deep: true })
 watch(() => dbStore.refreshVersion, () => { if (dbStore.hasDatabase) tryLoadData() })
+watch(selectedProject, () => tryLoadData())
 
 onActivated(() => {
   isActive.value = true
@@ -150,6 +182,9 @@ onDeactivated(() => {
 
 .session-toolbar {
   padding: 2px 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .tab-loading,

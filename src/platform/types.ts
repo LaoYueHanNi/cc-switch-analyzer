@@ -100,7 +100,7 @@ export interface PlatformAdapter {
   queryPrecompute(params: FilterParams): Promise<PrecomputeQueryResult>
   queryRealtime(): Promise<RealtimeBucket[]>
   queryRealtimeLogs(since?: number): Promise<RealtimeRequestLog[]>
-  querySessionsWithCost(params: FilterParams): Promise<SessionWithCost[]>
+  querySessionsWithCost(params: FilterParams, project?: string): Promise<{ sessions: SessionWithCost[]; availableProjects: string[] }>
   // 定价
   getAllPricing(): Promise<PricingData[]>
   setPricingOverride(data: PricingOverrideData): Promise<void>

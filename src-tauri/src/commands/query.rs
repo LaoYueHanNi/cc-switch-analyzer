@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use serde::Serialize;
 use tauri::State;
 
 use crate::AppState;
@@ -291,13 +292,24 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
     })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionsResponse {
+    sessions: Vec<SessionWithCost>,
+    available_projects: Vec<String>,
+}
+
 #[tauri::command]
-pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionWithCost>, String> {
-    let (sessions, session_request_tokens, session_model_tokens, max_context_widths, timestamps_map, session_sources) = {
+pub fn query_sessions_with_cost(
+    params: FilterParams,
+    project: Option<String>,
+    state: State<AppState>,
+) -> Result<SessionsResponse, String> {
+    // 第一轮：只查 session_breakdown
+    let (all_sessions, session_sources) = {
         let sources = state.data_sources.read().map_err(|e| e.to_string())?;
         require_sources!(sources);
 
-        // 第一轮：只查 session_breakdown，拿到每个数据源的 top N
         let session_lists: Vec<Vec<SessionBreakdown>> = std::thread::scope(|s| {
             let handles: Vec<_> = sources.iter().map(|entry| {
                 let p = params.clone();
@@ -311,7 +323,6 @@ pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) ->
             handles.into_iter().map(|h| h.join().unwrap()).collect()
         });
 
-        // 合并后取 top N 作为已知 ID 列表
         let mut session_sources: HashMap<String, Vec<String>> = HashMap::new();
         for (i, list) in session_lists.iter().enumerate() {
             let label = sources[i].db_type.label().to_string();
@@ -321,9 +332,56 @@ pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) ->
         }
         let mut all_sessions: Vec<SessionBreakdown> = session_lists.into_iter().flatten().collect();
         all_sessions.sort_by(|a, b| b.requests.cmp(&a.requests));
-        let top_ids: Vec<String> = all_sessions.iter().take(crate::utils::SESSION_TOP_N as usize).map(|s| s.session_id.clone()).collect();
 
-        // 第二轮：用已知 IDs 查 request_tokens 和 model_tokens，无需子查询
+        (all_sessions, session_sources)
+    };
+
+    // 查标题缓存 → 提取 available_projects + 过滤
+    let all_ids: Vec<String> = all_sessions.iter().map(|s| s.session_id.clone()).collect();
+    let cached_titles = {
+        let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+        app_db.get_session_titles(&all_ids)?
+    };
+
+    let available_projects: Vec<String> = {
+        let mut projects: Vec<String> = cached_titles.values()
+            .filter_map(|(raw, _)| {
+                let parts: Vec<&str> = raw.splitn(2, '|').collect();
+                let proj = parts.get(1).unwrap_or(&"");
+                if !proj.is_empty() { Some(proj.to_string()) } else { None }
+            })
+            .collect();
+        projects.sort();
+        projects.dedup();
+        projects
+    };
+
+    let filtered_sessions: Vec<&SessionBreakdown> = all_sessions.iter().filter(|s| {
+        let cached = cached_titles.get(&s.session_id);
+        // 有效性：requestCount <= 1 且无 source → 过滤
+        if let Some((_, source)) = cached {
+            if s.requests <= 1 && source.is_empty() {
+                return false;
+            }
+        }
+        // 目录筛选
+        if let Some(ref proj) = project {
+            if let Some((raw, _)) = cached {
+                let parts: Vec<&str> = raw.splitn(2, '|').collect();
+                return *parts.get(1).unwrap_or(&"") == proj.as_str();
+            }
+            return false;
+        }
+        true
+    }).collect();
+
+    let top_ids: Vec<String> = filtered_sessions.iter().take(20).map(|s| s.session_id.clone()).collect();
+
+    // 第二轮 + 第三轮：只处理过滤后的 top 20
+    let (session_request_tokens, session_model_tokens, max_context_widths, timestamps_map) = {
+        let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+        require_sources!(sources);
+
         let detail_data: Vec<_> = std::thread::scope(|s| {
             let handles: Vec<_> = sources.iter().map(|entry| {
                 let p = params.clone();
@@ -345,20 +403,18 @@ pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) ->
         let all_request_tokens: Vec<SessionRequestToken> = detail_data.iter().filter_map(|r| r.0.clone()).flatten().collect();
         let all_model_tokens: Vec<SessionModelToken> = detail_data.iter().filter_map(|r| r.1.clone()).flatten().collect();
 
-        // 第三轮：top 20 的额外信息（max_ctx、timestamps）
-        let top20_ids: Vec<String> = all_sessions.iter().take(20).map(|s| s.session_id.clone()).collect();
         let mut max_ctx = HashMap::new();
         let mut ts_map = HashMap::new();
         for entry in sources.iter() {
-            if let Ok(m) = entry.source.get_session_max_context_widths(&top20_ids) {
+            if let Ok(m) = entry.source.get_session_max_context_widths(&top_ids) {
                 for (k, v) in m { max_ctx.insert(k, v); }
             }
-            if let Ok(t) = entry.source.get_session_timestamps(&top20_ids) {
+            if let Ok(t) = entry.source.get_session_timestamps(&top_ids) {
                 for (k, v) in t { ts_map.entry(k).or_insert_with(Vec::new).extend(v); }
             }
         }
 
-        (all_sessions, all_request_tokens, all_model_tokens, max_ctx, ts_map, session_sources)
+        (all_request_tokens, all_model_tokens, max_ctx, ts_map)
     };
 
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
@@ -366,7 +422,7 @@ pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) ->
     let session_costs = compute_session_costs(&session_request_tokens, &pricing);
     let session_model_costs = compute_session_model_costs(&session_request_tokens, &session_model_tokens, &pricing);
 
-    let enriched: Vec<SessionWithCost> = sessions
+    let enriched: Vec<SessionWithCost> = filtered_sessions
         .iter()
         .take(20)
         .map(|s| {
@@ -432,5 +488,8 @@ pub fn query_sessions_with_cost(params: FilterParams, state: State<AppState>) ->
         })
         .collect();
 
-    Ok(enriched)
+    Ok(SessionsResponse {
+        sessions: enriched,
+        available_projects,
+    })
 }

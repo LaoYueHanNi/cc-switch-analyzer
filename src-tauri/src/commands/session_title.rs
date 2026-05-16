@@ -10,7 +10,6 @@ use crate::services::session_title::{ClaudeJsonlTitleProvider, TitleProvider, sh
 pub struct SessionTitleInfo {
     title: String,
     project: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
     source: String,
 }
 

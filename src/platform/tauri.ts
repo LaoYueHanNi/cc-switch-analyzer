@@ -94,8 +94,8 @@ export const platformAdapter: PlatformAdapter = {
   async queryRealtimeLogs(since?: number): Promise<RealtimeRequestLog[]> {
     return invoke<RealtimeRequestLog[]>('query_realtime_logs', { since: since ?? null })
   },
-  async querySessionsWithCost(params: FilterParams): Promise<SessionWithCost[]> {
-    return invoke<SessionWithCost[]>('query_sessions_with_cost', { params: toTauriParams(params) })
+  async querySessionsWithCost(params: FilterParams, project?: string): Promise<{ sessions: SessionWithCost[]; availableProjects: string[] }> {
+    return invoke<{ sessions: SessionWithCost[]; availableProjects: string[] }>('query_sessions_with_cost', { params: toTauriParams(params), project: project || null })
   },
   // 定价
   async getAllPricing(): Promise<PricingData[]> {
