@@ -18,7 +18,7 @@
         />
 
         <!-- 缓存回退提示 -->
-        <div v-if="cacheFallbackUsed" class="cache-fallback-hint">
+        <div v-if="comparisonResult?.cacheFallback" class="cache-fallback-hint">
           目标模型不支持缓存计费，缓存命中 token 已计入输入费用
         </div>
 
@@ -115,8 +115,6 @@ const normalize = (s: string) => s.replace(/[-_.]/g, '').toLowerCase()
 const fuzzyFilter = (pattern: string, option: { label: string }) =>
   normalize(option.label).includes(normalize(pattern))
 
-const cacheFallbackUsed = ref(false)
-
 const comparisonResult = computed(() => {
   if (!targetModel.value || !props.modelData) return null
 
@@ -182,8 +180,6 @@ const comparisonResult = computed(() => {
     }
   }
 
-  cacheFallbackUsed.value = fallbackUsed
-
   const ratio = props.sourceCost > 0 ? targetCost / props.sourceCost : 0
 
   // 获取源模型的有效单价（用于展示）
@@ -205,15 +201,12 @@ const comparisonResult = computed(() => {
     ratio: bd[i] > 0 ? targetBreakdown[i] / bd[i] : 0
   }))
 
-  return { targetCost, ratio, items }
+  return { targetCost, ratio, items, cacheFallback: fallbackUsed }
 })
 
 // 关闭时重置
 watch(() => props.show, (val) => {
-  if (!val) {
-    targetModel.value = null
-    cacheFallbackUsed.value = false
-  }
+  if (!val) targetModel.value = null
 })
 </script>
 

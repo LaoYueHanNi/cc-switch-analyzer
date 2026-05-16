@@ -254,8 +254,6 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
         (s, pb, cb, tb)
     };
 
-    let agg = aggregate_combined_breakdown(&combined);
-
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
     log::debug!("[QUERY] 定价引擎模型数={}", pricing.size());
 
