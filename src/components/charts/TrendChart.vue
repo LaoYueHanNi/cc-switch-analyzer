@@ -3,7 +3,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch, watchEffect } from 'vue'
 import * as echarts from 'echarts'
 import { useThemeStore } from '@/stores/theme'
 import { formatNum, formatCost } from '@/utils/format'
@@ -137,11 +137,7 @@ onMounted(() => {
     window.addEventListener('resize', handleResize)
   })
 })
-watch(() => [
-  props.dates, props.totalCostData, props.totalTokenData,
-  props.inputData, props.outputData, props.cacheReadData,
-  props.cacheCreationData, props.visibleSeries
-], renderChart)
+watchEffect(renderChart)
 watch(() => themeStore.isDark, renderChart)
 
 onUnmounted(() => {
