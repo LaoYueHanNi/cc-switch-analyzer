@@ -18,6 +18,11 @@ const router = createRouter({
       component: () => import('@/views/ByProvider.vue')
     },
     {
+      path: '/trend',
+      name: 'trend',
+      component: () => import('@/views/TrendAnalysis.vue')
+    },
+    {
       path: '/session',
       name: 'session',
       component: () => import('@/views/SessionAnalysis.vue')

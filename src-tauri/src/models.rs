@@ -310,6 +310,8 @@ pub struct PrecomputedResult {
     pub day_requests_map: std::collections::HashMap<String, i64>,
     pub day_input_tokens: std::collections::HashMap<String, i64>,
     pub day_output_tokens: std::collections::HashMap<String, i64>,
+    pub day_cache_read: std::collections::HashMap<String, i64>,
+    pub day_cache_creation: std::collections::HashMap<String, i64>,
     pub day_latency_sum: std::collections::HashMap<String, f64>,
     pub day_latency_count: std::collections::HashMap<String, i64>,
     pub daily_by_model: std::collections::HashMap<String, Vec<DailyTrendRow>>,

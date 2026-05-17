@@ -57,7 +57,7 @@
       <!-- 右侧内容 -->
       <div class="main-content">
         <!-- 筛选 + 摘要（仅模型/供应商 Tab） -->
-        <template v-if="activeTab === 'by-model' || activeTab === 'by-provider'">
+        <template v-if="activeTab === 'by-model' || activeTab === 'by-provider' || activeTab === 'trend'">
           <FilterBar />
           <SummaryBar />
         </template>
@@ -81,7 +81,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { NSpin, NButton, NIcon } from 'naive-ui'
 import {
   FolderOpenOutline, ServerOutline,
-  GridOutline, BusinessOutline, ChatbubblesOutline,
+  GridOutline, BusinessOutline, TrendingUpOutline, ChatbubblesOutline,
   PulseOutline, CalculatorOutline,
   MoonOutline, SunnyOutline, RefreshOutline
 } from '@vicons/ionicons5'
@@ -106,6 +106,7 @@ const { selectDatabase, autoLoadDatabase, refreshDatabase } = useDatabase()
 const navItems: { name: string; label: string; icon: Component }[] = [
   { name: 'by-model', label: '模型', icon: GridOutline },
   { name: 'by-provider', label: '供应商', icon: BusinessOutline },
+  { name: 'trend', label: '趋势', icon: TrendingUpOutline },
   { name: 'session', label: '会话', icon: ChatbubblesOutline },
   { name: 'realtime', label: '实时', icon: PulseOutline },
   { name: 'pricing', label: '定价', icon: CalculatorOutline }

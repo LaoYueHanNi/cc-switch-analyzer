@@ -1,4 +1,4 @@
-import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog } from '@/types/database'
+import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
 import type { PricingData } from '@/types/pricing'
 
@@ -98,6 +98,7 @@ export interface PlatformAdapter {
   queryByModel(params: FilterParams): Promise<ModelBreakdown[]>
   queryByProvider(params: FilterParams): Promise<ProviderBreakdown[]>
   queryPrecompute(params: FilterParams): Promise<PrecomputeQueryResult>
+  queryHourlyTrend(params: FilterParams): Promise<DailyTrendRow[]>
   queryRealtime(): Promise<RealtimeBucket[]>
   queryRealtimeLogs(since?: number): Promise<RealtimeRequestLog[]>
   querySessionsWithCost(params: FilterParams, project?: string): Promise<{ sessions: SessionWithCost[]; availableProjects: string[] }>

@@ -67,6 +67,19 @@ impl OpenCodeDbService {
 
     // ========== WHERE 子句构建 ==========
 
+    fn map_trend_row(row: &rusqlite::Row) -> rusqlite::Result<DailyTrendRow> {
+        Ok(DailyTrendRow {
+            day: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+            model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            requests: row.get(2)?,
+            input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+            output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+            cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+            cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+            avg_latency: row.get::<_, Option<f64>>(7)?.unwrap_or(0.0),
+        })
+    }
+
     fn tz_date_expr(params: &FilterParams) -> String {
         match params.tz_offset {
             Some(tz) if tz != 0 => {
@@ -74,6 +87,16 @@ impl OpenCodeDbService {
                 format!("date(time_created / 1000, 'unixepoch', '{}{} hours')", sign, tz)
             }
             _ => "date(time_created / 1000, 'unixepoch')".to_string(),
+        }
+    }
+
+    fn tz_hour_expr(params: &FilterParams) -> String {
+        match params.tz_offset {
+            Some(tz) if tz != 0 => {
+                let sign = if tz > 0 { "+" } else { "" };
+                format!("strftime('%H:00', time_created / 1000, 'unixepoch', '{}{} hours')", sign, tz)
+            }
+            _ => "strftime('%H:00', time_created / 1000, 'unixepoch')".to_string(),
         }
     }
 
@@ -417,21 +440,40 @@ impl OpenCodeDbService {
         let mut stmt = db.prepare(&sql).map_err(|e| format!("查询每日趋势失败: {}", e))?;
         let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
         let rows = stmt
-            .query_map(refs.as_slice(), |row| {
-                Ok(DailyTrendRow {
-                    day: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
-                    model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    requests: row.get(2)?,
-                    input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                    output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
-                    cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                    cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
-                    avg_latency: row.get::<_, Option<f64>>(7)?.unwrap_or(0.0),
-                })
-            })
+            .query_map(refs.as_slice(), Self::map_trend_row)
             .map_err(|e| format!("查询每日趋势失败: {}", e))?;
 
         Self::collect_rows(rows, "读取每日趋势")
+    }
+
+    pub fn get_hourly_trend(&self, params: &FilterParams) -> Result<Vec<DailyTrendRow>, String> {
+        let db = self.db()?;
+        let (where_sql, binds) = Self::build_where_clause(params);
+        let hour_expr = Self::tz_hour_expr(params);
+        let sql = format!(
+            "SELECT
+                {} AS day,
+                json_extract(data, '$.modelID') AS model,
+                COUNT(*) AS requests,
+                SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)) AS input_tokens,
+                SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)) AS output_tokens,
+                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER)) AS cache_read,
+                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER)) AS cache_creation,
+                ROUND(AVG(json_extract(data, '$.time.completed') - json_extract(data, '$.time.created')), 0) AS avg_latency
+             FROM message
+             {}
+             GROUP BY day, json_extract(data, '$.modelID')
+             ORDER BY day",
+            hour_expr, where_sql
+        );
+
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询小时趋势失败: {}", e))?;
+        let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+        let rows = stmt
+            .query_map(refs.as_slice(), Self::map_trend_row)
+            .map_err(|e| format!("查询小时趋势失败: {}", e))?;
+
+        Self::collect_rows(rows, "读取小时趋势")
     }
 
     pub fn get_session_breakdown(&self, params: &FilterParams) -> Result<Vec<SessionBreakdown>, String> {
@@ -930,6 +972,7 @@ impl super::data_source::DataSource for OpenCodeDbService {
     fn get_combined_breakdown(&self, params: &FilterParams) -> Result<Vec<CombinedBreakdownRow>, String> { self.get_combined_breakdown(params) }
     fn get_provider_model_tokens(&self, params: &FilterParams) -> Result<Vec<ProviderModelToken>, String> { self.get_provider_model_tokens(params) }
     fn get_daily_trend(&self, params: &FilterParams) -> Result<Vec<DailyTrendRow>, String> { self.get_daily_trend(params) }
+    fn get_hourly_trend(&self, params: &FilterParams) -> Result<Vec<DailyTrendRow>, String> { self.get_hourly_trend(params) }
     fn get_session_breakdown(&self, params: &FilterParams) -> Result<Vec<SessionBreakdown>, String> { self.get_session_breakdown(params) }
     fn get_session_max_context_widths(&self, ids: &[String]) -> Result<HashMap<String, i64>, String> { self.get_session_max_context_widths(ids) }
     fn get_session_model_tokens(&self, params: &FilterParams) -> Result<Vec<SessionModelToken>, String> { self.get_session_model_tokens(params) }

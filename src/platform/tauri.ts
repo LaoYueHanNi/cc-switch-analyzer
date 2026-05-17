@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData } from './types'
-import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog } from '@/types/database'
+import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
 import type { PricingData } from '@/types/pricing'
 
@@ -87,6 +87,9 @@ export const platformAdapter: PlatformAdapter = {
   },
   async queryPrecompute(params: FilterParams): Promise<PrecomputeQueryResult> {
     return invoke<PrecomputeQueryResult>('query_precompute', { params: toTauriParams(params) })
+  },
+  async queryHourlyTrend(params: FilterParams): Promise<DailyTrendRow[]> {
+    return invoke<DailyTrendRow[]>('query_hourly_trend', { params: toTauriParams(params) })
   },
   async queryRealtime(): Promise<RealtimeBucket[]> {
     return invoke<RealtimeBucket[]>('query_realtime')

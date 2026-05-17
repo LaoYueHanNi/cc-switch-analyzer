@@ -23,6 +23,8 @@ pub fn precompute_costs(
     let mut day_requests_map: HashMap<String, i64> = HashMap::new();
     let mut day_input_tokens: HashMap<String, i64> = HashMap::new();
     let mut day_output_tokens: HashMap<String, i64> = HashMap::new();
+    let mut day_cache_read: HashMap<String, i64> = HashMap::new();
+    let mut day_cache_creation: HashMap<String, i64> = HashMap::new();
     let mut day_latency_sum: HashMap<String, f64> = HashMap::new();
     let mut day_latency_count: HashMap<String, i64> = HashMap::new();
     let mut daily_by_model: HashMap<String, Vec<DailyTrendRow>> = HashMap::new();
@@ -64,6 +66,8 @@ pub fn precompute_costs(
         *day_requests_map.entry(row.day.clone()).or_insert(0) += row.requests;
         *day_input_tokens.entry(row.day.clone()).or_insert(0) += row.input_tokens;
         *day_output_tokens.entry(row.day.clone()).or_insert(0) += row.output_tokens;
+        *day_cache_read.entry(row.day.clone()).or_insert(0) += row.cache_read;
+        *day_cache_creation.entry(row.day.clone()).or_insert(0) += row.cache_creation;
         *day_latency_sum.entry(row.day.clone()).or_insert(0.0) += row.avg_latency * row.requests as f64;
         *day_latency_count.entry(row.day.clone()).or_insert(0) += row.requests;
 
@@ -107,6 +111,8 @@ pub fn precompute_costs(
         day_requests_map,
         day_input_tokens,
         day_output_tokens,
+        day_cache_read,
+        day_cache_creation,
         day_latency_sum,
         day_latency_count,
         daily_by_model,

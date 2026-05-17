@@ -25,6 +25,8 @@ export interface PrecomputedResult {
   dayRequestsMap: Record<string, number>
   dayInputTokens: Record<string, number>
   dayOutputTokens: Record<string, number>
+  dayCacheRead: Record<string, number>
+  dayCacheCreation: Record<string, number>
   dayLatencySum: Record<string, number>
   dayLatencyCount: Record<string, number>
   dailyByModel: Record<string, DailyTrendRow[]>

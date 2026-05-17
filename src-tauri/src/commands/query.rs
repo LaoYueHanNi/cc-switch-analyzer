@@ -68,6 +68,14 @@ pub fn query_daily_trend(params: FilterParams, state: State<AppState>) -> Result
 }
 
 #[tauri::command]
+pub fn query_hourly_trend(params: FilterParams, state: State<AppState>) -> Result<Vec<DailyTrendRow>, String> {
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+    let results: Vec<Vec<DailyTrendRow>> = collect_from_sources!(sources, e, get_hourly_trend(&params), "hourly_trend");
+    Ok(merge_daily_trends(results))
+}
+
+#[tauri::command]
 pub fn query_sessions(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionBreakdown>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);

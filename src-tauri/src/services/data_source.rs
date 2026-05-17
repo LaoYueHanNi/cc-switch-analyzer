@@ -25,6 +25,7 @@ pub trait DataSource: Send + Sync {
     fn get_combined_breakdown(&self, params: &FilterParams) -> Result<Vec<CombinedBreakdownRow>, String>;
     fn get_provider_model_tokens(&self, params: &FilterParams) -> Result<Vec<ProviderModelToken>, String>;
     fn get_daily_trend(&self, params: &FilterParams) -> Result<Vec<DailyTrendRow>, String>;
+    fn get_hourly_trend(&self, params: &FilterParams) -> Result<Vec<DailyTrendRow>, String>;
     fn get_session_breakdown(&self, params: &FilterParams) -> Result<Vec<SessionBreakdown>, String>;
     fn get_session_max_context_widths(&self, ids: &[String]) -> Result<HashMap<String, i64>, String>;
     fn get_session_model_tokens(&self, params: &FilterParams) -> Result<Vec<SessionModelToken>, String>;
@@ -244,24 +245,22 @@ pub fn merge_daily_trends(results: Vec<Vec<DailyTrendRow>>) -> Vec<DailyTrendRow
     for list in results {
         for row in list {
             let key = (row.day.clone(), row.model.clone());
-            map.entry(key.clone())
-                .and_modify(|e| {
-                    e.requests += row.requests;
-                    e.input_tokens += row.input_tokens;
-                    e.output_tokens += row.output_tokens;
-                    e.cache_read += row.cache_read;
-                    e.cache_creation += row.cache_creation;
-                })
-                .or_insert_with(|| DailyTrendRow {
-                    day: row.day.clone(),
-                    model: row.model.clone(),
-                    requests: 0,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    cache_read: 0,
-                    cache_creation: 0,
-                    avg_latency: 0.0,
-                });
+            let entry = map.entry(key.clone()).or_insert_with(|| DailyTrendRow {
+                day: row.day.clone(),
+                model: row.model.clone(),
+                requests: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read: 0,
+                cache_creation: 0,
+                avg_latency: 0.0,
+            });
+            entry.requests += row.requests;
+            entry.input_tokens += row.input_tokens;
+            entry.output_tokens += row.output_tokens;
+            entry.cache_read += row.cache_read;
+            entry.cache_creation += row.cache_creation;
+
             let acc = data.entry(key).or_insert(Acc { requests: 0, weighted_latency: 0.0 });
             acc.requests += row.requests;
             acc.weighted_latency += row.avg_latency * row.requests as f64;
