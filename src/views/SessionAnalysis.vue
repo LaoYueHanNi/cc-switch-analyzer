@@ -1,192 +1,307 @@
 <template>
   <div class="session-analysis">
-    <!-- 工具栏 -->
-    <div class="session-toolbar">
-      <n-select
-        v-model:value="selectedProject"
-        :options="projectOptions"
-        :render-option="renderProjectOption"
-        size="tiny"
-        style="width: 200px"
-        placeholder="目录筛选"
-        clearable
-        filterable
-        teleport-disabled
-      />
-      <n-select
-        v-model:value="sortBy"
-        :options="sortOptions"
-        size="tiny"
-        style="width: 120px"
-        placeholder="排序方式"
-        teleport-disabled
-      />
-    </div>
-
-    <div v-if="loading" class="tab-loading">
+    <div v-if="loadingGroups" class="tab-loading">
       <n-spin size="medium" />
-      <p>正在查询会话数据...</p>
+      <p>正在加载项目分组...</p>
     </div>
 
-    <div v-else-if="sessionsRaw.length === 0" class="tab-empty">
-      <p>{{ dbStore.hasDatabase ? '暂无会话数据' : '请先选择数据库文件' }}</p>
+    <div v-else-if="!dbStore.hasDatabase" class="tab-empty">
+      <p>请先选择数据库文件</p>
     </div>
 
-    <div v-else-if="sessionCards.length === 0" class="tab-empty">
-      <p>所有会话均被过滤</p>
+    <div v-else-if="projectGroups.length === 0" class="tab-empty">
+      <p>暂无会话数据</p>
     </div>
 
-    <div v-else class="session-list">
-      <SessionCard
-        v-for="s in sessionCards"
-        :key="s.sessionId"
-        v-bind="s"
-        :title="getTitle(s.sessionId)"
-        :project="getProject(s.sessionId)"
-        :title-source="getSource(s.sessionId)"
-      />
+    <template v-else>
+      <!-- 一级：项目卡片网格 -->
+      <div v-if="!activeProject" class="card-grid">
+        <ProjectCard
+          v-for="group in projectGroups"
+          :key="group.projectDir"
+          :display-name="group.displayName"
+          :project-dir="group.projectDir"
+          :session-count="group.sessionCount"
+          :last-active-at="group.lastAt"
+          :total-cost="group.totalCost"
+          :total-tokens="group.totalTokens"
+          @click="enterProject(group.projectDir)"
+          @terminal="onOpenTerminal"
+        />
+      </div>
+
+      <!-- 二级：会话列表 -->
+      <div v-else class="session-detail">
+        <div class="detail-header">
+          <button class="back-btn" @click="leaveProject">&larr; 返回</button>
+          <span class="detail-name">{{ activeGroup?.displayName }}</span>
+          <span class="detail-path">{{ activeProject }}</span>
+          <span v-if="!loadingDetails" class="detail-count">{{ sessionDetails.length }} 个会话</span>
+        </div>
+
+        <div v-if="loadingDetails" class="tab-loading" style="padding: 30px 0">
+          <n-spin size="medium" />
+          <p>正在加载会话详情...</p>
+        </div>
+
+        <div v-else class="session-list">
+          <div
+            v-for="s in sessionDetails"
+            :key="s.sessionId"
+            class="session-wrap"
+          >
+            <SessionCard
+              :session-id="s.sessionId"
+              :title="s.title"
+              :project="s.projectDir"
+              :total-cost="s.totalCost"
+              :total-tokens="s.totalTokens"
+              :request-count="s.requestCount"
+              :duration-sec="s.durationSec"
+              :start-time="s.startTime"
+              :end-time="s.endTime"
+              :max-context-width="s.maxContextWidth"
+              :cache-hit-rate="s.cacheHitRate"
+              :timestamps="s.timestamps"
+              :model-breakdown="s.modelBreakdown"
+            />
+            <div class="wrap-actions">
+              <span class="action-terminal" @click="onResume(s.sessionId, s.projectDir)" title="在终端恢复会话">&gt;_</span>
+              <span v-if="s.sourcePath" class="action-delete" @click="confirmDelete(s)" title="删除会话">删除</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- 删除确认 -->
+    <div v-if="deleteTarget" class="confirm-overlay" @click.self="deleteTarget = null">
+      <div class="confirm-dialog">
+        <div class="confirm-title">确认删除</div>
+        <p class="confirm-msg">
+          确定要删除会话 <strong>{{ deleteTarget.title || deleteTarget.sessionId.slice(0, 8) }}</strong> 吗？此操作不可撤销。
+        </p>
+        <div class="confirm-btns">
+          <button class="confirm-btn cancel" @click="deleteTarget = null">取消</button>
+          <button class="confirm-btn danger" @click="doDelete">删除</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 defineOptions({ name: 'SessionAnalysis' })
-import { ref, computed, watch, onActivated, onDeactivated, type VNode } from 'vue'
-import { NSelect, NSpin, type SelectOption } from 'naive-ui'
+import { ref, computed, watch, onActivated, onDeactivated } from 'vue'
+import { NSpin } from 'naive-ui'
 import { platformAdapter } from '@/platform'
 import { useDatabaseStore } from '@/stores/database'
 import { useFilterStore } from '@/stores/filter'
-import { useSessionTitles } from '@/composables/useSessionTitles'
+import ProjectCard from '@/components/session/ProjectCard.vue'
 import SessionCard from '@/components/session/SessionCard.vue'
-import type { SessionModelCostEntry } from '@/types/common'
+import type { ProjectGroupStats, ProjectSessionDetail } from '@/platform/types'
 
 const dbStore = useDatabaseStore()
 const filterStore = useFilterStore()
-const { getTitle, getProject, getSource, fetchTitles } = useSessionTitles()
-const loading = ref(false)
-const sortBy = ref('totalCost')
-const selectedProject = ref<string | null>(null)
+
+const projectGroups = ref<ProjectGroupStats[]>([])
+const sessionDetails = ref<ProjectSessionDetail[]>([])
+const activeProject = ref<string | null>(null)
+const deleteTarget = ref<ProjectSessionDetail | null>(null)
+const loadingGroups = ref(false)
+const loadingDetails = ref(false)
 const isActive = ref(true)
 const needsRefresh = ref(false)
 
-const sortOptions = [
-  { label: '费用', value: 'totalCost' },
-  { label: 'Token 数量', value: 'totalTokens' },
-  { label: '请求数', value: 'requestCount' },
-  { label: '最大上下文', value: 'maxContextWidth' },
-  { label: '缓存命中率', value: 'cacheHitRate' }
-]
+const activeGroup = computed(() =>
+  projectGroups.value.find(g => g.projectDir === activeProject.value)
+)
 
-interface SessionCardData {
-  sessionId: string
-  totalCost: number
-  totalTokens: number
-  requestCount: number
-  durationSec: number
-  startTime: number
-  endTime: number
-  maxContextWidth: number
-  cacheHitRate: number
-  timestamps: number[]
-  modelBreakdown: SessionModelCostEntry[]
-  sources: string[]
-}
-
-const sessionsRaw = ref<SessionCardData[]>([])
-const availableProjects = ref<string[]>([])
-
-const projectOptions = computed(() => {
-  return [
-    { label: '全部目录', value: '' },
-    ...availableProjects.value.map(p => ({ label: p, value: p }))
-  ]
-})
-
-function renderProjectOption({ node, option }: { node: VNode; option: SelectOption }) {
-  if (option.value !== '' && node.props) {
-    node.props.title = option.label as string
-  }
-  return node
-}
-
-const sessionCards = computed<SessionCardData[]>(() => {
-  const list = sessionsRaw.value.map(s => {
-    const sortedModels = [...s.modelBreakdown].sort((a, b) => (b.cost || 0) - (a.cost || 0))
-    return { ...s, modelBreakdown: sortedModels }
-  })
-
-  const sk = sortBy.value as keyof SessionCardData
-  list.sort((a, b) => (b[sk] as number) - (a[sk] as number))
-  return list
-})
-
-async function loadData(): Promise<void> {
-  if (!dbStore.hasDatabase) return
-  loading.value = true
+async function loadProjectGroups() {
+  loadingGroups.value = true
   try {
-    const params = filterStore.filterParams
-    const project = selectedProject.value || undefined
-    const result = await platformAdapter.querySessionsWithCost(params, project)
-    sessionsRaw.value = result?.sessions || []
-    availableProjects.value = result?.availableProjects || []
-    if (sessionsRaw.value.length > 0) {
-      fetchTitles(sessionsRaw.value.map(s => s.sessionId).filter(Boolean))
-    }
+    projectGroups.value = await platformAdapter.querySessionProjectGroups(filterStore.filterParams)
   } catch (err: any) {
-    console.error('[SessionAnalysis] 会话查询失败:', err.message || err)
-    sessionsRaw.value = []
+    console.error('[SessionAnalysis] 项目分组查询失败:', err.message || err)
+    projectGroups.value = []
   } finally {
-    loading.value = false
+    loadingGroups.value = false
   }
 }
 
-function tryLoadData(): void {
-  if (isActive.value) {
-    loadData()
-  } else {
-    needsRefresh.value = true
+async function loadSessionDetails(sessionIds: string[]) {
+  loadingDetails.value = true
+  try {
+    const details = await platformAdapter.queryProjectSessionDetails(
+      filterStore.filterParams, sessionIds
+    )
+    details.sort((a, b) => b.endTime - a.endTime)
+    sessionDetails.value = details
+  } catch (err: any) {
+    console.error('[SessionAnalysis] 会话详情查询失败:', err.message || err)
+    sessionDetails.value = []
+  } finally {
+    loadingDetails.value = false
   }
 }
 
-let sessionFilterTimer: ReturnType<typeof setTimeout> | null = null
+function enterProject(projectDir: string) {
+  activeProject.value = projectDir
+  sessionDetails.value = []
+  const group = projectGroups.value.find(g => g.projectDir === projectDir)
+  if (group?.sessionIds.length) loadSessionDetails(group.sessionIds)
+}
 
-watch(() => dbStore.hasDatabase, (val) => { if (val) tryLoadData() }, { immediate: true })
+function leaveProject() {
+  activeProject.value = null
+  sessionDetails.value = []
+}
+
+async function onResume(sessionId: string, projectDir?: string) {
+  try { await platformAdapter.resumeClaudeSession(sessionId, projectDir) }
+  catch (err: any) { console.error('[SessionAnalysis] 恢复失败:', err.message || err) }
+}
+
+async function onOpenTerminal(projectDir: string) {
+  try { await platformAdapter.openClaudeTerminal(projectDir) }
+  catch (err: any) { console.error('[SessionAnalysis] 打开终端失败:', err.message || err) }
+}
+
+function confirmDelete(s: ProjectSessionDetail) { deleteTarget.value = s }
+
+async function doDelete() {
+  const target = deleteTarget.value
+  if (!target) return
+  try {
+    await platformAdapter.deleteClaudeSession(target.sessionId)
+    sessionDetails.value = sessionDetails.value.filter(s => s.sessionId !== target.sessionId)
+  } catch (err: any) {
+    console.error('[SessionAnalysis] 删除失败:', err.message || err)
+  } finally {
+    deleteTarget.value = null
+  }
+}
+
+function tryLoadGroups() {
+  if (isActive.value) loadProjectGroups()
+  else needsRefresh.value = true
+}
+
+let filterTimer: ReturnType<typeof setTimeout> | null = null
+watch(() => dbStore.hasDatabase, (val) => { if (val) tryLoadGroups() }, { immediate: true })
 watch(() => filterStore.filterParams, () => {
-  if (sessionFilterTimer) clearTimeout(sessionFilterTimer)
-  sessionFilterTimer = setTimeout(() => tryLoadData(), 300)
+  if (filterTimer) clearTimeout(filterTimer)
+  filterTimer = setTimeout(() => {
+    if (!dbStore.hasDatabase) return
+    if (activeProject.value) {
+      const ids = activeGroup.value?.sessionIds || []
+      if (ids.length) loadSessionDetails(ids)
+    } else {
+      tryLoadGroups()
+    }
+  }, 300)
 }, { deep: true })
-watch(() => dbStore.refreshVersion, () => { if (dbStore.hasDatabase) tryLoadData() })
-watch(selectedProject, () => tryLoadData())
+watch(() => dbStore.refreshVersion, () => {
+  if (!dbStore.hasDatabase) return
+  if (activeProject.value) {
+    const ids = activeGroup.value?.sessionIds || []
+    if (ids.length) loadSessionDetails(ids)
+  } else
+    tryLoadGroups()
+})
 
 onActivated(() => {
   isActive.value = true
   if (needsRefresh.value) {
     needsRefresh.value = false
-    loadData()
+    if (activeProject.value) {
+      const ids = activeGroup.value?.sessionIds || []
+      if (ids.length) loadSessionDetails(ids)
+      else loadProjectGroups()
+    } else loadProjectGroups()
   }
 })
-
-onDeactivated(() => {
-  isActive.value = false
-})
+onDeactivated(() => { isActive.value = false })
 </script>
 
 <style scoped>
-.session-analysis {
-  min-height: 200px;
-  display: flex;
-  flex-direction: column;
+.session-analysis { min-height: 200px; display: flex; flex-direction: column; }
+
+.tab-loading, .tab-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 60px 0; gap: 12px; color: var(--text-muted);
 }
 
-.session-toolbar {
-  padding: 2px 0 6px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* 一级：卡片网格 */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--card-gap);
+  padding: 4px 0;
 }
 
-.session-list {
-  flex: 1;
-  overflow-y: auto;
+/* 二级：详情头 */
+.detail-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 2px 0 8px; border-bottom: 1px solid var(--border-light);
+  margin-bottom: 10px;
 }
+.back-btn {
+  font-size: 12px; color: var(--color-blue); background: none; border: none;
+  cursor: pointer; padding: 2px 8px; border-radius: 3px;
+  transition: background var(--transition-speed);
+}
+.back-btn:hover { background: var(--bg-hover); }
+.detail-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.detail-path {
+  font-size: 11px; color: var(--text-muted); flex: 1; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.detail-count { font-size: 11px; color: var(--text-faint); }
+
+/* 会话列表 */
+.session-list { flex: 1; overflow-y: auto; }
+
+/* SessionCard + 操作按钮 */
+.session-wrap {
+  position: relative;
+  margin-bottom: 10px;
+}
+.wrap-actions {
+  position: absolute; top: 8px; right: 8px;
+  display: flex; gap: 14px; z-index: 1;
+  opacity: 0; transition: opacity var(--transition-speed);
+}
+.session-wrap:hover .wrap-actions { opacity: 1; }
+
+/* 操作 */
+.action-terminal, .action-delete {
+  cursor: pointer; font-size: 11px; transition: opacity var(--transition-speed);
+}
+.action-terminal {
+  font-family: monospace; font-weight: 700; color: var(--text-secondary);
+}
+.action-terminal:hover { color: var(--color-blue); }
+.action-delete {
+  color: var(--color-cost); font-size: 11px;
+}
+.action-delete:hover { opacity: 0.7; }
+
+/* 删除确认弹窗 */
+.confirm-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center; z-index: 10000;
+}
+.confirm-dialog {
+  background: var(--bg-card); border-radius: 8px; padding: 20px;
+  min-width: 320px; box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+}
+.confirm-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
+.confirm-msg { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; line-height: 1.5; }
+.confirm-btns { display: flex; justify-content: flex-end; gap: 8px; }
+.confirm-btn { padding: 6px 16px; border-radius: 4px; font-size: 12px; cursor: pointer; border: none; }
+.confirm-btn.cancel { background: var(--bg-hover); color: var(--text-primary); }
+.confirm-btn.cancel:hover { background: var(--border-main); }
+.confirm-btn.danger { background: var(--color-cost); color: #fff; }
+.confirm-btn.danger:hover { opacity: 0.85; }
 </style>

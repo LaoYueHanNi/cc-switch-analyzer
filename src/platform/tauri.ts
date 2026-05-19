@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData } from './types'
+import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail } from './types'
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
 import type { PricingData } from '@/types/pricing'
@@ -173,5 +173,21 @@ export const platformAdapter: PlatformAdapter = {
   },
   async getSessionTitles(sessionIds: string[]) {
     return invoke<Record<string, { title: string; project: string }>>('get_session_titles', { sessionIds })
+  },
+  // 会话管理
+  async querySessionProjectGroups(params: FilterParams): Promise<ProjectGroupStats[]> {
+    return invoke<ProjectGroupStats[]>('query_session_project_groups', { params: toTauriParams(params) })
+  },
+  async queryProjectSessionDetails(params: FilterParams, sessionIds: string[]): Promise<ProjectSessionDetail[]> {
+    return invoke<ProjectSessionDetail[]>('query_project_session_details', { params: toTauriParams(params), sessionIds })
+  },
+  async openClaudeTerminal(projectDir: string): Promise<void> {
+    return invoke<void>('open_claude_terminal', { projectDir })
+  },
+  async resumeClaudeSession(sessionId: string, projectDir?: string): Promise<void> {
+    return invoke<void>('resume_claude_session', { sessionId, projectDir: projectDir || null })
+  },
+  async deleteClaudeSession(sessionId: string): Promise<boolean> {
+    return invoke<boolean>('delete_claude_session', { sessionId })
   }
 }

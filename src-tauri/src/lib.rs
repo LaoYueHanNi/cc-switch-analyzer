@@ -138,8 +138,14 @@ pub fn run() {
             commands::query::query_realtime_logs,
             commands::query::query_precompute,
             commands::query::query_sessions_with_cost,
+            commands::query::query_session_project_groups,
+            commands::query::query_project_session_details,
             // 会话标题
             commands::session_title::get_session_titles,
+            // 会话管理
+            commands::session_manager::open_claude_terminal,
+            commands::session_manager::resume_claude_session,
+            commands::session_manager::delete_claude_session,
             // 定价操作
             commands::pricing::get_all_pricing,
             commands::pricing::get_pricing_overrides,

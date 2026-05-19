@@ -65,6 +65,9 @@ impl AppDbService {
             self.backup_before_migration(5)?;
             self.migrate_v6()?;
         }
+        if version < 7 {
+            self.migrate_v7()?;
+        }
 
         Ok(())
     }
@@ -275,6 +278,19 @@ impl AppDbService {
             ).map_err(|e| format!("迁移 v6 (no_cache_support) 失败: {}", e))?;
         }
         self.set_schema_version(6)?;
+        Ok(())
+    }
+
+    fn migrate_v7(&mut self) -> Result<(), String> {
+        self.db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                project_dir TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT ''
+            );"
+        ).map_err(|e| format!("迁移 v7 (sessions 表) 失败: {}", e))?;
+        self.set_schema_version(7)?;
         Ok(())
     }
 
@@ -687,6 +703,42 @@ impl AppDbService {
             "INSERT OR REPLACE INTO session_titles (session_id, title, source, created_at) VALUES (?, ?, ?, strftime('%s','now'))",
             params![session_id, title, source],
         ).map_err(|e| format!("保存会话标题失败: {}", e))?;
+        Ok(())
+    }
+
+    // ========== sessions 表 ==========
+
+    pub fn get_sessions(&self, session_ids: &[String]) -> Result<HashMap<String, (String, String, String)>, String> {
+        if session_ids.is_empty() { return Ok(HashMap::new()); }
+        let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "SELECT session_id, project_dir, title, source FROM sessions WHERE session_id IN ({})",
+            placeholders.join(",")
+        );
+        let refs: Vec<&dyn rusqlite::types::ToSql> = session_ids
+            .iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let mut stmt = self.db.prepare(&sql).map_err(|e| format!("查询 sessions 失败: {}", e))?;
+        let rows = stmt.query_map(refs.as_slice(), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        }).map_err(|e| format!("查询 sessions 失败: {}", e))?;
+        let mut result = HashMap::new();
+        for row in rows {
+            let (sid, project_dir, title, source) = row.map_err(|e| format!("读取 sessions 行失败: {}", e))?;
+            result.insert(sid, (project_dir, title, source));
+        }
+        Ok(result)
+    }
+
+    pub fn save_session(&self, session_id: &str, project_dir: &str, title: &str, source: &str) -> Result<(), String> {
+        self.db.execute(
+            "INSERT OR REPLACE INTO sessions (session_id, project_dir, title, source) VALUES (?, ?, ?, ?)",
+            params![session_id, project_dir, title, source],
+        ).map_err(|e| format!("保存 session 失败: {}", e))?;
         Ok(())
     }
 

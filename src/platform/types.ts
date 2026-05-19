@@ -1,6 +1,34 @@
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
-import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
+import type { PrecomputeQueryResult, SessionWithCost, SessionModelCostEntry } from '@/types/common'
 import type { PricingData } from '@/types/pricing'
+
+export interface ProjectGroupStats {
+  projectDir: string
+  displayName: string
+  sessionCount: number
+  totalCost: number
+  totalTokens: number
+  firstAt: number
+  lastAt: number
+  sessionIds: string[]
+}
+
+export interface ProjectSessionDetail {
+  sessionId: string
+  requestCount: number
+  totalTokens: number
+  totalCost: number
+  startTime: number
+  endTime: number
+  durationSec: number
+  maxContextWidth: number
+  cacheHitRate: number
+  timestamps: number[]
+  modelBreakdown: SessionModelCostEntry[]
+  title?: string
+  projectDir?: string
+  sourcePath?: string
+}
 
 export interface DbResult {
   path: string
@@ -122,4 +150,10 @@ export interface PlatformAdapter {
   addUserAlias(modelId: string, alias: string): Promise<void>
   removeUserAlias(modelId: string, alias: string): Promise<void>
   getSessionTitles(sessionIds: string[]): Promise<Record<string, { title: string; project: string }>>
+  // 会话管理
+  querySessionProjectGroups(params: FilterParams): Promise<ProjectGroupStats[]>
+  queryProjectSessionDetails(params: FilterParams, sessionIds: string[]): Promise<ProjectSessionDetail[]>
+  openClaudeTerminal(projectDir: string): Promise<void>
+  resumeClaudeSession(sessionId: string, projectDir?: string): Promise<void>
+  deleteClaudeSession(sessionId: string): Promise<boolean>
 }

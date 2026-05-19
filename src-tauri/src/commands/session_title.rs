@@ -20,19 +20,23 @@ pub fn get_session_titles(
 ) -> Result<HashMap<String, SessionTitleInfo>, String> {
     let mut result = HashMap::new();
 
-    // 1. 查 app_db 缓存
+    // 1. 查 app_db 缓存（旧格式 project 视为未命中，强制重新解析以获取真实 cwd）
     let uncached = {
         let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
         let cached = app_db.get_session_titles(&session_ids)?;
         for (sid, (raw, source)) in &cached {
             let parts: Vec<&str> = raw.splitn(2, '|').collect();
-            result.insert(sid.clone(), SessionTitleInfo {
-                title: parts[0].to_string(),
-                project: parts.get(1).unwrap_or(&"").to_string(),
-                source: source.clone(),
-            });
+            let title = parts[0].to_string();
+            let project = parts.get(1).unwrap_or(&"").to_string();
+            let project_valid = !project.is_empty()
+                && (project.contains('/') || project.contains('\\'));
+            if project_valid {
+                result.insert(sid.clone(), SessionTitleInfo {
+                    title, project, source: source.clone(),
+                });
+            }
         }
-        session_ids.iter().filter(|id| !cached.contains_key(*id)).cloned().collect::<Vec<String>>()
+        session_ids.iter().filter(|id| !result.contains_key(*id)).cloned().collect::<Vec<String>>()
     };
 
     if uncached.is_empty() { return Ok(result); }

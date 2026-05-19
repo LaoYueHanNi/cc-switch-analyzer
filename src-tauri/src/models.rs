@@ -453,3 +453,42 @@ pub struct SourceInfo {
     pub db_type: String,
     pub record_count: i64,
 }
+
+// ========== 会话管理：项目分组（第一屏） ==========
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectGroupStats {
+    pub project_dir: String,
+    pub display_name: String,
+    pub session_count: i64,
+    pub total_cost: f64,
+    pub total_tokens: i64,
+    pub first_at: i64,
+    pub last_at: i64,
+    #[serde(default)]
+    pub session_ids: Vec<String>,
+}
+
+// ========== 会话管理：会话详情（第二屏） ==========
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSessionDetail {
+    pub session_id: String,
+    pub request_count: i64,
+    pub total_tokens: i64,
+    pub total_cost: f64,
+    pub start_time: i64,
+    pub end_time: i64,
+    pub duration_sec: i64,
+    pub max_context_width: i64,
+    pub cache_hit_rate: f64,
+    #[serde(default)]
+    pub timestamps: Vec<i64>,
+    #[serde(default)]
+    pub model_breakdown: Vec<SessionModelCostEntry>,
+    pub title: Option<String>,
+    pub project_dir: Option<String>,
+    pub source_path: Option<String>,
+}

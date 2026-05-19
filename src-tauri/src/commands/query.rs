@@ -7,6 +7,7 @@ use crate::models::*;
 use crate::models::CompareBucket;
 use crate::services::data_source::*;
 use crate::services::precompute::*;
+use crate::services::session_title::{resolve_session_projects, find_jsonl_path};
 
 macro_rules! require_sources {
     ($sources:expr) => {
@@ -540,4 +541,233 @@ pub fn query_sessions_with_cost(
         sessions: enriched,
         available_projects,
     })
+}
+
+/// 会话管理 - 第一屏：按项目目录分组的聚合统计
+#[tauri::command]
+pub fn query_session_project_groups(
+    params: FilterParams,
+    state: State<AppState>,
+) -> Result<Vec<ProjectGroupStats>, String> {
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+
+    // 1. 带过滤的 session_breakdown
+    let all_sessions: Vec<SessionBreakdown> = std::thread::scope(|s| {
+        let handles: Vec<_> = sources.iter().map(|entry| {
+            let p = params.clone();
+            let label = entry.db_type.label().to_string();
+            s.spawn(move || {
+                entry.source.get_session_breakdown(&p).map_err(|e| {
+                    log::warn!("[QUERY] session_breakdown 数据源({}) 查询失败: {}", label, e); e
+                }).ok().unwrap_or_default()
+            })
+        }).collect();
+        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    });
+
+    if all_sessions.is_empty() { return Ok(vec![]); }
+
+    let all_ids: Vec<String> = all_sessions.iter().map(|s| s.session_id.clone()).collect();
+
+    // 2. 解析项目目录
+    let (project_map, _) = {
+        let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+        resolve_session_projects(&all_ids, &app_db, &sources)?
+    };
+
+    // 3. 计算基础费用（不做模型分解）
+    let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
+    let all_request_tokens: Vec<SessionRequestToken> = {
+        let mut tokens = Vec::new();
+        for entry in sources.iter() {
+            if let Ok(t) = entry.source.get_session_request_tokens_for_ids(&params, &all_ids) {
+                tokens.extend(t);
+            }
+        }
+        tokens
+    };
+    let session_costs = compute_session_costs(&all_request_tokens, &pricing);
+
+    // 4. 按 projectDir 分组聚合（保留 session_ids）
+    let mut groups: HashMap<String, (i64, f64, i64, i64, i64, Vec<String>)> = HashMap::new();
+    for s in &all_sessions {
+        let dir = project_map.get(&s.session_id).map(|s| s.as_str()).unwrap_or("");
+        let cost = session_costs.get(&s.session_id).copied().unwrap_or(0.0);
+        let tokens = s.input_tokens + s.output_tokens + s.cache_read + s.cache_creation;
+        let entry = groups.entry(dir.to_string()).or_default();
+        entry.0 += 1;
+        entry.1 += cost;
+        entry.2 += tokens;
+        entry.3 = entry.3.min(s.first_at);
+        entry.4 = entry.4.max(s.last_at);
+        entry.5.push(s.session_id.clone());
+    }
+
+    // 5. 组装结果
+    let mut result: Vec<ProjectGroupStats> = groups.into_iter().map(|(dir, (count, cost, tokens, first, last, session_ids))| {
+        let display_name = if dir.is_empty() {
+            "未知项目".to_string()
+        } else {
+            std::path::Path::new(&dir)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&dir)
+                .to_string()
+        };
+        ProjectGroupStats {
+            project_dir: dir,
+            display_name,
+            session_count: count,
+            total_cost: cost,
+            total_tokens: tokens,
+            first_at: first,
+            last_at: last,
+            session_ids,
+        }
+    }).collect();
+    result.sort_by(|a, b| b.last_at.cmp(&a.last_at));
+    Ok(result)
+}
+
+/// 会话管理 - 第二屏：按 sessionIds 直接加载详情
+#[tauri::command]
+pub fn query_project_session_details(
+    params: FilterParams,
+    session_ids: Vec<String>,
+    state: State<AppState>,
+) -> Result<Vec<ProjectSessionDetail>, String> {
+    if session_ids.is_empty() { return Ok(vec![]); }
+
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+
+    // 1. 从 sessions 表拿标题和目录（不查 JSONL）
+    let (title_map, project_map) = {
+        let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+        let cached = app_db.get_sessions(&session_ids)?;
+        let mut titles = HashMap::new();
+        let mut projects = HashMap::new();
+        for (sid, (dir, title, _)) in &cached {
+            if !title.is_empty() { titles.insert(sid.clone(), title.clone()); }
+            if !dir.is_empty() { projects.insert(sid.clone(), dir.clone()); }
+        }
+        (titles, projects)
+    };
+
+    // 2. 只查这些 session 的 breakdown（用于基础统计）
+    let all_sessions: Vec<SessionBreakdown> = std::thread::scope(|s| {
+        let handles: Vec<_> = sources.iter().map(|entry| {
+            let p = params.clone();
+            let label = entry.db_type.label().to_string();
+            s.spawn(move || {
+                entry.source.get_session_breakdown(&p).map_err(|e| {
+                    log::warn!("[QUERY] session_breakdown 数据源({}) 查询失败: {}", label, e); e
+                }).ok().unwrap_or_default()
+            })
+        }).collect();
+        let all: Vec<SessionBreakdown> = handles.into_iter().flat_map(|h| h.join().unwrap()).collect();
+        let id_set: std::collections::HashSet<String> = session_ids.iter().cloned().collect();
+        all.into_iter().filter(|s| id_set.contains(&s.session_id)).collect()
+    });
+
+    if all_sessions.is_empty() { return Ok(vec![]); }
+
+    let filtered_ids: Vec<String> = all_sessions.iter().map(|s| s.session_id.clone()).collect();
+
+    // 3. 加载完整数据
+    let (all_request_tokens, all_model_tokens, max_context_widths, timestamps_map) = {
+        let detail_data: Vec<_> = std::thread::scope(|s| {
+            let handles: Vec<_> = sources.iter().map(|entry| {
+                let p = params.clone();
+                let ids = filtered_ids.clone();
+                s.spawn(move || {
+                    let req = entry.source.get_session_request_tokens_for_ids(&p, &ids).ok();
+                    let mdl = entry.source.get_session_model_tokens_for_ids(&p, &ids).ok();
+                    (req, mdl)
+                })
+            }).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        let all_req: Vec<SessionRequestToken> = detail_data.iter()
+            .filter_map(|d| d.0.clone()).flatten().collect();
+        let all_mdl: Vec<SessionModelToken> = detail_data.iter()
+            .filter_map(|d| d.1.clone()).flatten().collect();
+
+        let mut max_ctx: HashMap<String, i64> = HashMap::new();
+        let mut ts_map: HashMap<String, Vec<i64>> = HashMap::new();
+        for entry in sources.iter() {
+            if let Ok(m) = entry.source.get_session_max_context_widths(&filtered_ids) {
+                for (k, v) in m { max_ctx.insert(k, v); }
+            }
+            if let Ok(t) = entry.source.get_session_timestamps(&filtered_ids) {
+                for (k, v) in t { ts_map.entry(k).or_default().extend(v); }
+            }
+        }
+        (all_req, all_mdl, max_ctx, ts_map)
+    };
+
+    let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
+    let session_costs = compute_session_costs(&all_request_tokens, &pricing);
+    let session_model_costs = compute_session_model_costs(&all_request_tokens, &all_model_tokens, &pricing);
+
+    // 4. 组装结果
+    let details: Vec<ProjectSessionDetail> = all_sessions.into_iter().map(|s| {
+        let cost = session_costs.get(&s.session_id).copied().unwrap_or(0.0);
+        let cache_hit_rate = if (s.input_tokens + s.cache_read) > 0 {
+            s.cache_read as f64 / (s.input_tokens + s.cache_read) as f64
+        } else { 0.0 };
+
+        let model_breakdown: Vec<SessionModelCostEntry> = session_model_costs
+            .get(&s.session_id)
+            .map(|mc| {
+                mc.iter().map(|(model, data)| {
+                    let mut tier_vec: Vec<ContextTierCost> = data
+                        .tier_costs.iter()
+                        .filter(|(_, c)| **c > 0.0)
+                        .map(|(threshold, cost)| ContextTierCost {
+                            threshold: *threshold,
+                            cost: *cost,
+                            tokens: data.tier_tokens.get(threshold).copied().unwrap_or(0),
+                        })
+                        .collect();
+                    tier_vec.sort_by_key(|t| t.threshold);
+                    SessionModelCostEntry {
+                        session_id: s.session_id.clone(),
+                        model: model.clone(),
+                        cost: data.cost,
+                        input_tokens: data.input_tokens,
+                        output_tokens: data.output_tokens,
+                        cache_read_tokens: data.cache_read,
+                        cache_creation_tokens: data.cache_creation,
+                        input_cost: data.breakdown[0],
+                        output_cost: data.breakdown[1],
+                        cache_read_cost: data.breakdown[2],
+                        cache_creation_cost: data.breakdown[3],
+                        context_tier_costs: tier_vec,
+                    }
+                }).collect()
+            })
+            .unwrap_or_default();
+
+        ProjectSessionDetail {
+            session_id: s.session_id.clone(),
+            request_count: s.requests,
+            total_tokens: s.input_tokens + s.output_tokens + s.cache_read + s.cache_creation,
+            total_cost: cost,
+            start_time: s.first_at,
+            end_time: s.last_at,
+            duration_sec: s.last_at - s.first_at,
+            max_context_width: max_context_widths.get(&s.session_id).copied().unwrap_or(0),
+            cache_hit_rate,
+            timestamps: timestamps_map.get(&s.session_id).cloned().unwrap_or_default(),
+            model_breakdown,
+            title: title_map.get(&s.session_id).cloned(),
+            project_dir: project_map.get(&s.session_id).cloned(),
+            source_path: find_jsonl_path(&s.session_id),
+        }
+    }).collect();
+
+    Ok(details)
 }
