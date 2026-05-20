@@ -56,6 +56,30 @@ fn find_jsonl(session_id: &str) -> Option<PathBuf> {
     None
 }
 
+/// 一次遍历目录，批量匹配多个 session_id 的 jsonl 路径
+pub fn find_jsonl_batch(session_ids: &[String]) -> HashMap<String, String> {
+    let mut result = HashMap::new();
+    let dir = claude_projects_dir();
+    if !dir.exists() { return result; }
+    let remaining: std::collections::HashSet<String> = session_ids.iter().cloned().collect();
+
+    for entry in fs::read_dir(&dir).ok().into_iter().flatten() {
+        let entry = match entry { Ok(e) => e, Err(_) => continue };
+        if !entry.path().is_dir() { continue; }
+        for file_entry in fs::read_dir(entry.path()).ok().into_iter().flatten() {
+            let file_entry = match file_entry { Ok(e) => e, Err(_) => continue };
+            let path = file_entry.path();
+            if path.extension().map_or(true, |e| e != "jsonl") { continue; }
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                if remaining.contains(stem) {
+                    result.insert(stem.to_string(), path.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    result
+}
+
 /// 一次遍历 JSONL 提取：cwd、ai-title、第一条 user message
 /// 三个字段找到后提前终止，避免重复打开文件
 fn extract_session_metadata(path: &PathBuf) -> (Option<String>, Option<String>, Option<String>) {
@@ -153,10 +177,12 @@ pub fn resolve_session_projects(
     }
 
     let uncached: Vec<String> = session_ids.iter()
-        .filter(|id| !project_map.contains_key(*id))
+        .filter(|id| !cached.contains_key(*id))
         .cloned()
         .collect();
-    if uncached.is_empty() { return Ok((project_map, title_map)); }
+    if uncached.is_empty() {
+        return Ok((project_map, title_map));
+    }
 
     // 2. 从各数据源获取 (OpenCode: session.directory)
     let mut resolved: HashMap<String, (String, String, String)> = HashMap::new();
@@ -189,13 +215,15 @@ pub fn resolve_session_projects(
         }
     }
 
-    // 4. 合并结果 + 写入 sessions 表 + 写入 session_titles 表（兼容）
+    // 4. 合并结果 + 写入 sessions 表（包括未找到的，标记 not_found 避免重复扫描）
     for id in &uncached {
         if let Some((title, project, source)) = resolved.remove(id) {
             if !title.is_empty() { title_map.insert(id.clone(), title.clone()); }
             if !project.is_empty() { project_map.insert(id.clone(), project.clone()); }
             app_db.save_session(id, &project, &title, &source)?;
             app_db.save_session_title(id, &format!("{}|{}", title, project), &source)?;
+        } else {
+            app_db.save_session(id, "", "", "not_found")?;
         }
     }
 

@@ -7,7 +7,7 @@ use crate::models::*;
 use crate::models::CompareBucket;
 use crate::services::data_source::*;
 use crate::services::precompute::*;
-use crate::services::session_title::{resolve_session_projects, find_jsonl_path};
+use crate::services::session_title::{resolve_session_projects, find_jsonl_path, find_jsonl_batch};
 
 macro_rules! require_sources {
     ($sources:expr) => {
@@ -712,7 +712,18 @@ pub fn query_project_session_details(
     let session_costs = compute_session_costs(&all_request_tokens, &pricing);
     let session_model_costs = compute_session_model_costs(&all_request_tokens, &all_model_tokens, &pricing);
 
-    // 4. 组装结果
+    // 5. 批量构建 source_path（一次遍历目录匹配所有 ClaudeCode session）
+    let source_path_map: HashMap<String, String> = {
+        let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+        let all_cached = app_db.get_sessions(&filtered_ids)?;
+        let claude_ids: Vec<String> = filtered_ids.iter()
+            .filter(|sid| all_cached.get(sid.as_str()).map(|(_, _, s)| s.as_str()) == Some("claudecode"))
+            .cloned()
+            .collect();
+        find_jsonl_batch(&claude_ids)
+    };
+
+    // 6. 组装结果
     let details: Vec<ProjectSessionDetail> = all_sessions.into_iter().map(|s| {
         let cost = session_costs.get(&s.session_id).copied().unwrap_or(0.0);
         let cache_hit_rate = if (s.input_tokens + s.cache_read) > 0 {
@@ -765,7 +776,7 @@ pub fn query_project_session_details(
             model_breakdown,
             title: title_map.get(&s.session_id).cloned(),
             project_dir: project_map.get(&s.session_id).cloned(),
-            source_path: find_jsonl_path(&s.session_id),
+            source_path: source_path_map.get(&s.session_id).cloned(),
         }
     }).collect();
 
