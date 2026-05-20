@@ -75,12 +75,16 @@ const pricingStore = usePricingStore()
 
 const visibleSeries = reactive({ cost: true, total: true, detail: false })
 
-// ===== 单日检测 =====
+// ===== 单日检测（用本地时间比较，避免 toISOString 的 UTC 偏移） =====
+function localDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 const isSingleDay = computed(() => {
   const f = filterStore.fromDate
   const t = filterStore.toDate
   if (!f || !t) return false
-  return f.toISOString().slice(0, 10) === t.toISOString().slice(0, 10)
+  return localDateStr(f) === localDateStr(t)
 })
 
 // ===== 小时数据（竞态防护） =====
@@ -103,7 +107,10 @@ async function fetchHourly(): Promise<void> {
   }
 }
 
-watch(isSingleDay, (single) => { if (single) fetchHourly() }, { immediate: true })
+watch(isSingleDay, (single) => {
+  if (single) fetchHourly()
+  else hourlyRows.value = []
+}, { immediate: true })
 watch(() => filterStore.filterParams, () => { if (isSingleDay.value) fetchHourly() }, { deep: true })
 watch(() => queryStore.queryVersion, () => { if (isSingleDay.value) fetchHourly() })
 
@@ -184,7 +191,12 @@ const allData = computed(() => ({
 }))
 
 watch(allData, (v) => {
-  if (v.dates.length > 0) Object.assign(display, v)
+  if (v.dates.length > 0) {
+    Object.assign(display, v)
+  } else if (!queryStore.loading && !hourlyLoading.value) {
+    display.dates = []; display.cost = []; display.token = []
+    display.input = []; display.output = []; display.cacheR = []; display.cacheW = []
+  }
 })
 </script>
 

@@ -61,12 +61,11 @@ function renderChart(): void {
   const textPrimary = getColor('--text-primary')
   const borderColor = getColor('--border-main')
 
-  const allTokenData = [
-    ...props.totalTokenData, ...props.inputData,
-    ...props.outputData, ...props.cacheReadData, ...props.cacheCreationData
-  ]
-  const tokenMax = Math.max(1, ...allTokenData)
-  const costMax = Math.max(0.01, ...props.totalCostData)
+  const tokenArrays: number[][] = []
+  if (props.visibleSeries.total) tokenArrays.push(props.totalTokenData)
+  if (props.visibleSeries.detail) tokenArrays.push(props.inputData, props.outputData, props.cacheReadData, props.cacheCreationData)
+  const tokenMax = tokenArrays.length > 0 ? Math.max(1, ...tokenArrays.flat()) : 1
+  const costMax = props.visibleSeries.cost ? Math.max(0.01, ...props.totalCostData) : 0.01
 
   const series: echarts.SeriesOption[] = [
     makeSeries('总费用', props.totalCostData, '--color-cost', 1, props.visibleSeries.cost),
@@ -92,8 +91,8 @@ function renderChart(): void {
         name: 'Token',
         min: 0,
         max: tokenMax,
-        nameTextStyle: { fontSize: 10, color: textMuted },
-        axisLabel: { show: true, fontSize: 10, color: textMuted, formatter: (v: number) => formatNum(v) },
+        nameTextStyle: { fontSize: 10, color: textMuted, opacity: tokenArrays.length > 0 ? 1 : 0 },
+        axisLabel: { show: tokenArrays.length > 0, fontSize: 10, color: textMuted, formatter: (v: number) => formatNum(v) },
         splitLine: { lineStyle: { color: borderColor, type: 'dashed' } }
       },
       {
@@ -101,9 +100,9 @@ function renderChart(): void {
         name: '费用',
         min: 0,
         max: costMax,
-        nameTextStyle: { fontSize: 10, color: textMuted },
+        nameTextStyle: { fontSize: 10, color: textMuted, opacity: props.visibleSeries.cost ? 1 : 0 },
         axisLabel: {
-          show: true, fontSize: 10, color: textMuted,
+          show: props.visibleSeries.cost, fontSize: 10, color: textMuted,
           formatter: (v: number) => '¥' + (v >= 1000 ? (v / 1000).toFixed(1) + 'K' : v.toFixed(2))
         },
         splitLine: { show: false }
@@ -131,17 +130,26 @@ function renderChart(): void {
   }, true)
 }
 
+let resizeObserver: ResizeObserver | null = null
+
 onMounted(() => {
-  requestAnimationFrame(() => {
-    renderChart()
-    window.addEventListener('resize', handleResize)
+  window.addEventListener('resize', handleResize)
+  resizeObserver = new ResizeObserver(() => {
+    if (chart) {
+      chart.resize()
+    } else if (chartRef.value && chartRef.value.clientWidth > 0 && chartRef.value.clientHeight > 0) {
+      renderChart()
+    }
   })
+  if (chartRef.value) resizeObserver.observe(chartRef.value)
 })
 watchEffect(renderChart)
 watch(() => themeStore.isDark, renderChart)
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+  resizeObserver?.disconnect()
+  resizeObserver = null
   if (chart) { chart.dispose(); chart = null }
 })
 
