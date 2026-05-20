@@ -39,8 +39,8 @@ pub fn short_session(session_id: &str) -> String {
     }
 }
 
-/// 返回 (jsonl路径, cwd 工作目录)
-fn find_jsonl(session_id: &str) -> Option<(PathBuf, Option<String>)> {
+/// 返回 jsonl 路径
+fn find_jsonl(session_id: &str) -> Option<PathBuf> {
     let dir = claude_projects_dir();
     if !dir.exists() { return None; }
     let target = format!("{}.jsonl", session_id);
@@ -49,41 +49,58 @@ fn find_jsonl(session_id: &str) -> Option<(PathBuf, Option<String>)> {
         if entry.path().is_dir() {
             let candidate = entry.path().join(&target);
             if candidate.exists() {
-                let cwd = extract_cwd(&candidate);
-                return Some((candidate, cwd));
+                return Some(candidate);
             }
         }
     }
     None
 }
 
-/// 从 JSONL 文件前 10 行提取 cwd 字段
-fn extract_cwd(path: &PathBuf) -> Option<String> {
-    let content = fs::read_to_string(path).ok()?;
-    for line in content.lines().take(10) {
-        if let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) {
-            if let Some(cwd) = obj.get("cwd").and_then(|v| v.as_str()) {
-                let cwd = cwd.trim().to_string();
-                if !cwd.is_empty() { return Some(cwd); }
+/// 一次遍历 JSONL 提取：cwd、ai-title、第一条 user message
+/// 三个字段找到后提前终止，避免重复打开文件
+fn extract_session_metadata(path: &PathBuf) -> (Option<String>, Option<String>, Option<String>) {
+    use std::io::BufRead;
+    let file = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return (None, None, None),
+    };
+    let reader = std::io::BufReader::new(file);
+    let mut cwd: Option<String> = None;
+    let mut ai_title: Option<String> = None;
+    let mut user_message: Option<String> = None;
+
+    for line in reader.lines() {
+        let line = match line { Ok(l) => l, Err(_) => continue };
+        if cwd.is_some() && ai_title.is_some() && user_message.is_some() { break; }
+        let obj: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if cwd.is_none() {
+            if let Some(v) = obj.get("cwd").and_then(|v| v.as_str()) {
+                let v = v.trim().to_string();
+                if !v.is_empty() { cwd = Some(v); }
             }
         }
-    }
-    None
-}
 
-pub fn extract_first_user_message(path: &PathBuf) -> Option<String> {
-    let content = fs::read_to_string(path).ok()?;
-    for line in content.lines() {
-        if let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) {
-            if obj.get("type").and_then(|v| v.as_str()) != Some("user") { continue; }
+        let typ = obj.get("type").and_then(|v| v.as_str());
+        if ai_title.is_none() && typ == Some("ai-title") {
+            if let Some(v) = obj.get("aiTitle").and_then(|v| v.as_str()) {
+                let v = v.trim().to_string();
+                if !v.is_empty() { ai_title = Some(v); }
+            }
+        }
+
+        if user_message.is_none() && typ == Some("user") {
             if let Some(msg) = obj.get("message").and_then(|m| m.get("content")) {
                 if let Some(text) = extract_text(msg) {
-                    return Some(text);
+                    user_message = Some(clean_title(&text));
                 }
             }
         }
     }
-    None
+    (cwd, ai_title, user_message)
 }
 
 fn extract_text(content: &serde_json::Value) -> Option<String> {
@@ -109,11 +126,12 @@ pub fn clean_title(text: &str) -> String {
 }
 
 /// 返回 (标题, cwd 工作目录)
+/// 优先从 ai-title 记录获取，fallback 到第一条 user message
 pub fn generate_title(session_id: &str) -> Option<(String, String)> {
-    let (path, cwd) = find_jsonl(session_id)?;
-    let message = extract_first_user_message(&path)?;
-    let title = clean_title(&message);
-    if title.is_empty() { None } else { Some((title, cwd.unwrap_or_default())) }
+    let path = find_jsonl(session_id)?;
+    let (cwd, ai_title, user_message) = extract_session_metadata(&path);
+    let title = ai_title.or(user_message).filter(|t| !t.is_empty())?;
+    Some((title, cwd.unwrap_or_default()))
 }
 
 /// 通过 sessionId 批量获取项目目录和标题。
@@ -186,5 +204,5 @@ pub fn resolve_session_projects(
 
 /// 通过 sessionId 查找 JSONL 文件路径
 pub fn find_jsonl_path(session_id: &str) -> Option<String> {
-    find_jsonl(session_id).map(|(path, _)| path.to_string_lossy().to_string())
+    find_jsonl(session_id).map(|path| path.to_string_lossy().to_string())
 }

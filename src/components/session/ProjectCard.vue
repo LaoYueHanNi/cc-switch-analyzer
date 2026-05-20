@@ -56,7 +56,7 @@ async function copyPath() {
 
 function formatTime(ts: number): string {
   if (!ts) return '-'
-  const d = new Date(ts)
+  const d = new Date(ts * 1000)
   const diffMin = Math.floor((Date.now() - d.getTime()) / 60000)
   if (diffMin < 1) return '刚刚'
   if (diffMin < 60) return `${diffMin}分钟前`

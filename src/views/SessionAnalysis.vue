@@ -191,13 +191,15 @@ let filterTimer: ReturnType<typeof setTimeout> | null = null
 watch(() => dbStore.hasDatabase, (val) => { if (val) tryLoadGroups() }, { immediate: true })
 watch(() => filterStore.filterParams, () => {
   if (filterTimer) clearTimeout(filterTimer)
-  filterTimer = setTimeout(() => {
+  filterTimer = setTimeout(async () => {
     if (!dbStore.hasDatabase) return
     if (activeProject.value) {
+      await loadProjectGroups()
       const ids = activeGroup.value?.sessionIds || []
       if (ids.length) loadSessionDetails(ids)
+      else activeProject.value = null
     } else {
-      tryLoadGroups()
+      loadProjectGroups()
     }
   }, 300)
 }, { deep: true })
