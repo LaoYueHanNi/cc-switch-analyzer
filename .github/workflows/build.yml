@@ -10,6 +10,9 @@ on:
         description: 'Release tag (e.g. v0.7.0)'
         required: true
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -88,13 +91,16 @@ jobs:
       - name: Build APP
         run: pnpm tauri build
 
+      - name: Compress APP
+        run: tar -czf "CC-Switch Analyzer.app.tar.gz" -C src-tauri/target/release/bundle/macos "CC-Switch Analyzer.app"
+
       - name: Upload APP
         uses: actions/upload-artifact@v4
         with:
           name: macos-app
-          path: src-tauri/target/release/bundle/macos/*.app
+          path: CC-Switch Analyzer.app.tar.gz
 
       - name: Upload to Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload ${{ github.event.inputs.tag || github.ref_name }} src-tauri/target/release/bundle/macos/*.app --clobber
+        run: gh release upload ${{ github.event.inputs.tag || github.ref_name }} "CC-Switch Analyzer.app.tar.gz" --clobber
