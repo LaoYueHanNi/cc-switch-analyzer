@@ -91,16 +91,13 @@ jobs:
       - name: Build APP
         run: pnpm tauri build
 
-      - name: Compress APP
-        run: tar -czf "CC-Switch Analyzer.app.tar.gz" -C src-tauri/target/release/bundle/macos "CC-Switch Analyzer.app"
-
       - name: Upload APP
         uses: actions/upload-artifact@v4
         with:
-          name: macos-app
-          path: CC-Switch Analyzer.app.tar.gz
+          name: macos-dmg
+          path: src-tauri/target/release/bundle/dmg/*.dmg
 
       - name: Upload to Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload ${{ github.event.inputs.tag || github.ref_name }} "CC-Switch Analyzer.app.tar.gz" --clobber
+        run: gh release upload ${{ github.event.inputs.tag || github.ref_name }} src-tauri/target/release/bundle/dmg/*.dmg --clobber
