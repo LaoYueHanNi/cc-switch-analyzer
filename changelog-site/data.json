@@ -1,5 +1,237 @@
 [
   {
+    "version": "0.6.7",
+    "date": "2026-05-20",
+    "commits": [
+      {
+        "hash": "8fa82b5",
+        "subject": "fix: 趋势页面多项修复",
+        "date": "2026-05-20"
+      },
+      {
+        "hash": "dc68da0",
+        "subject": "perf: 会话管理加载性能优化",
+        "date": "2026-05-20"
+      },
+      {
+        "hash": "79f89cb",
+        "subject": "fix: 会话管理多项修复与性能优化",
+        "date": "2026-05-20"
+      }
+    ]
+  },
+  {
+    "version": "0.6.6",
+    "date": "2026-05-19",
+    "commits": [
+      {
+        "hash": "58b8dfe",
+        "subject": "refactor: 会话管理Tab数据流重构",
+        "date": "2026-05-19"
+      }
+    ]
+  },
+  {
+    "version": "0.6.5",
+    "date": "2026-05-17",
+    "commits": [
+      {
+        "hash": "e5fed1b",
+        "subject": "fix: 趋势图按钮切换用watchEffect替代watch，修复reactive对象嵌套属性不触发更新",
+        "date": "2026-05-17"
+      }
+    ]
+  },
+  {
+    "version": "0.6.4",
+    "date": "2026-05-17",
+    "commits": [
+      {
+        "hash": "c8e09d5",
+        "subject": "feat: 趋势分析Tab — 每日/小时Token费用双轴曲线图",
+        "date": "2026-05-17"
+      }
+    ]
+  },
+  {
+    "version": "0.6.3",
+    "date": "2026-05-16",
+    "commits": [
+      {
+        "hash": "e081dcf",
+        "subject": "fix: 统一UI设计风格，修复暗色模式兼容性问题",
+        "date": "2026-05-16"
+      },
+      {
+        "hash": "008f860",
+        "subject": "fix: 修复review问题 — 删除重复聚合计算 + cacheFallback改为computed返回值",
+        "date": "2026-05-16"
+      },
+      {
+        "hash": "677c8b4",
+        "subject": "feat: 模型费用比较逐桶计算 + 缓存回退 + 别名归并",
+        "date": "2026-05-16"
+      },
+      {
+        "hash": "fe1c1d6",
+        "subject": "feat: 会话页目录筛选 + 服务端过滤无效会话",
+        "date": "2026-05-16"
+      },
+      {
+        "hash": "5d568ae",
+        "subject": "Revert \"feat: 会话标题优先从 session-meta 获取，兜底 jsonl\"",
+        "date": "2026-05-16"
+      }
+    ]
+  },
+  {
+    "version": "0.6.2",
+    "date": "2026-05-16",
+    "commits": [
+      {
+        "hash": "d5aaf06",
+        "subject": "feat: 实时tab过滤无效单条请求",
+        "date": "2026-05-16"
+      },
+      {
+        "hash": "2cc42bd",
+        "subject": "feat: 会话标题优先从 session-meta 获取，兜底 jsonl",
+        "date": "2026-05-15"
+      }
+    ]
+  },
+  {
+    "version": "0.6.1",
+    "date": "2026-05-15",
+    "commits": [
+      {
+        "hash": "8a3fc16",
+        "subject": "fix: 修复数据库迁移 v5 缺少 ADD COLUMN + 会话标题 source 标签解耦",
+        "date": "2026-05-15"
+      }
+    ]
+  },
+  {
+    "version": "0.6.0",
+    "date": "2026-05-15",
+    "commits": [
+      {
+        "hash": "97429a6",
+        "subject": "feat: 会话标题多来源解析 + 数据源标签展示",
+        "date": "2026-05-15"
+      },
+      {
+        "hash": "740543e",
+        "subject": "perf: 消除 OpenCode 会话查询的子查询双重全表扫描",
+        "date": "2026-05-15"
+      },
+      {
+        "hash": "5ce632d",
+        "subject": "perf: 多数据源查询性能优化",
+        "date": "2026-05-14"
+      },
+      {
+        "hash": "62ba74b",
+        "subject": "fix: 会话/实时 Tab 添加 KeepAlive 避免切换重建",
+        "date": "2026-05-14"
+      },
+      {
+        "hash": "09d825a",
+        "subject": "fix: 修复多数据源 review 发现的 6 个问题",
+        "date": "2026-05-14"
+      },
+      {
+        "hash": "dbf19b7",
+        "subject": "feat: 多数据源同时接入，透明合并查询",
+        "date": "2026-05-14"
+      },
+      {
+        "hash": "c7c7f34",
+        "subject": "feat: 接入 OpenCode 数据源，自动检测数据库类型",
+        "date": "2026-05-14"
+      },
+      {
+        "hash": "ca7fc20",
+        "subject": "refactor: 提取 DataSource trait 为多数据源扩展预留接口",
+        "date": "2026-05-14"
+      },
+      {
+        "hash": "9653fc9",
+        "subject": "fix: 过滤四项 token 全为 0 的脏数据记录",
+        "date": "2026-05-14"
+      },
+      {
+        "hash": "442fa23",
+        "subject": "fix: 快捷日期按钮高亮状态跨 tab 切换持久化",
+        "date": "2026-05-14"
+      }
+    ]
+  },
+  {
+    "version": "0.5.1",
+    "date": "2026-05-14",
+    "commits": [
+      {
+        "hash": "339365e",
+        "subject": "fix: 模型 tab 费用计算使用上下文感知定价",
+        "date": "2026-05-14"
+      },
+      {
+        "hash": "520ed62",
+        "subject": "fix: 云端别名不可删除，仅用户别名显示删除按钮",
+        "date": "2026-05-14"
+      }
+    ]
+  },
+  {
+    "version": "0.5.0",
+    "date": "2026-05-13",
+    "commits": [
+      {
+        "hash": "fab562a",
+        "subject": "refactor: 全面代码审查与重构",
+        "date": "2026-05-13"
+      }
+    ]
+  },
+  {
+    "version": "0.4.4",
+    "date": "2026-05-13",
+    "commits": [
+      {
+        "hash": "ea109ed",
+        "subject": "fix: 全面修复外部数据库读取的 NULL 值保护",
+        "date": "2026-05-13"
+      },
+      {
+        "hash": "713e7f5",
+        "subject": "fix: 修复实时 tab 因 session_id 为 NULL 导致查询失败",
+        "date": "2026-05-13"
+      },
+      {
+        "hash": "94be40e",
+        "subject": "fix: 定价查找支持模型别名匹配",
+        "date": "2026-05-13"
+      }
+    ]
+  },
+  {
+    "version": "0.4.3",
+    "date": "2026-05-13",
+    "commits": [
+      {
+        "hash": "8eec29e",
+        "subject": "feat: 默认日期筛选改为当天，修复快捷按钮高亮状态",
+        "date": "2026-05-13"
+      },
+      {
+        "hash": "e280ce1",
+        "subject": "feat: 添加 ASCII 风格更新日志网站",
+        "date": "2026-05-11"
+      }
+    ]
+  },
+  {
     "version": "0.4.2",
     "date": "2026-05-11",
     "commits": [

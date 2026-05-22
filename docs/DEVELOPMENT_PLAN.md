@@ -1,5 +1,8 @@
 # CC-Switch 使用分析器 — 完整开发计划
 
+> **历史文档**: 本文档基于 Electron 架构编写，项目已迁移到 Tauri v2。
+> 当前架构请参考 [README.md](../README.md)。本文档保留作为设计参考。
+
 > 基于 `docs/PRD.md` 产品需求文档制定
 > 参考实现：`/Users/laoyuehanni/Desktop/cc-switch-analyzer`（Java + JavaFX 版本）
 

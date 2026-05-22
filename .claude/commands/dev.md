@@ -8,30 +8,47 @@
 
 先检查是否已有 dev 进程在运行：
 
+**Windows:**
 ```bash
 tasklist 2>/dev/null | grep -i "cc-switch-analyzer"
 ```
 
-- 如果 **cc-switch-analyzer.exe 已存在**，说明 dev 服务器已在运行，跳到第 3 步。
+**macOS:**
+```bash
+pgrep -f cc-switch-analyzer
+```
+
+- 如果进程已存在，说明 dev 服务器已在运行，跳到第 3 步。
 - 如果不存在，继续第 2 步。
 
 ### 2. 启动 dev 服务器
 
-清理残留端口后启动：
+清理残留进程后启动：
 
+**Windows:**
 ```bash
-# 清理残留进程（如有）
 taskkill //F //IM cc-switch-analyzer.exe 2>/dev/null
-# 等待端口释放
 sleep 3
-# 启动 dev 服务器（后台运行）
-cd D:/Code/cc-switch-analyzer-combined && pnpm dev:tauri &
+pnpm dev:tauri &
+```
+
+**macOS:**
+```bash
+pkill -f cc-switch-analyzer 2>/dev/null
+sleep 3
+pnpm dev:tauri &
 ```
 
 等待编译完成，轮询检测进程启动：
 
+**Windows:**
 ```bash
 sleep 40 && tasklist 2>/dev/null | grep -i "cc-switch-analyzer"
+```
+
+**macOS:**
+```bash
+sleep 40 && pgrep -f cc-switch-analyzer
 ```
 
 如果进程已出现，说明启动成功，继续第 3 步。
@@ -48,4 +65,4 @@ sleep 40 && tasklist 2>/dev/null | grep -i "cc-switch-analyzer"
 
 - `tauri dev` 进程会持续占用端口 1420，不要手动 kill 它
 - Rust 首次编译约 1-2 分钟，后续增量编译通常 5-20 秒
-- 如果 Vite 报端口占用，先 `taskkill //F //IM cc-switch-analyzer.exe` 再重启
+- 如果 Vite 报端口占用，先清理残留进程再重启

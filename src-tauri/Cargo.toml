@@ -2,9 +2,9 @@
 name = "cc-switch-analyzer"
 version = "0.6.7"
 description = "CC-Switch 使用分析器 — Tauri 版本"
-authors = ["you"]
-license = ""
-repository = ""
+authors = ["LaoYueHanNi"]
+license = "MIT"
+repository = "https://github.com/LaoYueHanNi/cc-switch-analyzer"
 edition = "2021"
 rust-version = "1.77.2"
 
