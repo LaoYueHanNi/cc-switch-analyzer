@@ -1088,6 +1088,7 @@ impl AppDbService {
                 cache_creation_cost_per_million REAL NOT NULL,
                 threshold INTEGER NOT NULL DEFAULT 0,
                 aliases TEXT NOT NULL DEFAULT '',
+                no_cache_support INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (model_id, threshold)
             );
             CREATE TABLE IF NOT EXISTS cloud_time_rules (
@@ -1106,9 +1107,15 @@ impl AppDbService {
                 model_id TEXT NOT NULL,
                 alias TEXT NOT NULL,
                 PRIMARY KEY (model_id, alias)
+            );
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                project_dir TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT ''
             );"
         ).map_err(|e| format!("初始化内存表失败: {}", e))?;
-        self.set_setting("schema_version", "5")?;
+        self.set_setting("schema_version", "7")?;
         Ok(())
     }
 }
@@ -1134,7 +1141,7 @@ mod tests {
     #[test]
     fn test_schema_version() {
         let db = create_db();
-        assert_eq!(db.get_setting("schema_version").unwrap(), "4");
+        assert_eq!(db.get_setting("schema_version").unwrap(), "7");
     }
 
     #[test]
@@ -1246,11 +1253,12 @@ mod tests {
                         context_tiers: vec![],
                     }],
                     aliases: vec!["model-a-alias".to_string()],
+                    no_cache_support: false,
                 },
             ],
         };
         db.save_cloud_pricing(&data).unwrap();
-        let (base, tiers, cloud_time_rules, _cloud_aliases) = db.load_cloud_pricing().unwrap();
+        let (base, tiers, cloud_time_rules, _cloud_aliases, _no_cache_models) = db.load_cloud_pricing().unwrap();
         assert_eq!(base.len(), 1);
         assert_eq!(base[0].model_id, "model-a");
         assert!(tiers.contains_key("model-a"));

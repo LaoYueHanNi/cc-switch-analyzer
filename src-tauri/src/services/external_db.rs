@@ -887,6 +887,56 @@ impl ExternalDbService {
 
         Self::collect_rows(rows, "读取请求日志")
     }
+
+    pub fn stream_records(
+        &self,
+        since: Option<i64>,
+        on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64)),
+    ) -> Result<(), String> {
+        let db = self.db()?;
+        let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
+            Some(s) => ("
+                SELECT session_id, model, provider_id, created_at,
+                       input_tokens, output_tokens,
+                       cache_read_tokens, cache_creation_tokens,
+                       latency_ms
+                FROM proxy_request_logs
+                WHERE created_at > ?
+                  AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
+                ORDER BY created_at DESC", vec![Box::new(s)]),
+            None => ("
+                SELECT session_id, model, provider_id, created_at,
+                       input_tokens, output_tokens,
+                       cache_read_tokens, cache_creation_tokens,
+                       latency_ms
+                FROM proxy_request_logs
+                WHERE (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
+                ORDER BY created_at DESC
+                LIMIT 500", vec![]),
+        };
+
+        let mut stmt = db.prepare(sql).map_err(|e| format!("stream_records 准备失败: {}", e))?;
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let mut rows = stmt.query_map(params_refs.as_slice(), |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(7)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+            ))
+        }).map_err(|e| format!("stream_records 查询失败: {}", e))?;
+
+        while let Some(item) = rows.next() {
+            let record = item.map_err(|e| format!("stream_records 读取行失败: {}", e))?;
+            on_record(record);
+        }
+        Ok(())
+    }
 }
 
 impl super::data_source::DataSource for ExternalDbService {
@@ -915,4 +965,5 @@ impl super::data_source::DataSource for ExternalDbService {
     fn get_model_context_tier_buckets(&self, params: &FilterParams, thresholds: &[i64]) -> Result<Vec<ModelContextTierBucket>, String> { self.get_model_context_tier_buckets(params, thresholds) }
     fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String> { self.get_minute_level_token_trend() }
     fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String> { self.get_recent_request_logs_raw(since) }
+    fn stream_records(&self, since: Option<i64>, on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64))) -> Result<(), String> { self.stream_records(since, on_record) }
 }

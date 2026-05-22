@@ -7,7 +7,9 @@ use crate::models::*;
 use crate::models::CompareBucket;
 use crate::services::data_source::*;
 use crate::services::precompute::*;
-use crate::services::session_title::{resolve_session_projects, find_jsonl_path, find_jsonl_batch};
+use crate::services::dedup::*;
+use crate::services::pipeline::*;
+use crate::services::session_title::{resolve_session_projects, find_jsonl_batch};
 
 macro_rules! require_sources {
     ($sources:expr) => {
@@ -17,22 +19,42 @@ macro_rules! require_sources {
     };
 }
 
-macro_rules! collect_from_sources {
-    ($sources:expr, $entry:ident, $method:ident($($arg:expr),*), $label:expr) => {
-        $sources.iter().filter_map(|$entry| {
-            $entry.source.$method($($arg),*).map_err(|e| {
-                log::warn!("[QUERY] {} 数据源({}) 查询失败: {}", $label, $entry.db_type.label(), e);
-                e
-            }).ok()
-        }).collect()
-    };
+/// 并行查询辅助函数。调用者需预先 clone 参数。
+/// `query` 接收 `&(entry, &cloned_params)` 元组，对每个数据源执行查询。
+fn parallel_query<P, R, F>(
+    sources: &[SourceEntry],
+    params: P,
+    label: &str,
+    query: F,
+) -> Vec<R>
+where
+    P: Clone + Sync + 'static,
+    R: Send + 'static,
+    F: for<'a> Fn(&'a SourceEntry, &'a P) -> Result<R, String> + Sync + Clone + Send,
+{
+    // 为每个 source 预 clone params，确保引用在 scope 内有效
+    let params_cloned: Vec<_> = sources.iter().map(|_| params.clone()).collect();
+    std::thread::scope(|s| {
+        let handles: Vec<_> = sources.iter().zip(params_cloned.iter()).map(|(entry, p)| {
+            let l = label.to_string();
+            let q = query.clone();
+            s.spawn(move || {
+                q(entry, p).map_err(|e| {
+                    log::warn!("[QUERY] {} 数据源({}) 查询失败: {}", l, entry.db_type.label(), e);
+                    e
+                }).ok()
+            })
+        }).collect();
+        handles.into_iter().filter_map(|h| h.join().unwrap()).collect()
+    })
 }
+
 
 #[tauri::command]
 pub fn query_summary(params: FilterParams, state: State<AppState>) -> Result<SummaryData, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<SummaryData> = collect_from_sources!(sources, e, get_summary(&params), "summary");
+    let results: Vec<SummaryData> = parallel_query(&sources, params.clone(), "summary", |e, p| e.source.get_summary(p));
     Ok(merge_summaries(results))
 }
 
@@ -40,7 +62,7 @@ pub fn query_summary(params: FilterParams, state: State<AppState>) -> Result<Sum
 pub fn query_by_model(params: FilterParams, state: State<AppState>) -> Result<Vec<ModelBreakdown>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<ModelBreakdown>> = collect_from_sources!(sources, e, get_model_breakdown(&params), "model_breakdown");
+    let results: Vec<Vec<ModelBreakdown>> = parallel_query(&sources, params.clone(), "model_breakdown", |e, p| e.source.get_model_breakdown(p));
     Ok(merge_model_breakdowns(results))
 }
 
@@ -48,7 +70,7 @@ pub fn query_by_model(params: FilterParams, state: State<AppState>) -> Result<Ve
 pub fn query_by_provider(params: FilterParams, state: State<AppState>) -> Result<Vec<ProviderBreakdown>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<ProviderBreakdown>> = collect_from_sources!(sources, e, get_provider_breakdown(&params), "provider_breakdown");
+    let results: Vec<Vec<ProviderBreakdown>> = parallel_query(&sources, params.clone(), "provider_breakdown", |e, p| e.source.get_provider_breakdown(p));
     Ok(merge_provider_breakdowns(results))
 }
 
@@ -56,7 +78,7 @@ pub fn query_by_provider(params: FilterParams, state: State<AppState>) -> Result
 pub fn query_provider_model_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<ProviderModelToken>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<ProviderModelToken>> = collect_from_sources!(sources, e, get_provider_model_tokens(&params), "provider_model_tokens");
+    let results: Vec<Vec<ProviderModelToken>> = parallel_query(&sources, params.clone(), "provider_model_tokens", |e, p| e.source.get_provider_model_tokens(p));
     Ok(merge_provider_model_tokens(results))
 }
 
@@ -64,7 +86,7 @@ pub fn query_provider_model_tokens(params: FilterParams, state: State<AppState>)
 pub fn query_daily_trend(params: FilterParams, state: State<AppState>) -> Result<Vec<DailyTrendRow>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<DailyTrendRow>> = collect_from_sources!(sources, e, get_daily_trend(&params), "daily_trend");
+    let results: Vec<Vec<DailyTrendRow>> = parallel_query(&sources, params.clone(), "daily_trend", |e, p| e.source.get_daily_trend(p));
     Ok(merge_daily_trends(results))
 }
 
@@ -72,7 +94,7 @@ pub fn query_daily_trend(params: FilterParams, state: State<AppState>) -> Result
 pub fn query_hourly_trend(params: FilterParams, state: State<AppState>) -> Result<Vec<DailyTrendRow>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<DailyTrendRow>> = collect_from_sources!(sources, e, get_hourly_trend(&params), "hourly_trend");
+    let results: Vec<Vec<DailyTrendRow>> = parallel_query(&sources, params.clone(), "hourly_trend", |e, p| e.source.get_hourly_trend(p));
     Ok(merge_daily_trends(results))
 }
 
@@ -80,13 +102,8 @@ pub fn query_hourly_trend(params: FilterParams, state: State<AppState>) -> Resul
 pub fn query_sessions(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionBreakdown>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let mut all = Vec::new();
-    for entry in sources.iter() {
-        match entry.source.get_session_breakdown(&params) {
-            Ok(sessions) => all.extend(sessions),
-            Err(e) => log::warn!("[QUERY] session_breakdown 数据源({}) 查询失败: {}", entry.db_type.label(), e),
-        }
-    }
+    let all: Vec<Vec<SessionBreakdown>> = parallel_query(&sources, params.clone(), "session_breakdown", |e, p| e.source.get_session_breakdown(p));
+    let mut all: Vec<SessionBreakdown> = all.into_iter().flatten().collect();
     all.sort_by(|a, b| b.requests.cmp(&a.requests));
     all.truncate(crate::utils::SESSION_TOP_N as usize);
     Ok(all)
@@ -96,43 +113,65 @@ pub fn query_sessions(params: FilterParams, state: State<AppState>) -> Result<Ve
 pub fn query_session_model_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionModelToken>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let mut all = Vec::new();
-    for entry in sources.iter() {
-        match entry.source.get_session_model_tokens(&params) {
-            Ok(tokens) => all.extend(tokens),
-            Err(e) => log::warn!("[QUERY] session_model_tokens 数据源({}) 查询失败: {}", entry.db_type.label(), e),
-        }
-    }
-    Ok(all)
+    let all: Vec<Vec<SessionModelToken>> = parallel_query(&sources, params.clone(), "session_model_tokens", |e, p| e.source.get_session_model_tokens(p));
+    Ok(all.into_iter().flatten().collect())
 }
 
 #[tauri::command]
 pub fn query_session_request_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionRequestToken>, String> {
-    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
-    require_sources!(sources);
-    let mut all = Vec::new();
-    for entry in sources.iter() {
-        match entry.source.get_session_request_tokens(&params) {
-            Ok(tokens) => all.extend(tokens),
-            Err(e) => log::warn!("[QUERY] session_request_tokens 数据源({}) 查询失败: {}", entry.db_type.label(), e),
+    // 优先使用缓存（由 refresh_database 增量维护），按 params 过滤
+    {
+        let cache = state.request_cache.lock().map_err(|e| e.to_string())?;
+        if cache.len() > 0 {
+            let filtered: Vec<_> = cache.records().iter()
+                .filter(|r| {
+                    if let Some(from) = params.from_epoch {
+                        if from > 0 && r.created_at < from { return false; }
+                    }
+                    if let Some(to) = params.to_epoch {
+                        if to > 0 && r.created_at >= to { return false; }
+                    }
+                    if let Some(ref model) = params.model_id {
+                        if !model.is_empty() && r.model != *model { return false; }
+                    }
+                    true
+                })
+                .cloned()
+                .collect();
+            return Ok(filtered);
         }
     }
-    Ok(all)
+    // 缓存为空，回退到全量并行查询 + 去重
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+    let all: Vec<Vec<SessionRequestToken>> = parallel_query(&sources, params.clone(), "session_request_tokens", |e, p| e.source.get_session_request_tokens(p));
+    Ok(dedup_request_tokens(all.into_iter().flatten().collect()))
 }
 
 #[tauri::command]
 pub fn query_session_timestamps(session_ids: Vec<String>, state: State<AppState>) -> Result<HashMap<String, Vec<i64>>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
+    let all_maps: Vec<HashMap<String, Vec<i64>>> = {
+        let srcs = &sources;
+        std::thread::scope(|s| {
+            let handles: Vec<_> = srcs.iter().map(|e| {
+                let ids = session_ids.clone();
+                s.spawn(move || {
+                    let label = e.db_type.label();
+                    e.source.get_session_timestamps(&ids).map_err(|e| {
+                        log::warn!("[QUERY] session_timestamps 数据源({}) 查询失败: {}", label, e);
+                        e
+                    }).ok()
+                })
+            }).collect();
+            handles.into_iter().filter_map(|h| h.join().unwrap()).collect()
+        })
+    };
     let mut result = HashMap::new();
-    for entry in sources.iter() {
-        match entry.source.get_session_timestamps(&session_ids) {
-            Ok(map) => {
-                for (k, v) in map {
-                    result.entry(k).or_insert_with(Vec::new).extend(v);
-                }
-            }
-            Err(e) => log::warn!("[QUERY] session_timestamps 数据源({}) 查询失败: {}", entry.db_type.label(), e),
+    for map in all_maps {
+        for (k, v) in map {
+            result.entry(k).or_insert_with(Vec::new).extend(v);
         }
     }
     Ok(result)
@@ -142,7 +181,7 @@ pub fn query_session_timestamps(session_ids: Vec<String>, state: State<AppState>
 pub fn query_realtime(state: State<AppState>) -> Result<Vec<RealtimeBucket>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<RealtimeBucket>> = collect_from_sources!(sources, e, get_minute_level_token_trend(), "realtime");
+    let results: Vec<Vec<RealtimeBucket>> = parallel_query(&sources, (), "realtime", |e, _| e.source.get_minute_level_token_trend());
     Ok(merge_realtime_buckets(results))
 }
 
@@ -150,13 +189,7 @@ pub fn query_realtime(state: State<AppState>) -> Result<Vec<RealtimeBucket>, Str
 pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result<Vec<RealtimeRequestLog>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let mut all_raw = Vec::new();
-    for entry in sources.iter() {
-        match entry.source.get_recent_request_logs_raw(since) {
-            Ok(raw) => all_raw.extend(raw),
-            Err(e) => log::warn!("[QUERY] recent_request_logs 数据源({}) 查询失败: {}", entry.db_type.label(), e),
-        }
-    }
+    let all_raw = run_streaming_dedup(&sources, since);
     drop(sources);
 
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
@@ -553,18 +586,8 @@ pub fn query_session_project_groups(
     require_sources!(sources);
 
     // 1. 带过滤的 session_breakdown
-    let all_sessions: Vec<SessionBreakdown> = std::thread::scope(|s| {
-        let handles: Vec<_> = sources.iter().map(|entry| {
-            let p = params.clone();
-            let label = entry.db_type.label().to_string();
-            s.spawn(move || {
-                entry.source.get_session_breakdown(&p).map_err(|e| {
-                    log::warn!("[QUERY] session_breakdown 数据源({}) 查询失败: {}", label, e); e
-                }).ok().unwrap_or_default()
-            })
-        }).collect();
-        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
-    });
+    let all_sessions: Vec<Vec<SessionBreakdown>> = parallel_query(&sources, params.clone(), "session_breakdown", |e, p| e.source.get_session_breakdown(p));
+    let all_sessions: Vec<SessionBreakdown> = all_sessions.into_iter().flatten().collect();
 
     if all_sessions.is_empty() { return Ok(vec![]); }
 

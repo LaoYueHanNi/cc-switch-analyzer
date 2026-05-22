@@ -3,6 +3,7 @@ use tauri::State;
 use crate::AppState;
 use crate::models::*;
 use crate::services::data_source::create_source_entry;
+use crate::services::pipeline::run_streaming_dedup;
 
 // ========== 数据库操作命令 ==========
 
@@ -196,15 +197,29 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         .max();
     let prev_max = *state.db_latest_timestamp.lock().map_err(|e| e.to_string())?;
 
-    if current_max != prev_max {
-        *state.db_latest_timestamp.lock().map_err(|e| e.to_string())? = current_max;
-        let count: i64 = sources.iter()
-            .filter_map(|s| s.source.get_record_count().ok())
-            .sum();
-        Ok(RefreshResult { has_new: true, record_count: Some(count) })
-    } else {
-        Ok(RefreshResult { has_new: false, record_count: None })
+    if current_max == prev_max {
+        return Ok(RefreshResult { has_new: false, record_count: None });
     }
+
+    // Phase 3: 增量流式更新请求缓存
+    {
+        let since = *state.db_latest_timestamp.lock().map_err(|e| e.to_string())?;
+        let raw_records = run_streaming_dedup(&sources, since);
+        let new_tokens: Vec<SessionRequestToken> = raw_records.into_iter()
+            .map(|(session_id, model, _provider_id, created_at, input_tokens, output_tokens, cache_read, cache_creation, _latency)| {
+                SessionRequestToken { session_id, model, created_at, input_tokens, output_tokens, cache_read, cache_creation }
+            })
+            .collect();
+        let mut cache = state.request_cache.lock().map_err(|e| e.to_string())?;
+        let added = cache.merge(new_tokens);
+        log::info!("[DB] 增量缓存更新: 新增 {} 条, 缓存总计 {} 条", added, cache.len());
+    }
+
+    *state.db_latest_timestamp.lock().map_err(|e| e.to_string())? = current_max;
+    let count: i64 = sources.iter()
+        .filter_map(|s| s.source.get_record_count().ok())
+        .sum();
+    Ok(RefreshResult { has_new: true, record_count: Some(count) })
 }
 
 #[tauri::command]

@@ -37,6 +37,19 @@ pub trait DataSource: Send + Sync {
     fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String>;
     fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String>;
 
+    /// 流式查询请求记录。逐行通过 callback 发射，避免一次性加载全部数据到内存。
+    /// 默认实现委托给 `get_recent_request_logs_raw`。
+    fn stream_records(
+        &self,
+        since: Option<i64>,
+        on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64)),
+    ) -> Result<(), String> {
+        for record in self.get_recent_request_logs_raw(since)? {
+            on_record(record);
+        }
+        Ok(())
+    }
+
     /// 数据源提供的标题来源标签，用于 UI 展示。
     /// CC-Switch 返回 None（标题由 JSONL 或其他 provider 解析），OpenCode 返回 "opencode"。
     fn title_source_tag(&self) -> Option<&'static str> { None }

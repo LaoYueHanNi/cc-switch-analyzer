@@ -519,6 +519,7 @@ mod tests {
                     }],
                     time_rules: vec![],
                     aliases: vec!["claude-4-sonnet".to_string()],
+                    no_cache_support: false,
                 },
                 CloudPricingModel {
                     model_id: "claude-haiku-4".to_string(),
@@ -529,6 +530,7 @@ mod tests {
                     context_tiers: vec![],
                     time_rules: vec![],
                     aliases: vec![],
+                    no_cache_support: false,
                 },
             ],
         }).unwrap();

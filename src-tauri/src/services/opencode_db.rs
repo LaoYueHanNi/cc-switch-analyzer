@@ -921,6 +921,79 @@ impl OpenCodeDbService {
         Self::collect_rows(rows, "读取请求日志")
     }
 
+    pub fn stream_records(
+        &self,
+        since: Option<i64>,
+        on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64)),
+    ) -> Result<(), String> {
+        let db = self.db()?;
+        let base_filter = "json_extract(data, '$.role') = 'assistant'
+              AND (CAST(json_extract(data, '$.tokens.input') AS INTEGER) > 0
+                   OR CAST(json_extract(data, '$.tokens.output') AS INTEGER) > 0
+                   OR CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER) > 0
+                   OR CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER) > 0)";
+
+        let sql;
+        let params: Vec<Box<dyn rusqlite::types::ToSql>> = match since {
+            Some(s) => {
+                sql = format!(
+                    "SELECT session_id,
+                           json_extract(data, '$.modelID'),
+                           json_extract(data, '$.providerID'),
+                           (time_created / 1000),
+                           CAST(json_extract(data, '$.tokens.input') AS INTEGER),
+                           CAST(json_extract(data, '$.tokens.output') AS INTEGER),
+                           CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
+                           CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
+                           (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
+                    FROM message
+                    WHERE (time_created / 1000) > ?
+                      AND {}
+                    ORDER BY time_created DESC", base_filter);
+                vec![Box::new(s)]
+            }
+            None => {
+                sql = format!(
+                    "SELECT session_id,
+                           json_extract(data, '$.modelID'),
+                           json_extract(data, '$.providerID'),
+                           (time_created / 1000),
+                           CAST(json_extract(data, '$.tokens.input') AS INTEGER),
+                           CAST(json_extract(data, '$.tokens.output') AS INTEGER),
+                           CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
+                           CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
+                           (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
+                    FROM message
+                    WHERE {}
+                    ORDER BY time_created DESC
+                    LIMIT 500", base_filter);
+                vec![]
+            }
+        };
+
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("stream_records 准备失败: {}", e))?;
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let mut rows = stmt.query_map(params_refs.as_slice(), |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(7)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+            ))
+        }).map_err(|e| format!("stream_records 查询失败: {}", e))?;
+
+        while let Some(item) = rows.next() {
+            let record = item.map_err(|e| format!("stream_records 读取行失败: {}", e))?;
+            on_record(record);
+        }
+        Ok(())
+    }
+
     pub fn get_session_titles_from_db(
         &self,
         session_ids: &[String],
@@ -983,6 +1056,7 @@ impl super::data_source::DataSource for OpenCodeDbService {
     fn get_model_context_tier_buckets(&self, params: &FilterParams, thresholds: &[i64]) -> Result<Vec<ModelContextTierBucket>, String> { self.get_model_context_tier_buckets(params, thresholds) }
     fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String> { self.get_minute_level_token_trend() }
     fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String> { self.get_recent_request_logs_raw(since) }
+    fn stream_records(&self, since: Option<i64>, on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64))) -> Result<(), String> { self.stream_records(since, on_record) }
     fn title_source_tag(&self) -> Option<&'static str> { Some("opencode") }
     fn get_session_titles_from_provider(
         &self,

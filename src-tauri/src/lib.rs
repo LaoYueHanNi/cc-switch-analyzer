@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::collections::HashMap;
 use services::app_db::AppDbService;
 use services::data_source::SourceEntry;
+use services::dedup::RequestCache;
 use services::pricing_engine::PricingEngine;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder};
 use tauri::{Manager, RunEvent, WindowEvent};
@@ -19,6 +20,7 @@ pub struct AppState {
     pricing_engine: RwLock<PricingEngine>,
     db_latest_timestamp: Mutex<Option<i64>>,
     db_file_mtimes: Mutex<HashMap<String, std::time::SystemTime>>,
+    request_cache: Mutex<RequestCache>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -32,6 +34,7 @@ pub fn run() {
         pricing_engine: RwLock::new(pricing_engine),
         db_latest_timestamp: Mutex::new(None),
         db_file_mtimes: Mutex::new(HashMap::new()),
+        request_cache: Mutex::new(RequestCache::new(5000)),
     };
 
     // macOS Cmd+Q 先触发 ExitRequested 再触发 CloseRequested
