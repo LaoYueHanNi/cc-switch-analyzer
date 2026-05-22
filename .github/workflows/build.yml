@@ -46,6 +46,11 @@ jobs:
           name: windows-msi
           path: src-tauri/target/release/bundle/msi/*.msi
 
+      - name: Upload to Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload ${{ github.ref_name }} src-tauri/target/release/bundle/msi/*.msi --clobber
+
   build-macos:
     runs-on: macos-latest
     steps:
@@ -84,3 +89,8 @@ jobs:
         with:
           name: macos-app
           path: src-tauri/target/release/bundle/macos/*.app
+
+      - name: Upload to Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload ${{ github.ref_name }} src-tauri/target/release/bundle/macos/*.app --clobber
