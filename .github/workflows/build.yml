@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.7.0)'
+        required: true
 
 jobs:
   build-windows:
@@ -49,7 +53,7 @@ jobs:
       - name: Upload to Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload ${{ github.ref_name }} src-tauri/target/release/bundle/msi/*.msi --clobber
+        run: gh release upload ${{ github.event.inputs.tag || github.ref_name }} src-tauri/target/release/bundle/msi/*.msi --clobber
 
   build-macos:
     runs-on: macos-latest
@@ -93,4 +97,4 @@ jobs:
       - name: Upload to Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload ${{ github.ref_name }} src-tauri/target/release/bundle/macos/*.app --clobber
+        run: gh release upload ${{ github.event.inputs.tag || github.ref_name }} src-tauri/target/release/bundle/macos/*.app --clobber
