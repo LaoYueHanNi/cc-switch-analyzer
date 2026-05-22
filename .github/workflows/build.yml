@@ -27,7 +27,7 @@ jobs:
         run: pnpm install
 
       - name: Build MSI
-        run: pnpm tauri build --target msi
+        run: pnpm tauri build
 
       - name: Upload MSI
         uses: actions/upload-artifact@v4
@@ -55,7 +55,7 @@ jobs:
         run: pnpm install
 
       - name: Build APP
-        run: pnpm tauri build --target app
+        run: pnpm tauri build
 
       - name: Upload APP
         uses: actions/upload-artifact@v4
