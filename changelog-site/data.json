@@ -1,5 +1,97 @@
 [
   {
+    "version": "Unreleased",
+    "date": "2026-05-23",
+    "commits": [
+      {
+        "hash": "9ae0a4c",
+        "subject": "feat: TrafficMonitor 插件支持",
+        "date": "2026-05-23"
+      },
+      {
+        "hash": "a527ef3",
+        "subject": "feat: 趋势页面新增小时视图和星期视图",
+        "date": "2026-05-23"
+      },
+      {
+        "hash": "aec7ac4",
+        "subject": "fix: 趋势图表多日模式下缺失日期显示为0而非跳过",
+        "date": "2026-05-23"
+      },
+      {
+        "hash": "c63fbe6",
+        "subject": "Add MIT License to the project",
+        "date": "2026-05-23"
+      },
+      {
+        "hash": "be33634",
+        "subject": "feat: 多数据源并行查询、请求级去重与增量缓存",
+        "date": "2026-05-22"
+      },
+      {
+        "hash": "c630729",
+        "subject": "ci: macOS 改为上传 .dmg 格式",
+        "date": "2026-05-22"
+      },
+      {
+        "hash": "3599aaa",
+        "subject": "ci: 修复 release 上传权限及 macOS 打包格式",
+        "date": "2026-05-22"
+      },
+      {
+        "hash": "92a3b6b",
+        "subject": "ci: 支持手动触发时指定 release tag",
+        "date": "2026-05-22"
+      },
+      {
+        "hash": "eedabb5",
+        "subject": "ci: 构建产物自动上传到 GitHub Release",
+        "date": "2026-05-22"
+      }
+    ]
+  },
+  {
+    "version": "0.7.0",
+    "date": "2026-05-22",
+    "commits": [
+      {
+        "hash": "f502752",
+        "subject": "chore: 迁移 commands 至 skills 目录",
+        "date": "2026-05-22"
+      },
+      {
+        "hash": "d8bcc8c",
+        "subject": "ci: 添加 Rust 依赖缓存加速构建",
+        "date": "2026-05-22"
+      },
+      {
+        "hash": "06bae30",
+        "subject": "ci: 修复 Tauri v2 构建命令",
+        "date": "2026-05-22"
+      },
+      {
+        "hash": "4995a5e",
+        "subject": "ci: 升级 pnpm 版本至 10 以匹配 lockfile 格式",
+        "date": "2026-05-22"
+      },
+      {
+        "hash": "5c8e4a8",
+        "subject": "chore: 更新 pnpm-lock.yaml 移除 Electron 依赖",
+        "date": "2026-05-22"
+      },
+      {
+        "hash": "3cfac1e",
+        "subject": "ci: 添加 GitHub Actions 打包 workflow",
+        "date": "2026-05-22"
+      },
+      {
+        "hash": "99c5a4e",
+        "subject": "chore: 开源准备 — 文档完善与安全清理",
+        "date": "2026-05-22"
+      }
+    ]
+  },
+  {
     "version": "0.6.7",
     "date": "2026-05-20",
     "commits": [
