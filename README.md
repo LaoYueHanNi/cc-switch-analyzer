@@ -13,6 +13,7 @@ CC-Switch 和 OpenCode 代理使用数据的桌面分析工具。基于 Tauri v2
 - **多数据源** - 同时支持 CC-Switch 和 OpenCode 数据库
 - **深色模式** - 支持明暗主题切换
 - **系统托盘** - 最小化到系统托盘
+- **TrafficMonitor 插件** - 在 Windows 任务栏显示今日 Token 消耗和费用（仅 Windows）
 
 ## 技术栈
 
@@ -64,9 +65,14 @@ src/                      # Vue 3 前端
 
 src-tauri/                # Rust 后端
   src/commands/           # Tauri 命令处理器
-  src/services/           # 业务逻辑（定价引擎、数据库服务等）
+  src/services/           # 业务逻辑（定价引擎、数据库服务、HTTP API 等）
   src/models.rs           # 数据模型
   src/utils.rs            # 工具函数
+
+traffic-monitor-plugin/   # TrafficMonitor 插件（仅 Windows，32 位 C++ DLL）
+  CCSwitchAnalyzer.h/cpp  # 插件主类（WinHTTP 请求 + JSON 解析）
+  TodayTokenItem.h/cpp    # 显示项（Tokens + Cost）
+  build.bat               # MSVC x86 编译脚本
 
 docs/                     # 文档（PRD、开发计划）
 ```

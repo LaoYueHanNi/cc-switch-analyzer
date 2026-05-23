@@ -38,6 +38,12 @@ src-tauri/                # Rust 后端
   src/services/           # 业务逻辑
   src/models.rs           # 数据模型
   src/utils.rs            # 工具函数
+
+traffic-monitor-plugin/   # TrafficMonitor 插件（C++ 32 位 DLL，仅 Windows）
+  CCSwitchAnalyzer.h/cpp  # 插件主类（WinHTTP 请求 + JSON 解析）
+  TodayTokenItem.h/cpp    # 显示项（Tokens + Cost）
+  PluginInterface.h       # TrafficMonitor 插件接口
+  build.bat               # 编译脚本（MSVC x86）
 ```
 
 ## 开发流程
@@ -80,6 +86,25 @@ src-tauri/                # Rust 后端
 - 遵循 Rust 标准命名规范（snake_case）
 - 使用 `serde` 进行序列化/反序列化
 - 错误处理使用 `Result` 类型
+
+## TrafficMonitor 插件（仅 Windows）
+
+TrafficMonitor 是 Windows 桌面工具，项目包含一个配套的 C++ 插件，用于在任务栏显示今日 Token 用量和费用。
+
+### 前置要求
+
+- **Visual Studio 2022 Build Tools**（MSVC x86 工具链）
+
+### 编译
+
+```bash
+cd traffic-monitor-plugin
+build.bat
+```
+
+产出：`src-tauri/resources/CCSwitchAnalyzer.dll`（通过 `include_bytes!` 内嵌到应用中）
+
+> 修改 `traffic-monitor-plugin/` 下的 C++ 源码后，必须重新执行 `build.bat` 编译 DLL，再重启应用才能生效（DLL 在编译时静态嵌入，不会热加载）。
 
 ## 测试
 

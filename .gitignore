@@ -25,3 +25,9 @@ Thumbs.db
 
 # Claude Code 本地配置
 .claude/settings.local.json
+
+# TrafficMonitor 插件编译产物
+traffic-monitor-plugin/build/
+traffic-monitor-plugin/*.obj
+traffic-monitor-plugin/*.lib
+traffic-monitor-plugin/*.exp

@@ -18,8 +18,8 @@
 |------|------|
 | 前端 | Vue 3 + TypeScript 5.5 + Naive UI 2.39 + ECharts 5.5 + Pinia 2 + Vue Router 4 |
 | 后端 | Rust 2021 + rusqlite 0.31 + Tauri v2 |
+| 插件 | C++17 + WinHTTP（TrafficMonitor 插件，32 位 DLL） |
 | 构建 | pnpm + Vite 5.4 + Cargo |
-| 测试 | Vitest（前端）+ cargo test（后端） |
 
 ## 目录结构
 
@@ -34,10 +34,16 @@ src/                      # Vue 3 前端
   utils/                  # 工具函数（format, pricing, color, constants）
 
 src-tauri/                # Rust 后端
-  src/commands/           # Tauri 命令处理器（database, pricing, query, session）
-  src/services/           # 业务逻辑（pricing_engine, precompute, external_db, app_db）
+  src/commands/           # Tauri 命令处理器（database, pricing, query, session, traffic_monitor）
+  src/services/           # 业务逻辑（pricing_engine, precompute, external_db, app_db, http_server）
   src/models.rs           # 数据模型定义
   src/utils.rs            # 工具函数和常量
+
+traffic-monitor-plugin/   # TrafficMonitor 插件（C++ 32 位 DLL）
+  CCSwitchAnalyzer.h/cpp  # 插件主类（WinHTTP 请求 + JSON 解析）
+  TodayTokenItem.h/cpp    # 显示项（Tokens + Cost）
+  PluginInterface.h       # TrafficMonitor 插件接口
+  build.bat               # 编译脚本（MSVC x86）
 ```
 
 ## 开发命令
@@ -48,6 +54,19 @@ pnpm build:tauri          # 生产构建
 pnpm test                 # 前端测试（Vitest）
 pnpm test:rust            # 后端测试（cargo test，需在 src-tauri/ 目录）
 ```
+
+### TrafficMonitor 插件编译（仅 Windows）
+
+> **仅 Windows**：TrafficMonitor 是 Windows 桌面工具，插件 DLL 只在 Windows 下编译和携带，macOS/Linux 不执行此步骤。
+
+```bash
+cd traffic-monitor-plugin
+build.bat                 # 需要 Visual Studio 2022 Build Tools（MSVC x86）
+```
+
+产出：`src-tauri/resources/CCSwitchAnalyzer.dll`（通过 `include_bytes!` 内嵌到应用中）
+
+> 修改 `traffic-monitor-plugin/` 下的 C++ 源码后，必须重新执行 `build.bat` 编译 DLL，再重启应用才能生效（DLL 在编译时通过 `include_bytes!` 静态嵌入）。
 
 ## 关键约定
 
@@ -68,3 +87,11 @@ pnpm test:rust            # 后端测试（cargo test，需在 src-tauri/ 目录
 
 - 外部数据库（cc-switch.db、opencode.db）：**只读**，通过 `rusqlite::SQLITE_OPEN_READ_ONLY` 打开
 - 应用自有数据库（pricing.db）：可读写，存储用户自定义定价配置
+
+### TrafficMonitor 插件架构
+
+插件通过 HTTP API（`127.0.0.1:19810`）获取今日 token 和费用数据。
+
+- **HTTP 服务**（`http_server.rs`）复用前端查询管道（`compute_precompute`），使用独立的 `DataSource` 实例避免 `rusqlite::Connection` 的 `RefCell` 并发冲突
+- **费用由服务端计算**：`totalCost` 返回格式化字符串（如 `"172.57¥"`），插件只做展示不做计算
+- **插件 C++ 代码**：通过 `WinHTTP` 请求 `/api/today`，解析 JSON 后直接展示字符串

@@ -11,12 +11,38 @@
         </button>
       </div>
     </div>
+
+    <!-- TrafficMonitor 插件管理 -->
+    <n-divider style="margin: 12px 0 8px" />
+    <div class="tm-section">
+      <div class="tm-header">TrafficMonitor 插件管理</div>
+
+      <div class="tm-row">
+        <n-button size="tiny" :loading="downloading === 'x86'" @click="downloadPlugin('x86')">
+          下载 x86 插件
+        </n-button>
+        <n-button size="tiny" :loading="downloading === 'x64'" @click="downloadPlugin('x64')">
+          下载 x64 插件
+        </n-button>
+        <span class="tm-hint" v-if="downloadedPath">
+          已下载至 {{ downloadedPath }}
+        </span>
+      </div>
+
+      <div class="tm-row">
+        <n-switch :value="tmStatus.enabled" @update:value="toggleService" size="small" />
+        <span class="tm-label">启用服务</span>
+        <span class="tm-hint" v-if="tmStatus.running">
+          已启用 · 端口 {{ tmStatus.port }}
+        </span>
+      </div>
+    </div>
   </n-modal>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { NModal, NIcon } from 'naive-ui'
+import { NModal, NIcon, NButton, NSwitch, NDivider } from 'naive-ui'
 import { CloseOutline } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
 import { useDatabaseStore } from '@/stores/database'
@@ -71,6 +97,45 @@ async function onRemove(key: string): Promise<void> {
   const src = dbStore.sources.find(s => s.dbType === dbType)
   if (src) {
     await removeDatabase(src.id)
+  }
+}
+
+// ===== TrafficMonitor 插件管理 =====
+
+interface TmServiceStatus {
+  enabled: boolean
+  running: boolean
+  port: number
+}
+
+const tmStatus = ref<TmServiceStatus>({ enabled: false, running: false, port: 19810 })
+const downloading = ref<string | false>(false)
+const downloadedPath = ref('')
+
+async function loadTmStatus(): Promise<void> {
+  try {
+    tmStatus.value = await invoke<TmServiceStatus>('get_http_service_status')
+  } catch { /* ignore */ }
+}
+loadTmStatus()
+
+async function downloadPlugin(arch: 'x86' | 'x64'): Promise<void> {
+  downloading.value = arch
+  try {
+    const path = await invoke<string>('download_traffic_monitor_plugin', { arch })
+    downloadedPath.value = path
+  } catch {
+    // ignore
+  } finally {
+    downloading.value = false
+  }
+}
+
+async function toggleService(enabled: boolean): Promise<void> {
+  try {
+    tmStatus.value = await invoke<TmServiceStatus>('toggle_http_service', { enabled })
+  } catch {
+    // ignore
   }
 }
 </script>
@@ -142,5 +207,34 @@ async function onRemove(key: string): Promise<void> {
 .remove-btn:hover {
   background: var(--border-light);
   color: var(--color-cost);
+}
+
+/* TrafficMonitor 插件管理 */
+.tm-section {
+  padding: 4px 0;
+}
+
+.tm-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.tm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.tm-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.tm-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 </style>

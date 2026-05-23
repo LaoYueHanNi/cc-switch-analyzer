@@ -9,6 +9,13 @@ pub const SESSION_TOP_N: i64 = 500;
 /// 实时监控窗口（秒）
 pub const REALTIME_WINDOW_SEC: i64 = 3600;
 
+/// TrafficMonitor 插件 API 默认端口
+pub const TM_API_PORT: u16 = 19810;
+/// TrafficMonitor 插件 API 端口搜索上限
+pub const TM_API_PORT_MAX: u16 = 19820;
+/// TrafficMonitor 插件 API 缓存 TTL（秒）
+pub const TM_CACHE_TTL_SECS: u64 = 30;
+
 /// YYYY-MM-DD 字符串转 Unix 秒，解析失败返回 None
 pub fn date_str_to_epoch(date_str: &str) -> Option<i64> {
     let parts: Vec<i64> = date_str

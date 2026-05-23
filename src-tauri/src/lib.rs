@@ -13,14 +13,36 @@ use services::pricing_engine::PricingEngine;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder};
 use tauri::{Manager, RunEvent, WindowEvent};
 
+// 跨线程共享的状态（Tauri 命令 + HTTP 服务共用）
+pub struct SharedState {
+    pub data_sources: RwLock<Vec<SourceEntry>>,
+    pub pricing_engine: RwLock<PricingEngine>,
+}
+
+impl SharedState {
+    pub fn new(pricing_engine: PricingEngine) -> Self {
+        Self {
+            data_sources: RwLock::new(Vec::new()),
+            pricing_engine: RwLock::new(pricing_engine),
+        }
+    }
+}
+
 // 全局应用状态
 pub struct AppState {
-    data_sources: RwLock<Vec<SourceEntry>>,
+    shared: Arc<SharedState>,
     app_db: Mutex<AppDbService>,
-    pricing_engine: RwLock<PricingEngine>,
     db_latest_timestamp: Mutex<Option<i64>>,
     db_file_mtimes: Mutex<HashMap<String, std::time::SystemTime>>,
     request_cache: Mutex<RequestCache>,
+}
+
+// 通过 Deref，Tauri 命令中 state.data_sources 仍然直接可用
+impl std::ops::Deref for AppState {
+    type Target = SharedState;
+    fn deref(&self) -> &Self::Target {
+        &self.shared
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -28,10 +50,11 @@ pub fn run() {
     let app_db = AppDbService::new().expect("初始化应用数据库失败");
     let pricing_engine = PricingEngine::new();
 
+    let shared = Arc::new(SharedState::new(pricing_engine));
+
     let state = AppState {
-        data_sources: RwLock::new(Vec::new()),
+        shared: shared.clone(),
         app_db: Mutex::new(app_db),
-        pricing_engine: RwLock::new(pricing_engine),
         db_latest_timestamp: Mutex::new(None),
         db_file_mtimes: Mutex::new(HashMap::new()),
         request_cache: Mutex::new(RequestCache::new(5000)),
@@ -113,9 +136,28 @@ pub fn run() {
                 }
             });
 
+            // 恢复 HTTP 服务状态（如果上次启用，仅 Windows）
+            #[cfg(target_os = "windows")]
+            {
+                let app_state = app.state::<AppState>();
+                let app_db = app_state.app_db.lock().unwrap();
+                let enabled = app_db.get_setting("tm_service_enabled").as_deref() == Some("1");
+                drop(app_db);
+                if enabled {
+                    let handle = app.state::<Mutex<services::http_server::TrafficMonitorServerHandle>>();
+                    let mut h = handle.lock().unwrap();
+                    if let Err(e) = h.start(app_state.shared.clone()) {
+                        log::error!("恢复 HTTP 服务失败: {}", e);
+                    } else {
+                        log::info!("HTTP 服务已恢复，端口 {}", h.port());
+                    }
+                }
+            }
+
             Ok(())
         })
         .manage(state)
+        .manage(Mutex::new(services::http_server::TrafficMonitorServerHandle::new()))
         .invoke_handler(tauri::generate_handler![
             // 数据库操作
             commands::database::auto_load_database,
@@ -169,6 +211,10 @@ pub fn run() {
             // 用户别名
             commands::pricing::add_user_alias,
             commands::pricing::remove_user_alias,
+            // TrafficMonitor 插件服务
+            commands::traffic_monitor::get_http_service_status,
+            commands::traffic_monitor::toggle_http_service,
+            commands::traffic_monitor::download_traffic_monitor_plugin,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

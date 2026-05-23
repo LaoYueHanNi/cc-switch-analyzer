@@ -38,8 +38,20 @@ pnpm dev:tauri-frontend   # Vite 开发服务器 (port 1420)
 pnpm build:tauri-frontend # Vite 生产构建
 ```
 
+## TrafficMonitor 插件（仅 Windows）
+
+> **仅 Windows**：TrafficMonitor 是 Windows 桌面工具，插件 DLL 只在 Windows 下编译和携带，macOS/Linux 不执行此步骤。
+
+```bash
+cd traffic-monitor-plugin
+build.bat                 # 编译 32 位 DLL，自动复制到 src-tauri/resources/
+```
+
+前置条件：Visual Studio 2022 Build Tools（MSVC x86）。产出内嵌到 Tauri 应用中。
+
 ## 架构
 
 - `src/` = Vue 前端
 - `src/platform/` = 平台适配器
 - `src-tauri/` = Tauri Rust 后端
+- `traffic-monitor-plugin/` = TrafficMonitor C++ 插件（仅 Windows，32 位 DLL）

@@ -220,19 +220,15 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     Ok(result)
 }
 
-#[tauri::command]
-pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<PrecomputeQueryResult, String> {
-    log::debug!("[QUERY] query_precompute: params={:?}", params);
-
+/// 共享的预计算查询核心逻辑，不依赖 Tauri State，可被 HTTP 服务复用。
+pub fn compute_precompute(
+    sources: &[SourceEntry],
+    pricing: &crate::services::pricing_engine::PricingEngine,
+    params: &FilterParams,
+) -> Result<PrecomputeQueryResult, String> {
     let (summary, provider_breakdown, combined, tier_buckets) = {
-        let sources = state.data_sources.read().map_err(|e| e.to_string())?;
-        require_sources!(sources);
-
-        let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
         let thresholds = pricing.get_all_tier_thresholds();
-        drop(pricing);
 
-        // 每个数据源在一个线程中串行执行所有查询，不同数据源之间并行
         let source_results: Vec<_> = std::thread::scope(|s| {
             let handles: Vec<_> = sources.iter().map(|entry| {
                 let p = params.clone();
@@ -296,12 +292,9 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
         (s, pb, cb, tb)
     };
 
-    let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
-    log::debug!("[QUERY] 定价引擎模型数={}", pricing.size());
-
-    // 别名解析：将 combined 和 tier_buckets 中的别名模型统一为主模型 ID
+    // 别名解析
     let combined = {
-        let mut resolved: Vec<crate::models::CombinedBreakdownRow> = combined;
+        let mut resolved: Vec<CombinedBreakdownRow> = combined;
         for row in &mut resolved {
             if let Some(canonical) = pricing.resolve_model_id(&row.model) {
                 row.model = canonical;
@@ -318,16 +311,14 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
         }
         resolved
     };
-    // 别名合并后重新聚合
     let agg = aggregate_combined_breakdown(&combined);
 
     let tz_offset = params.tz_offset.unwrap_or(0);
-    let mut precomputed = precompute_costs(&agg.daily_trend, &agg.provider_model_tokens, &pricing, tz_offset);
+    let mut precomputed = precompute_costs(&agg.daily_trend, &agg.provider_model_tokens, pricing, tz_offset);
 
-    let (tier_costs, ctx_model_costs, ctx_model_breakdown) = build_context_tier_and_model_costs(&tier_buckets, &pricing);
+    let (tier_costs, ctx_model_costs, ctx_model_breakdown) = build_context_tier_and_model_costs(&tier_buckets, pricing);
     precomputed.model_context_tier_costs = tier_costs;
 
-    // 将 tier_buckets 转换为 CompareBucket map，供前端费用比较使用
     let mut compare_buckets_map: HashMap<String, Vec<CompareBucket>> = HashMap::new();
     for bucket in &tier_buckets {
         let cb = CompareBucket {
@@ -372,6 +363,17 @@ pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<
         provider_breakdown,
         precomputed,
     })
+}
+
+#[tauri::command]
+pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<PrecomputeQueryResult, String> {
+    log::debug!("[QUERY] query_precompute: params={:?}", params);
+
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+    let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
+
+    compute_precompute(&sources, &pricing, &params)
 }
 
 #[derive(Serialize)]
