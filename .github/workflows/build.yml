@@ -14,7 +14,23 @@ permissions:
   contents: write
 
 jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            NOTES=$(git log -1 --format=%b HEAD)
+            gh release create "$TAG" --title "$TAG" --notes "$NOTES" --verify-tag
+          fi
+
   build-windows:
+    needs: create-release
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,6 +75,7 @@ jobs:
         run: gh release upload ${{ github.event.inputs.tag || github.ref_name }} src-tauri/target/release/bundle/msi/*.msi --clobber
 
   build-macos:
+    needs: create-release
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4

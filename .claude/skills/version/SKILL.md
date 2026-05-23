@@ -24,10 +24,11 @@
 ## 执行步骤
 
 1. 从 `package.json` 读取当前版本，计算新版本号
-2. 编辑上述 3 个文件，替换版本号
-3. 运行 `cargo check` 更新 `Cargo.lock`（只需几秒，不产生产物）
-4. 更新 changelog：
+2. 用 `git log` 收集上次 tag 以来的所有 commit，AI 总结为变更要点（去重、合并同类项，不列举 ci/chore 类提交）
+3. 编辑上述 3 个文件，替换版本号
+4. 运行 `cargo check` 更新 `Cargo.lock`（只需几秒，不产生产物）
+5. 更新 changelog：
    ```bash
    node changelog-site/generate.cjs > changelog-site/data.json
    ```
-5. 提交所有文件（含 `changelog-site/data.json`），commit message 格式：`chore: 版本号 X.Y.Z → A.B.C`
+6. 提交所有文件（含 `changelog-site/data.json`），commit message 格式：`chore: 版本号 X.Y.Z → A.B.C`，**body 写入 AI 总结的变更要点**（每条一行 `- xxx`）
