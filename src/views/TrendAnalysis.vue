@@ -139,6 +139,17 @@ function getCostForRow(row: DailyTrendRow): number {
 // ===== 数据计算 =====
 const ALL_HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0') + ':00')
 
+function generateDateRange(from: Date, to: Date): string[] {
+  const dates: string[] = []
+  const d = new Date(from.getFullYear(), from.getMonth(), from.getDate())
+  const end = new Date(to.getFullYear(), to.getMonth(), to.getDate())
+  while (d <= end) {
+    dates.push(localDateStr(d))
+    d.setDate(d.getDate() + 1)
+  }
+  return dates
+}
+
 function aggregateHourly(getter: (row: DailyTrendRow) => number): number[] {
   const map = new Map<string, number>()
   for (const row of hourlyRows.value) map.set(row.day, (map.get(row.day) || 0) + getter(row))
@@ -147,13 +158,10 @@ function aggregateHourly(getter: (row: DailyTrendRow) => number): number[] {
 
 const dates = computed<string[]>(() => {
   if (isSingleDay.value && hourlyRows.value.length > 0) return ALL_HOURS
-  const pre = queryStore.precomputed
-  if (!pre) return []
-  const daySet = new Set<string>()
-  for (const map of [pre.dayCostMap, pre.dayInputTokens, pre.dayOutputTokens, pre.dayCacheRead, pre.dayCacheCreation]) {
-    if (map) for (const k of Object.keys(map)) daySet.add(k)
-  }
-  return [...daySet].sort()
+  const f = filterStore.fromDate
+  const t = filterStore.toDate
+  if (!f || !t) return []
+  return generateDateRange(f, t)
 })
 
 function buildDailySeries(getter: (day: string) => number): number[] {
