@@ -72,7 +72,11 @@ jobs:
       - name: Upload to Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload ${{ github.event.inputs.tag || github.ref_name }} src-tauri/target/release/bundle/msi/*.msi --clobber
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          # 用 find 精确匹配当前版本的安装包，避免缓存中的旧文件
+          find src-tauri/target/release/bundle/msi -name "CC-Switch*${TAG#v}*.msi" -exec echo "Uploading: {}" \; -exec gh release upload "$TAG" {} --clobber \;
 
   build-macos:
     needs: create-release
@@ -117,4 +121,7 @@ jobs:
       - name: Upload to Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload ${{ github.event.inputs.tag || github.ref_name }} src-tauri/target/release/bundle/dmg/*.dmg --clobber
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          find src-tauri/target/release/bundle/dmg -name "*${TAG#v}*.dmg" -exec echo "Uploading: {}" \; -exec gh release upload "$TAG" {} --clobber \;
