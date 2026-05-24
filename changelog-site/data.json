@@ -1,6 +1,32 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-05-24",
+    "commits": [
+      {
+        "hash": "c7bd4b0",
+        "subject": "feat: 数据源启用/禁用开关，支持持久化",
+        "date": "2026-05-24"
+      },
+      {
+        "hash": "5178d20",
+        "subject": "feat: AI Proxy 数据源接入与中心去重管道",
+        "date": "2026-05-24"
+      },
+      {
+        "hash": "0a07731",
+        "subject": "feat: 插件端口自动发现与配置持久化",
+        "date": "2026-05-24"
+      },
+      {
+        "hash": "425bb7c",
+        "subject": "fix: workflow 构建前自动确保 release 存在",
+        "date": "2026-05-23"
+      }
+    ]
+  },
+  {
+    "version": "0.7.1",
     "date": "2026-05-23",
     "commits": [
       {
