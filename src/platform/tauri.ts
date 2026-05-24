@@ -56,6 +56,9 @@ export const platformAdapter: PlatformAdapter = {
   async removeDatabase(sourceId: string): Promise<SourceInfo[]> {
     return invoke<SourceInfo[]>('remove_database', { sourceId })
   },
+  async toggleDatabase(sourceId: string): Promise<SourceInfo[]> {
+    return invoke<SourceInfo[]>('toggle_database', { sourceId })
+  },
   async listDatabases(): Promise<SourceInfo[]> {
     return invoke<SourceInfo[]>('list_databases')
   },

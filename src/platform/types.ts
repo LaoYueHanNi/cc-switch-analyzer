@@ -43,6 +43,7 @@ export interface SourceInfo {
   path: string
   dbType: string
   recordCount: number
+  enabled: boolean
 }
 
 export interface RefreshResult {
@@ -117,6 +118,7 @@ export interface PlatformAdapter {
   autoLoadDatabase(): Promise<SourceInfo[]>
   addDatabase(filePath: string): Promise<SourceInfo[]>
   removeDatabase(sourceId: string): Promise<SourceInfo[]>
+  toggleDatabase(sourceId: string): Promise<SourceInfo[]>
   listDatabases(): Promise<SourceInfo[]>
   pickDatabaseFile(defaultPath?: string): Promise<string | null>
   refreshDatabase(): Promise<RefreshResult>

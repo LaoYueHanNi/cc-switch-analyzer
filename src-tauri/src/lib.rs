@@ -164,6 +164,7 @@ pub fn run() {
             commands::database::load_database,
             commands::database::add_database,
             commands::database::remove_database,
+            commands::database::toggle_database,
             commands::database::list_databases,
             commands::database::refresh_database,
             commands::database::get_filter_options,

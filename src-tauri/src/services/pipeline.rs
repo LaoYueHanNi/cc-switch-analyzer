@@ -38,7 +38,7 @@ pub fn run_streaming_dedup(
 
     // 并行 Producer：每个数据源一个线程，逐条发送到 channel
     thread::scope(|s| {
-        for entry in sources {
+        for entry in sources.iter().filter(|s| s.enabled) {
             let tx = tx.clone();
             s.spawn(move || {
                 if let Err(e) = entry.source.stream_records(since, &mut |record| {
@@ -72,8 +72,12 @@ pub fn fetch_deduped_records(
     sources: &[SourceEntry],
     params: &FilterParams,
 ) -> Result<Vec<RawRecord>, String> {
+    let active: Vec<&SourceEntry> = sources.iter().filter(|s| s.enabled).collect();
+    if active.is_empty() {
+        return Ok(Vec::new());
+    }
     let all_records: Vec<Vec<RawRecord>> = std::thread::scope(|s| {
-        let handles: Vec<_> = sources.iter().map(|entry| {
+        let handles: Vec<_> = active.into_iter().map(|entry| {
             let p = params.clone();
             let label = entry.db_type.label().to_string();
             s.spawn(move || {

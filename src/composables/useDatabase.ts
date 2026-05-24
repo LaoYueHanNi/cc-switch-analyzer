@@ -124,12 +124,18 @@ export function useDatabase() {
     }
   }
 
+  async function refreshAfterToggle(): Promise<void> {
+    queryStore.reset()
+    await updateFilterOptions()
+  }
+
   return {
     autoLoadDatabase,
     selectDatabase,
     addDatabase,
     removeDatabase,
     refreshDatabase,
+    refreshAfterToggle,
     loadPricing
   }
 }

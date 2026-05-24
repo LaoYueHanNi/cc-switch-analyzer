@@ -2,7 +2,7 @@ use tauri::State;
 
 use crate::AppState;
 use crate::models::*;
-use crate::services::data_source::create_source_entry;
+use crate::services::data_source::{create_source_entry, SourceEntry};
 use crate::services::pipeline::run_streaming_dedup;
 
 // ========== 数据库操作命令 ==========
@@ -79,6 +79,14 @@ fn auto_load_paths(state: &State<AppState>, paths: Vec<String>) -> Result<Vec<So
 
     if sources.is_empty() {
         return Ok(Vec::new());
+    }
+
+    // 恢复 disabled 状态
+    let disabled = load_disabled_paths(&state);
+    for entry in sources.iter_mut() {
+        if disabled.contains(&entry.path) {
+            entry.enabled = false;
+        }
     }
 
     // 刷新定价引擎
@@ -244,7 +252,7 @@ pub fn get_filter_options(state: State<AppState>) -> Result<FilterOptions, Strin
     let mut all_models = Vec::new();
     let mut all_ranges = Vec::new();
 
-    for entry in sources.iter() {
+    for entry in sources.iter().filter(|s| s.enabled) {
         if let Ok(p) = entry.source.get_providers() { all_providers.push(p); }
         if let Ok(m) = entry.source.get_models() { all_models.push(m); }
         if let Ok(r) = entry.source.get_date_range() { all_ranges.push(r); }
@@ -306,6 +314,39 @@ fn save_paths(state: &State<AppState>, info: &[SourceInfo]) {
             }
         }
     }
+}
+
+fn save_disabled_paths(state: &State<AppState>, sources: &[SourceEntry]) {
+    let disabled: Vec<&str> = sources.iter()
+        .filter(|s| !s.enabled)
+        .map(|s| s.path.as_str())
+        .collect();
+    if let Ok(app_db) = state.app_db.lock() {
+        if let Ok(json) = serde_json::to_string(&disabled) {
+            let _ = app_db.set_setting("disabled_source_paths", &json);
+        }
+    }
+}
+
+fn load_disabled_paths(state: &State<AppState>) -> Vec<String> {
+    state.app_db.lock().ok()
+        .and_then(|db| db.get_setting("disabled_source_paths"))
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn toggle_database(source_id: String, state: State<AppState>) -> Result<Vec<SourceInfo>, String> {
+    let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+    let entry = sources.iter_mut().find(|s| s.id == source_id)
+        .ok_or("数据源不存在")?;
+    entry.enabled = !entry.enabled;
+    log::info!("[DB] toggle {} → enabled={}", source_id, entry.enabled);
+    drop(sources);
+
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    save_disabled_paths(&state, &sources);
+    Ok(sources.iter().map(|s| s.to_info()).collect())
 }
 
 #[derive(serde::Serialize)]

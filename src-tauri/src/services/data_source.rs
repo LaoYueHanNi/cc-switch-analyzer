@@ -90,6 +90,7 @@ pub struct SourceEntry {
     pub path: String,
     pub db_type: DbType,
     pub source: Box<dyn DataSource>,
+    pub enabled: bool,
 }
 
 impl SourceEntry {
@@ -99,6 +100,7 @@ impl SourceEntry {
             path: self.path.clone(),
             db_type: self.db_type.label().to_string(),
             record_count: self.source.get_record_count().unwrap_or(0),
+            enabled: self.enabled,
         }
     }
 }
@@ -158,7 +160,7 @@ pub fn create_source_entry(path: &str) -> Result<SourceEntry, String> {
         DbType::AiProxy => Box::new(super::ai_proxy_db::AiProxyDbService::new()) as Box<dyn DataSource>,
     };
     source.open(path)?;
-    Ok(SourceEntry { id, path: path.to_string(), db_type, source })
+    Ok(SourceEntry { id, path: path.to_string(), db_type, source, enabled: true })
 }
 
 // ========== 合并函数（供 realtime 等仍用 per-source SQL 聚合的查询使用）==========

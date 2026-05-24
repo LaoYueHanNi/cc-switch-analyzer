@@ -467,6 +467,7 @@ pub struct SourceInfo {
     pub path: String,
     pub db_type: String,
     pub record_count: i64,
+    pub enabled: bool,
 }
 
 // ========== 会话管理：项目分组（第一屏） ==========

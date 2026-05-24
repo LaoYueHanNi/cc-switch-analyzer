@@ -2,6 +2,7 @@
   <n-modal :show="show" @update:show="$emit('update:show', $event)" preset="card" title="数据源管理" size="small" style="max-width: 500px">
     <div class="source-list">
       <div class="source-item" v-for="slot in slots" :key="slot.key">
+        <n-switch size="small" :value="slot.enabled" :disabled="!slot.path" @update:value="onToggle(slot)" />
         <button class="source-type" :class="slot.key" @click="onSelect(slot.key)">
           {{ slot.label }}
         </button>
@@ -53,7 +54,7 @@ defineProps<{ show: boolean }>()
 defineEmits<{ 'update:show': [value: boolean] }>()
 
 const dbStore = useDatabaseStore()
-const { addDatabase, removeDatabase } = useDatabase()
+const { addDatabase, removeDatabase, refreshAfterToggle } = useDatabase()
 
 interface DefaultPaths { ccSwitch: string | null; opencode: string | null; aiProxy: string | null }
 const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null })
@@ -71,18 +72,24 @@ const slots = computed(() => [
     label: 'CC-Switch',
     path: dbStore.sources.find(s => s.dbType === 'CC-Switch')?.path || '',
     defaultPath: defaultPaths.value.ccSwitch,
+    sourceId: dbStore.sources.find(s => s.dbType === 'CC-Switch')?.id || '',
+    enabled: dbStore.sources.find(s => s.dbType === 'CC-Switch')?.enabled ?? true,
   },
   {
     key: 'opencode',
     label: 'OpenCode',
     path: dbStore.sources.find(s => s.dbType === 'OpenCode')?.path || '',
     defaultPath: defaultPaths.value.opencode,
+    sourceId: dbStore.sources.find(s => s.dbType === 'OpenCode')?.id || '',
+    enabled: dbStore.sources.find(s => s.dbType === 'OpenCode')?.enabled ?? true,
   },
   {
     key: 'ai-proxy',
     label: 'AI-Proxy',
     path: dbStore.sources.find(s => s.dbType === 'AI-Proxy')?.path || '',
     defaultPath: defaultPaths.value.aiProxy,
+    sourceId: dbStore.sources.find(s => s.dbType === 'AI-Proxy')?.id || '',
+    enabled: dbStore.sources.find(s => s.dbType === 'AI-Proxy')?.enabled ?? true,
   },
 ])
 
@@ -103,6 +110,17 @@ async function onRemove(key: string): Promise<void> {
   const src = dbStore.sources.find(s => s.dbType === dbType)
   if (src) {
     await removeDatabase(src.id)
+  }
+}
+
+async function onToggle(slot: { sourceId: string }): Promise<void> {
+  if (!slot.sourceId) return
+  try {
+    const sources = await platformAdapter.toggleDatabase(slot.sourceId)
+    dbStore.setSources(sources)
+    await refreshAfterToggle()
+  } catch {
+    // ignore
   }
 }
 
