@@ -40,29 +40,139 @@ const wchar_t* CCSwitchAnalyzer::GetInfo(PluginInfoIndex index)
     case TMI_DESCRIPTION: return L"Today token count and cost from CC-Switch Analyzer";
     case TMI_AUTHOR:      return L"LaoYueHanNi";
     case TMI_COPYRIGHT:   return L"Copyright (C) 2026";
-    case TMI_VERSION:     return L"1.0";
+    case TMI_VERSION:     return L"1.1";
     case TMI_URL:         return L"https://github.com/LaoYueHanNi/cc-switch-analyzer";
     default:              return L"";
     }
 }
 
-ITMPlugin::OptionReturn CCSwitchAnalyzer::ShowOptionsDialog(void* hParent)
+ITMPlugin::OptionReturn CCSwitchAnalyzer::ShowOptionsDialog(void* /*hParent*/)
 {
     return OR_OPTION_NOT_PROVIDED;
 }
 
 void CCSwitchAnalyzer::OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* data)
 {
+    if (index == EI_CONFIG_DIR && data && data[0]) {
+        m_config_dir = data;
+    }
 }
 
 void CCSwitchAnalyzer::OnInitialize(ITrafficMonitor* pApp)
 {
     m_app = pApp;
+    if (pApp) {
+        const wchar_t* dir = pApp->GetPluginConfigDir();
+        if (dir && dir[0]) {
+            m_config_dir = dir;
+        }
+    }
+    if (!m_config_dir.empty() && m_config_dir.back() != L'\\' && m_config_dir.back() != L'/')
+        m_config_dir += L'\\';
+    LoadConfig();
+}
+
+// ===== 配置文件（port.ini） =====
+
+static const int TM_PORT_MIN = 19810;
+static const int TM_PORT_MAX = 19820;
+
+void CCSwitchAnalyzer::LoadConfig()
+{
+    if (m_config_dir.empty()) return;
+    std::wstring path = m_config_dir + L"port.ini";
+
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE) return;
+
+    char buf[32] = {};
+    DWORD read = 0;
+    ReadFile(hFile, buf, sizeof(buf) - 1, &read, nullptr);
+    CloseHandle(hFile);
+    buf[read] = '\0';
+
+    const char* p = strstr(buf, "port=");
+    if (!p) return;
+    p += 5;
+    int port = atoi(p);
+    if (port >= TM_PORT_MIN && port <= TM_PORT_MAX) {
+        m_port = port;
+    }
+}
+
+void CCSwitchAnalyzer::SaveConfig()
+{
+    if (m_config_dir.empty()) return;
+    CreateDirectoryW(m_config_dir.c_str(), nullptr);
+
+    std::wstring path = m_config_dir + L"port.ini";
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "port=%d\n", m_port);
+
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_WRITE, 0,
+                               nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE) return;
+    DWORD written = 0;
+    WriteFile(hFile, buf, static_cast<DWORD>(len), &written, nullptr);
+    CloseHandle(hFile);
+}
+
+// ===== 端口自动发现 =====
+
+bool CCSwitchAnalyzer::TryConnect(int port)
+{
+    HINTERNET hSession = WinHttpOpen(L"CCSwitchAnalyzer/1.0",
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME,
+        WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return false;
+
+    DWORD timeout = 500;
+    WinHttpSetOption(hSession, WINHTTP_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
+    WinHttpSetOption(hSession, WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT, &timeout, sizeof(timeout));
+
+    HINTERNET hConnect = WinHttpConnect(hSession, L"127.0.0.1", static_cast<INTERNET_PORT>(port), 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
+
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", L"/api/ping",
+        nullptr, WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return false; }
+
+    bool ok = false;
+    if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                           WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+        WinHttpReceiveResponse(hRequest, nullptr))
+    {
+        char buf[64] = {};
+        DWORD bytesRead = 0;
+        if (WinHttpReadData(hRequest, buf, sizeof(buf) - 1, &bytesRead) && bytesRead > 0) {
+            buf[bytesRead] = '\0';
+            ok = strstr(buf, "\"status\"") != nullptr;
+        }
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return ok;
+}
+
+bool CCSwitchAnalyzer::AutoDiscoverPort()
+{
+    for (int port = TM_PORT_MIN; port <= TM_PORT_MAX; ++port) {
+        if (TryConnect(port)) {
+            m_port = port;
+            SaveConfig();
+            return true;
+        }
+    }
+    return false;
 }
 
 // ===== WinHTTP 获取今日数据 =====
 
-/// 简单的 JSON 字段提取（从扁平 JSON 中提取数值）
 static bool ExtractJsonInt64(const char* json, const char* key, int64_t& out)
 {
     char search[64];
@@ -75,7 +185,6 @@ static bool ExtractJsonInt64(const char* json, const char* key, int64_t& out)
     return true;
 }
 
-/// 从扁平 JSON 中提取字符串值（去掉引号）
 static bool ExtractJsonString(const char* json, const char* key, std::string& out)
 {
     char search[64];
@@ -94,33 +203,38 @@ static bool ExtractJsonString(const char* json, const char* key, std::string& ou
 
 bool CCSwitchAnalyzer::FetchTodayData()
 {
-    wchar_t host[] = L"127.0.0.1";
     wchar_t path[64];
-    // 动态获取时区偏移（含夏令时）
     TIME_ZONE_INFORMATION tzi;
     DWORD tzResult = GetTimeZoneInformation(&tzi);
-    int totalBias = tzi.Bias; // 分钟，UTC+8 时 Bias = -480
+    int totalBias = tzi.Bias;
     if (tzResult == TIME_ZONE_ID_DAYLIGHT) {
         totalBias += tzi.DaylightBias;
     }
     swprintf_s(path, L"/api/today?tz=%d", -totalBias / 60);
 
+    // 1) 尝试已配置端口
     HINTERNET hSession = WinHttpOpen(L"CCSwitchAnalyzer/1.0",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) {
-        m_connected = false;
-        return false;
-    }
+    if (!hSession) { m_connected = false; return false; }
 
     DWORD timeout = 2000;
     WinHttpSetOption(hSession, WINHTTP_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
     WinHttpSetOption(hSession, WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT, &timeout, sizeof(timeout));
 
-    HINTERNET hConnect = WinHttpConnect(hSession, host, (INTERNET_PORT)m_port, 0);
+    HINTERNET hConnect = WinHttpConnect(hSession, L"127.0.0.1", static_cast<INTERNET_PORT>(m_port), 0);
     if (!hConnect) {
         WinHttpCloseHandle(hSession);
+
+        // 2) 连接失败 → 端口自动发现（每断连周期仅执行一次）
+        if (!m_discovery_attempted) {
+            m_discovery_attempted = true;
+            if (AutoDiscoverPort()) {
+                return FetchTodayData();
+            }
+        }
+
         m_connected = false;
         return false;
     }

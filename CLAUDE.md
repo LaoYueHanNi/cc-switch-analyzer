@@ -44,6 +44,7 @@ traffic-monitor-plugin/   # TrafficMonitor 插件（C++ 32 位 DLL）
   TodayTokenItem.h/cpp    # 显示项（Tokens + Cost）
   PluginInterface.h       # TrafficMonitor 插件接口
   build.bat               # 编译脚本（MSVC x86）
+  build64.bat             # 编译脚本（MSVC x64）
 ```
 
 ## 开发命令
@@ -59,14 +60,16 @@ pnpm test:rust            # 后端测试（cargo test，需在 src-tauri/ 目录
 
 > **仅 Windows**：TrafficMonitor 是 Windows 桌面工具，插件 DLL 只在 Windows 下编译和携带，macOS/Linux 不执行此步骤。
 
+**在 Git Bash / Claude Code 环境中**，无法直接 `cmd /c build.bat`，需通过 PowerShell 调用：
+
 ```bash
-cd traffic-monitor-plugin
-build.bat                 # 需要 Visual Studio 2022 Build Tools（MSVC x86）
+powershell.exe -Command "cd 'D:\Code\oyw\cc-switch-analyzer\traffic-monitor-plugin'; & '.\build.bat'"    # x86
+powershell.exe -Command "cd 'D:\Code\oyw\cc-switch-analyzer\traffic-monitor-plugin'; & '.\build64.bat'"   # x64
 ```
 
-产出：`src-tauri/resources/CCSwitchAnalyzer.dll`（通过 `include_bytes!` 内嵌到应用中）
+需要 Visual Studio 2022 Build Tools（MSVC）。产出会自动复制到 `src-tauri/resources/` 目录。
 
-> 修改 `traffic-monitor-plugin/` 下的 C++ 源码后，必须重新执行 `build.bat` 编译 DLL，再重启应用才能生效（DLL 在编译时通过 `include_bytes!` 静态嵌入）。
+> 修改 `traffic-monitor-plugin/` 下的 C++ 源码后，必须重新编译 DLL，再重启应用才能生效（DLL 在编译时通过 `include_bytes!` 静态嵌入）。
 
 ## 关键约定
 
