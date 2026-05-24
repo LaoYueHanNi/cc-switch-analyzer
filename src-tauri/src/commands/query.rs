@@ -537,9 +537,9 @@ pub fn query_session_project_groups(
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
 
-    // 1. 带过滤的 session_breakdown
-    let all_sessions: Vec<Vec<SessionBreakdown>> = parallel_query(&sources, params.clone(), "session_breakdown", |e, p| e.source.get_session_breakdown(p));
-    let all_sessions: Vec<SessionBreakdown> = all_sessions.into_iter().flatten().collect();
+    // 1. 中心去重管道获取 session_breakdown
+    let records = fetch_deduped_records(&sources, &params)?;
+    let all_sessions = aggregate_session_breakdown(&records);
 
     if all_sessions.is_empty() { return Ok(vec![]); }
 
@@ -560,7 +560,7 @@ pub fn query_session_project_groups(
                 tokens.extend(t);
             }
         }
-        tokens
+        dedup_request_tokens(tokens)
     };
     let session_costs = compute_session_costs(&all_request_tokens, &pricing);
 
@@ -630,21 +630,13 @@ pub fn query_project_session_details(
         (titles, projects)
     };
 
-    // 2. 只查这些 session 的 breakdown（用于基础统计）
-    let all_sessions: Vec<SessionBreakdown> = std::thread::scope(|s| {
-        let handles: Vec<_> = sources.iter().map(|entry| {
-            let p = params.clone();
-            let label = entry.db_type.label().to_string();
-            s.spawn(move || {
-                entry.source.get_session_breakdown(&p).map_err(|e| {
-                    log::warn!("[QUERY] session_breakdown 数据源({}) 查询失败: {}", label, e); e
-                }).ok().unwrap_or_default()
-            })
-        }).collect();
-        let all: Vec<SessionBreakdown> = handles.into_iter().flat_map(|h| h.join().unwrap()).collect();
-        let id_set: std::collections::HashSet<String> = session_ids.iter().cloned().collect();
-        all.into_iter().filter(|s| id_set.contains(&s.session_id)).collect()
-    });
+    // 2. 中心去重管道获取 session_breakdown
+    let records = fetch_deduped_records(&sources, &params)?;
+    let id_set: std::collections::HashSet<String> = session_ids.iter().cloned().collect();
+    let all_sessions: Vec<SessionBreakdown> = aggregate_session_breakdown(&records)
+        .into_iter()
+        .filter(|s| id_set.contains(&s.session_id))
+        .collect();
 
     if all_sessions.is_empty() { return Ok(vec![]); }
 
@@ -652,29 +644,27 @@ pub fn query_project_session_details(
 
     // 3. 加载完整数据
     let (all_request_tokens, all_model_tokens, max_context_widths, timestamps_map) = {
-        let detail_data: Vec<_> = std::thread::scope(|s| {
+        let all_req_raw: Vec<SessionRequestToken> = std::thread::scope(|s| {
             let handles: Vec<_> = sources.iter().map(|entry| {
                 let p = params.clone();
                 let ids = filtered_ids.clone();
                 s.spawn(move || {
-                    let req = entry.source.get_session_request_tokens_for_ids(&p, &ids).ok();
-                    let mdl = entry.source.get_session_model_tokens_for_ids(&p, &ids).ok();
-                    (req, mdl)
+                    entry.source.get_session_request_tokens_for_ids(&p, &ids).ok()
                 })
             }).collect();
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
+            handles.into_iter().filter_map(|h| h.join().unwrap()).flatten().collect()
         });
-
-        let all_req: Vec<SessionRequestToken> = detail_data.iter()
-            .filter_map(|d| d.0.clone()).flatten().collect();
-        let all_mdl: Vec<SessionModelToken> = detail_data.iter()
-            .filter_map(|d| d.1.clone()).flatten().collect();
+        let all_req = dedup_request_tokens(all_req_raw);
+        let all_mdl: Vec<SessionModelToken> = aggregate_session_model_tokens(&records)
+            .into_iter()
+            .filter(|t| id_set.contains(&t.session_id))
+            .collect();
 
         let mut max_ctx: HashMap<String, i64> = HashMap::new();
         let mut ts_map: HashMap<String, Vec<i64>> = HashMap::new();
         for entry in sources.iter() {
             if let Ok(m) = entry.source.get_session_max_context_widths(&filtered_ids) {
-                for (k, v) in m { max_ctx.insert(k, v); }
+                for (k, v) in m { max_ctx.entry(k).and_modify(|e| *e = (*e).max(v)).or_insert(v); }
             }
             if let Ok(t) = entry.source.get_session_timestamps(&filtered_ids) {
                 for (k, v) in t { ts_map.entry(k).or_default().extend(v); }

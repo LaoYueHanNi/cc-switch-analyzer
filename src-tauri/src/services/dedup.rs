@@ -6,7 +6,7 @@ use crate::models::RawRecord;
 pub fn dedup_records(records: Vec<RawRecord>) -> Vec<RawRecord> {
     let mut seen = HashSet::new();
     records.into_iter().filter(|r| {
-        let fp = RequestFingerprint::new(&r.session_id, &r.model, r.input_tokens, r.output_tokens, r.created_at);
+        let fp = RequestFingerprint::new(&r.session_id, &r.model, r.input_tokens, r.output_tokens);
         seen.insert(fp)
     }).collect()
 }
@@ -41,7 +41,7 @@ impl RequestCache {
     pub fn merge(&mut self, new_records: Vec<crate::models::SessionRequestToken>) -> usize {
         let mut added = 0;
         for record in new_records {
-            let fp = RequestFingerprint::new(&record.session_id, &record.model, record.input_tokens, record.output_tokens, record.created_at);
+            let fp = RequestFingerprint::new(&record.session_id, &record.model, record.input_tokens, record.output_tokens);
             if self.seen.insert(fp) {
                 self.records.push(record);
                 added += 1;
@@ -51,7 +51,7 @@ impl RequestCache {
         if self.records.len() > self.max_size {
             self.records.sort_by(|a, b| b.created_at.cmp(&a.created_at));
             for r in &self.records[self.max_size..] {
-                self.seen.remove(&RequestFingerprint::new(&r.session_id, &r.model, r.input_tokens, r.output_tokens, r.created_at));
+                self.seen.remove(&RequestFingerprint::new(&r.session_id, &r.model, r.input_tokens, r.output_tokens));
             }
             self.records.truncate(self.max_size);
         }
@@ -81,7 +81,7 @@ pub struct RequestFingerprint {
 }
 
 impl RequestFingerprint {
-    pub fn new(session_id: &str, model: &str, input_tokens: i64, output_tokens: i64, _created_at: i64) -> Self {
+    pub fn new(session_id: &str, model: &str, input_tokens: i64, output_tokens: i64) -> Self {
         Self {
             session_id: session_id.to_string(),
             model: model.to_string(),
@@ -98,7 +98,7 @@ pub fn dedup_request_tokens(items: Vec<crate::models::SessionRequestToken>) -> V
     items
         .into_iter()
         .filter(|item| {
-            let fp = RequestFingerprint::new(&item.session_id, &item.model, item.input_tokens, item.output_tokens, item.created_at);
+            let fp = RequestFingerprint::new(&item.session_id, &item.model, item.input_tokens, item.output_tokens);
             seen.insert(fp)
         })
         .collect()
@@ -124,30 +124,31 @@ mod tests {
 
     #[test]
     fn fingerprint_equality() {
-        let a = RequestFingerprint::new("s1", "m1", 100, 200, 1000);
-        let b = RequestFingerprint::new("s1", "m1", 100, 200, 2000);
+        let a = RequestFingerprint::new("s1", "m1", 100, 200);
+        let b = RequestFingerprint::new("s1", "m1", 100, 200);
         assert_eq!(a, b);
     }
 
     #[test]
     fn fingerprint_inequality_different_session() {
-        let a = RequestFingerprint::new("s1", "m1", 100, 200, 1000);
-        let b = RequestFingerprint::new("s2", "m1", 100, 200, 1000);
+        let a = RequestFingerprint::new("s1", "m1", 100, 200);
+        let b = RequestFingerprint::new("s2", "m1", 100, 200);
         assert_ne!(a, b);
     }
 
     #[test]
     fn fingerprint_inequality_different_tokens() {
-        let a = RequestFingerprint::new("s1", "m1", 100, 200, 1000);
-        let b = RequestFingerprint::new("s1", "m1", 100, 300, 1000);
+        let a = RequestFingerprint::new("s1", "m1", 100, 200);
+        let b = RequestFingerprint::new("s1", "m1", 100, 300);
         assert_ne!(a, b);
     }
 
     #[test]
-    fn fingerprint_ignores_timestamp() {
-        // 不同源记录时间语义不同（请求开始 vs 请求结束），时间差可达数分钟
-        let a = RequestFingerprint::new("s1", "m1", 100, 200, 1000);
-        let b = RequestFingerprint::new("s1", "m1", 100, 200, 9999);
+    fn fingerprint_does_not_include_timestamp() {
+        // 指纹仅由 session_id + model + input/output tokens 组成，
+        // 不含 created_at（不同源时间语义不同，差值可达数分钟）
+        let a = RequestFingerprint::new("s1", "m1", 100, 200);
+        let b = RequestFingerprint::new("s1", "m1", 100, 200);
         assert_eq!(a, b);
     }
 

@@ -55,7 +55,7 @@ pub fn run_streaming_dedup(
     let mut seen = HashSet::new();
     let mut result = Vec::new();
     for record in rx {
-        let fp = RequestFingerprint::new(&record.0, &record.1, record.4, record.5, record.3);
+        let fp = RequestFingerprint::new(&record.0, &record.1, record.4, record.5);
         if seen.insert(fp) {
             result.push(record);
         }
@@ -278,9 +278,9 @@ pub fn aggregate_hourly_trend(records: &[RawRecord], tz_offset: i64) -> Vec<Dail
         e.5 += r.latency as f64;
     }
     let mut v: Vec<DailyTrendRow> = map.into_iter()
-        .map(|((day, model), (requests, input_tokens, output_tokens, cache_read, cache_creation, latency_sum))| {
+        .map(|((hour_label, model), (requests, input_tokens, output_tokens, cache_read, cache_creation, latency_sum))| {
             DailyTrendRow {
-                day, model, requests, input_tokens, output_tokens, cache_read, cache_creation,
+                day: hour_label, model, requests, input_tokens, output_tokens, cache_read, cache_creation,
                 avg_latency: if requests > 0 { latency_sum / requests as f64 } else { 0.0 },
             }
         })
