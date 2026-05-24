@@ -54,67 +54,67 @@ where
 pub fn query_summary(params: FilterParams, state: State<AppState>) -> Result<SummaryData, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<SummaryData> = parallel_query(&sources, params.clone(), "summary", |e, p| e.source.get_summary(p));
-    Ok(merge_summaries(results))
+    let records = fetch_deduped_records(&sources, &params)?;
+    Ok(aggregate_summary(&records))
 }
 
 #[tauri::command]
 pub fn query_by_model(params: FilterParams, state: State<AppState>) -> Result<Vec<ModelBreakdown>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<ModelBreakdown>> = parallel_query(&sources, params.clone(), "model_breakdown", |e, p| e.source.get_model_breakdown(p));
-    Ok(merge_model_breakdowns(results))
+    let records = fetch_deduped_records(&sources, &params)?;
+    Ok(aggregate_model_breakdown(&records))
 }
 
 #[tauri::command]
 pub fn query_by_provider(params: FilterParams, state: State<AppState>) -> Result<Vec<ProviderBreakdown>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<ProviderBreakdown>> = parallel_query(&sources, params.clone(), "provider_breakdown", |e, p| e.source.get_provider_breakdown(p));
-    Ok(merge_provider_breakdowns(results))
+    let records = fetch_deduped_records(&sources, &params)?;
+    let provider_names = collect_provider_names(&sources);
+    Ok(aggregate_provider_breakdown(&records, &provider_names))
 }
 
 #[tauri::command]
 pub fn query_provider_model_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<ProviderModelToken>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<ProviderModelToken>> = parallel_query(&sources, params.clone(), "provider_model_tokens", |e, p| e.source.get_provider_model_tokens(p));
-    Ok(merge_provider_model_tokens(results))
+    let records = fetch_deduped_records(&sources, &params)?;
+    Ok(aggregate_provider_model_tokens(&records))
 }
 
 #[tauri::command]
 pub fn query_daily_trend(params: FilterParams, state: State<AppState>) -> Result<Vec<DailyTrendRow>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<DailyTrendRow>> = parallel_query(&sources, params.clone(), "daily_trend", |e, p| e.source.get_daily_trend(p));
-    Ok(merge_daily_trends(results))
+    let records = fetch_deduped_records(&sources, &params)?;
+    let tz_offset = params.tz_offset.unwrap_or(0);
+    Ok(aggregate_daily_trend(&records, tz_offset))
 }
 
 #[tauri::command]
 pub fn query_hourly_trend(params: FilterParams, state: State<AppState>) -> Result<Vec<DailyTrendRow>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let results: Vec<Vec<DailyTrendRow>> = parallel_query(&sources, params.clone(), "hourly_trend", |e, p| e.source.get_hourly_trend(p));
-    Ok(merge_daily_trends(results))
+    let records = fetch_deduped_records(&sources, &params)?;
+    let tz_offset = params.tz_offset.unwrap_or(0);
+    Ok(aggregate_hourly_trend(&records, tz_offset))
 }
 
 #[tauri::command]
 pub fn query_sessions(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionBreakdown>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let all: Vec<Vec<SessionBreakdown>> = parallel_query(&sources, params.clone(), "session_breakdown", |e, p| e.source.get_session_breakdown(p));
-    let mut all: Vec<SessionBreakdown> = all.into_iter().flatten().collect();
-    all.sort_by(|a, b| b.requests.cmp(&a.requests));
-    all.truncate(crate::utils::SESSION_TOP_N as usize);
-    Ok(all)
+    let records = fetch_deduped_records(&sources, &params)?;
+    Ok(aggregate_session_breakdown(&records))
 }
 
 #[tauri::command]
 pub fn query_session_model_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionModelToken>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let all: Vec<Vec<SessionModelToken>> = parallel_query(&sources, params.clone(), "session_model_tokens", |e, p| e.source.get_session_model_tokens(p));
-    Ok(all.into_iter().flatten().collect())
+    let records = fetch_deduped_records(&sources, &params)?;
+    Ok(aggregate_session_model_tokens(&records))
 }
 
 #[tauri::command]
@@ -221,80 +221,31 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
 }
 
 /// 共享的预计算查询核心逻辑，不依赖 Tauri State，可被 HTTP 服务复用。
+/// 使用中心去重管道：一次获取所有去重记录，在内存中聚合。
 pub fn compute_precompute(
     sources: &[SourceEntry],
     pricing: &crate::services::pricing_engine::PricingEngine,
     params: &FilterParams,
 ) -> Result<PrecomputeQueryResult, String> {
-    let (summary, provider_breakdown, combined, tier_buckets) = {
-        let thresholds = pricing.get_all_tier_thresholds();
+    let tz_offset = params.tz_offset.unwrap_or(0);
+    let thresholds = pricing.get_all_tier_thresholds();
 
-        let source_results: Vec<_> = std::thread::scope(|s| {
-            let handles: Vec<_> = sources.iter().map(|entry| {
-                let p = params.clone();
-                let th = thresholds.clone();
-                let label = entry.db_type.label().to_string();
-                s.spawn(move || {
-                    let summary = entry.source.get_summary(&p).map_err(|e| {
-                        log::warn!("[QUERY] summary 数据源({}) 查询失败: {}", label, e);
-                        e
-                    }).ok();
-                    let provider = entry.source.get_provider_breakdown(&p).map_err(|e| {
-                        log::warn!("[QUERY] provider_breakdown 数据源({}) 查询失败: {}", label, e);
-                        e
-                    }).ok();
-                    let combined = entry.source.get_combined_breakdown(&p).map_err(|e| {
-                        log::warn!("[QUERY] combined_breakdown 数据源({}) 查询失败: {}", label, e);
-                        e
-                    }).ok();
-                    let tier = if th.is_empty() {
-                        Ok(Vec::new())
-                    } else {
-                        entry.source.get_model_context_tier_buckets(&p, &th).map_err(|e| {
-                            log::warn!("[QUERY] tier_buckets 数据源({}) 查询失败: {}", label, e);
-                            e
-                        })
-                    }.ok();
-                    (summary, provider, combined, tier)
-                })
-            }).collect();
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
-        });
+    // 中心去重管道：一次获取所有去重记录
+    let records = fetch_deduped_records(sources, params)?;
 
-        let summaries: Vec<SummaryData> = source_results.iter().filter_map(|r| r.0.clone()).collect();
-        let provider_results: Vec<Vec<ProviderBreakdown>> = source_results.iter().filter_map(|r| r.1.clone()).collect();
-        let combined_results: Vec<Vec<CombinedBreakdownRow>> = source_results.iter().filter_map(|r| r.2.clone()).collect();
-        let tier_results: Vec<Vec<ModelContextTierBucket>> = source_results.iter().filter_map(|r| r.3.clone()).collect();
+    // 内存聚合
+    let summary = aggregate_summary(&records);
+    let provider_names = collect_provider_names(sources);
+    let provider_breakdown = aggregate_provider_breakdown(&records, &provider_names);
+    let combined = aggregate_combined_records(&records, tz_offset);
+    let tier_buckets = aggregate_model_context_tier_buckets(&records, tz_offset, &thresholds);
 
-        let s = merge_summaries(summaries);
-        let pb = merge_provider_breakdowns(provider_results);
-        let cb = merge_combined(combined_results);
-        let tb: Vec<ModelContextTierBucket> = {
-            let mut map: HashMap<(String, String, i64), ModelContextTierBucket> = HashMap::new();
-            for list in tier_results {
-                for row in list {
-                    let key = (row.model.clone(), row.day.clone(), row.context_tier);
-                    map.entry(key)
-                        .and_modify(|e| {
-                            e.input_tokens += row.input_tokens;
-                            e.output_tokens += row.output_tokens;
-                            e.cache_read += row.cache_read;
-                            e.cache_creation += row.cache_creation;
-                        })
-                        .or_insert(row);
-                }
-            }
-            map.into_values().collect()
-        };
-
-        log::debug!("[QUERY] summary.requests={}, providers={}, combined_rows={}, tier_buckets={}",
-            s.total_requests, pb.len(), cb.len(), tb.len());
-        (s, pb, cb, tb)
-    };
+    log::debug!("[QUERY] summary.requests={}, providers={}, combined_rows={}, tier_buckets={}",
+        summary.total_requests, provider_breakdown.len(), combined.len(), tier_buckets.len());
 
     // 别名解析
     let combined = {
-        let mut resolved: Vec<CombinedBreakdownRow> = combined;
+        let mut resolved = combined;
         for row in &mut resolved {
             if let Some(canonical) = pricing.resolve_model_id(&row.model) {
                 row.model = canonical;
@@ -313,7 +264,6 @@ pub fn compute_precompute(
     };
     let agg = aggregate_combined_breakdown(&combined);
 
-    let tz_offset = params.tz_offset.unwrap_or(0);
     let mut precomputed = precompute_costs(&agg.daily_trend, &agg.provider_model_tokens, pricing, tz_offset);
 
     let (tier_costs, ctx_model_costs, ctx_model_breakdown) = build_context_tier_and_model_costs(&tier_buckets, pricing);

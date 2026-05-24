@@ -1,5 +1,20 @@
 use serde::{Deserialize, Serialize};
 
+// ========== 原始请求记录（去重管道的统一数据单元）==========
+
+#[derive(Debug, Clone)]
+pub struct RawRecord {
+    pub session_id: String,
+    pub model: String,
+    pub provider_id: String,
+    pub created_at: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read: i64,
+    pub cache_creation: i64,
+    pub latency: i64,
+}
+
 // ========== 查询参数 ==========
 
 #[derive(Debug, Clone, Deserialize)]

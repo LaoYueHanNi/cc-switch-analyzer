@@ -50,6 +50,12 @@ pub fn get_default_opencode_db_path() -> Result<std::path::PathBuf, String> {
     Ok(data_dir.join("opencode").join("opencode.db"))
 }
 
+/// 获取默认 AI Proxy 数据库路径
+pub fn get_default_ai_proxy_db_path() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;
+    Ok(home.join(".ai-agent-tools").join("data").join("access_log.db"))
+}
+
 /// 当前 Unix 秒
 pub fn now_epoch_seconds() -> i64 {
     chrono::Utc::now().timestamp()

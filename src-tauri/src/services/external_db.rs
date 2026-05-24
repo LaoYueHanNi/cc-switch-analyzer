@@ -937,6 +937,38 @@ impl ExternalDbService {
         }
         Ok(())
     }
+
+    pub fn get_filtered_raw_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> {
+        let db = self.db()?;
+        let (where_sql, binds) = Self::build_where_clause(params, false);
+        let sql = format!(
+            "SELECT session_id, model, provider_id, created_at,
+                    input_tokens, output_tokens,
+                    cache_read_tokens, cache_creation_tokens,
+                    latency_ms
+             FROM proxy_request_logs {}
+             ORDER BY created_at",
+            where_sql
+        );
+
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询过滤记录失败: {}", e))?;
+        let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+        let rows = stmt.query_map(refs.as_slice(), |row| {
+            Ok(RawRecord {
+                session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                cache_read: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                cache_creation: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
+                latency: row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+            })
+        }).map_err(|e| format!("查询过滤记录失败: {}", e))?;
+
+        Self::collect_rows(rows, "读取过滤记录")
+    }
 }
 
 impl super::data_source::DataSource for ExternalDbService {
@@ -966,4 +998,5 @@ impl super::data_source::DataSource for ExternalDbService {
     fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String> { self.get_minute_level_token_trend() }
     fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String> { self.get_recent_request_logs_raw(since) }
     fn stream_records(&self, since: Option<i64>, on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64))) -> Result<(), String> { self.stream_records(since, on_record) }
+    fn get_filtered_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> { self.get_filtered_raw_records(params) }
 }

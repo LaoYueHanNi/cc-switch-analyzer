@@ -41,6 +41,12 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
         {
             defaults.push(p);
         }
+        if let Some(p) = crate::utils::get_default_ai_proxy_db_path().ok()
+            .and_then(|p| p.to_str().map(|s| s.to_string()))
+            .filter(|p| std::path::Path::new(p).exists())
+        {
+            defaults.push(p);
+        }
         if !defaults.is_empty() {
             return auto_load_paths(&state, defaults);
         }
@@ -307,6 +313,7 @@ fn save_paths(state: &State<AppState>, info: &[SourceInfo]) {
 pub struct DefaultPaths {
     pub cc_switch: Option<String>,
     pub opencode: Option<String>,
+    pub ai_proxy: Option<String>,
 }
 
 #[tauri::command]
@@ -315,5 +322,7 @@ pub fn get_default_paths() -> Result<DefaultPaths, String> {
         .and_then(|p| p.to_str().map(|s| s.to_string()));
     let opencode = crate::utils::get_default_opencode_db_path().ok()
         .and_then(|p| p.to_str().map(|s| s.to_string()));
-    Ok(DefaultPaths { cc_switch, opencode })
+    let ai_proxy = crate::utils::get_default_ai_proxy_db_path().ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()));
+    Ok(DefaultPaths { cc_switch, opencode, ai_proxy })
 }

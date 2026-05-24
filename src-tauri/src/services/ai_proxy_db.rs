@@ -5,16 +5,18 @@ use std::path::Path;
 use crate::models::*;
 use crate::utils::*;
 
-// OpenCode SQLite 数据库服务（只读）
-pub struct OpenCodeDbService {
+// AI Proxy 数据库服务（只读，token_stats 表）
+pub struct AiProxyDbService {
     db: Option<Connection>,
     db_path: String,
     latest_timestamp: Option<i64>,
 }
 
-unsafe impl Sync for OpenCodeDbService {}
+// rusqlite::Connection 是 Send 但非 Sync（内部 RefCell），
+// 所有并发访问均由外部 RwLock 保护，此处安全实现 Sync。
+unsafe impl Sync for AiProxyDbService {}
 
-impl OpenCodeDbService {
+impl AiProxyDbService {
     pub fn new() -> Self {
         Self {
             db: None,
@@ -30,7 +32,7 @@ impl OpenCodeDbService {
             OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
         .map_err(|e| {
-            log::error!("[OpenCode DB] 打开数据库失败 (path={}): {}", file_path, e);
+            log::error!("[DB] 打开 AI Proxy 数据库失败 (path={}): {}", file_path, e);
             "打开数据库失败，请检查文件路径".to_string()
         })?;
         self.db_path = file_path.to_string();
@@ -65,75 +67,96 @@ impl OpenCodeDbService {
         Ok(result)
     }
 
-    // ========== WHERE 子句构建 ==========
+    // ========== 时间表达式 ==========
 
-    fn map_trend_row(row: &rusqlite::Row) -> rusqlite::Result<DailyTrendRow> {
-        Ok(DailyTrendRow {
-            day: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
-            model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-            requests: row.get(2)?,
-            input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-            output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
-            cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
-            cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
-            avg_latency: row.get::<_, Option<f64>>(7)?.unwrap_or(0.0),
-        })
+    /// 获取系统当前 UTC 偏移（秒），用于将 request_ts 本地时间转换为正确的 Unix 时间戳。
+    /// AI Proxy 的 request_ts 是本地时间（如 UTC+8 的 "11:53:22"），
+    /// 但 SQLite 的 strftime('%s', ...) 按UTC 解析，需减去偏移量。
+    fn utc_offset_secs() -> i64 {
+        chrono::Local::now().offset().local_minus_utc() as i64
+    }
+
+    /// request_ts (TEXT 本地时间) → Unix 秒表达式
+    fn ts_epoch(aliased: bool) -> String {
+        let col = if aliased { "l.request_ts" } else { "request_ts" };
+        let offset = Self::utc_offset_secs();
+        if offset != 0 {
+            let adj = if offset > 0 { format!("- {}", offset) } else { format!("+ {}", -offset) };
+            format!("CAST(strftime('%s', {}) AS INTEGER) {}", col, adj)
+        } else {
+            format!("CAST(strftime('%s', {}) AS INTEGER)", col)
+        }
+    }
+
+    fn ts_epoch_col(col: &str) -> String {
+        let offset = Self::utc_offset_secs();
+        if offset != 0 {
+            let adj = if offset > 0 { format!("- {}", offset) } else { format!("+ {}", -offset) };
+            format!("CAST(strftime('%s', {}) AS INTEGER) {}", col, adj)
+        } else {
+            format!("CAST(strftime('%s', {}) AS INTEGER)", col)
+        }
     }
 
     fn tz_date_expr(params: &FilterParams) -> String {
+        let ts = Self::ts_epoch(true);
         match params.tz_offset {
             Some(tz) if tz != 0 => {
                 let sign = if tz > 0 { "+" } else { "" };
-                format!("date(time_created / 1000, 'unixepoch', '{}{} hours')", sign, tz)
+                format!("date({}, 'unixepoch', '{}{} hours')", ts, sign, tz)
             }
-            _ => "date(time_created / 1000, 'unixepoch')".to_string(),
+            _ => format!("date({}, 'unixepoch')", ts),
         }
     }
 
     fn tz_hour_expr(params: &FilterParams) -> String {
+        let ts = Self::ts_epoch(true);
         match params.tz_offset {
             Some(tz) if tz != 0 => {
                 let sign = if tz > 0 { "+" } else { "" };
-                format!("strftime('%H:00', time_created / 1000, 'unixepoch', '{}{} hours')", sign, tz)
+                format!("strftime('%H:00', {}, 'unixepoch', '{}{} hours')", ts, sign, tz)
             }
-            _ => "strftime('%H:00', time_created / 1000, 'unixepoch')".to_string(),
+            _ => format!("strftime('%H:00', {}, 'unixepoch')", ts),
         }
     }
 
     fn build_where_clause(
         params: &FilterParams,
+        aliased: bool,
     ) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
+        let prefix = if aliased { "l." } else { "" };
+        let ts_col = if aliased { "l.request_ts" } else { "request_ts" };
+        let model_expr = if aliased {
+            "COALESCE(l.target_model, l.model)"
+        } else {
+            "COALESCE(target_model, model)"
+        };
+
         let mut clauses: Vec<String> = vec![
-            "json_extract(data, '$.role') = 'assistant'".to_string(),
-            "(CAST(json_extract(data, '$.tokens.input') AS INTEGER) > 0 \
-              OR CAST(json_extract(data, '$.tokens.output') AS INTEGER) > 0 \
-              OR CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER) > 0 \
-              OR CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER) > 0)"
-                .to_string(),
+            "1=1".to_string(),
+            format!(
+                "({prefix}input_tokens > 0 OR {prefix}output_tokens > 0 OR {prefix}cached_read_tokens > 0 OR {prefix}cached_write_tokens > 0)",
+                prefix = prefix
+            ),
         ];
         let mut binds: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
         if let Some(from_epoch) = params.from_epoch {
             if from_epoch > 0 {
-                clauses.push("(time_created / 1000) >= ?".to_string());
+                clauses.push(format!("{} >= ?", Self::ts_epoch_col(ts_col)));
                 binds.push(Box::new(from_epoch));
             }
         }
         if let Some(to_epoch) = params.to_epoch {
             if to_epoch > 0 {
-                clauses.push("(time_created / 1000) < ?".to_string());
+                clauses.push(format!("{} < ?", Self::ts_epoch_col(ts_col)));
                 binds.push(Box::new(to_epoch));
             }
         }
-        if let Some(ref provider_id) = params.provider_id {
-            if !provider_id.is_empty() {
-                clauses.push("json_extract(data, '$.providerID') = ?".to_string());
-                binds.push(Box::new(provider_id.clone()));
-            }
-        }
+        // AI Proxy 无 provider 过滤（固定 "AI Proxy"）
         if let Some(ref model_id) = params.model_id {
             if !model_id.is_empty() {
-                clauses.push("json_extract(data, '$.modelID') = ?".to_string());
+                clauses.push(format!("{model_expr} = ?"));
                 binds.push(Box::new(model_id.clone()));
             }
         }
@@ -146,23 +169,17 @@ impl OpenCodeDbService {
     pub fn get_record_count(&self) -> Result<i64, String> {
         let db = self.db()?;
         let count: i64 = db
-            .query_row(
-                "SELECT COUNT(*) FROM message WHERE json_extract(data, '$.role') = 'assistant'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM token_stats", [], |row| row.get(0))
             .map_err(|e| format!("查询记录数失败: {}", e))?;
         Ok(count)
     }
 
     fn get_latest_timestamp_internal(&self) -> Option<i64> {
+        let ts_expr = Self::ts_epoch_col("request_ts");
+        let sql = format!("SELECT MAX({}) FROM token_stats", ts_expr);
         self.db().ok().and_then(|db| {
-            db.query_row(
-                "SELECT MAX(time_created / 1000) FROM message WHERE json_extract(data, '$.role') = 'assistant'",
-                [],
-                |row| row.get(0),
-            )
-            .ok()
+            db.query_row(&sql, [], |row| row.get(0))
+                .ok()
         })
     }
 
@@ -171,40 +188,16 @@ impl OpenCodeDbService {
     }
 
     pub fn get_providers(&self) -> Result<Vec<Provider>, String> {
-        let db = self.db()?;
-        let mut stmt = db
-            .prepare(
-                "SELECT DISTINCT json_extract(data, '$.providerID') AS id
-                 FROM message
-                 WHERE json_extract(data, '$.role') = 'assistant'
-                   AND json_extract(data, '$.providerID') IS NOT NULL
-                 ORDER BY id",
-            )
-            .map_err(|e| format!("查询供应商失败: {}", e))?;
-
-        let rows = stmt
-            .query_map([], |row| {
-                let id: String = row.get::<_, Option<String>>(0)?.unwrap_or_default();
-                Ok(Provider {
-                    name: id.clone(),
-                    id,
-                })
-            })
-            .map_err(|e| format!("查询供应商失败: {}", e))?;
-
-        Self::collect_rows(rows, "读取供应商")
+        Ok(vec![Provider {
+            id: "ai-proxy".to_string(),
+            name: "AI Proxy".to_string(),
+        }])
     }
 
     pub fn get_models(&self) -> Result<Vec<String>, String> {
         let db = self.db()?;
         let mut stmt = db
-            .prepare(
-                "SELECT DISTINCT json_extract(data, '$.modelID')
-                 FROM message
-                 WHERE json_extract(data, '$.role') = 'assistant'
-                   AND json_extract(data, '$.modelID') IS NOT NULL
-                 ORDER BY json_extract(data, '$.modelID')",
-            )
+            .prepare("SELECT DISTINCT COALESCE(target_model, model) FROM token_stats ORDER BY 1")
             .map_err(|e| format!("查询模型失败: {}", e))?;
 
         let rows = stmt
@@ -219,14 +212,13 @@ impl OpenCodeDbService {
 
     pub fn get_date_range(&self) -> Result<DateRange, String> {
         let db = self.db()?;
+        let ts_expr = Self::ts_epoch_col("request_ts");
+        let sql = format!(
+            "SELECT MIN({}), MAX({}) FROM token_stats",
+            ts_expr, ts_expr
+        );
         let (min, max): (Option<i64>, Option<i64>) = db
-            .query_row(
-                "SELECT MIN(time_created / 1000), MAX(time_created / 1000)
-                 FROM message
-                 WHERE json_extract(data, '$.role') = 'assistant'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
+            .query_row(&sql, [], |row| Ok((row.get(0)?, row.get(1)?)))
             .map_err(|e| format!("查询日期范围失败: {}", e))?;
         Ok(DateRange { min: min.unwrap_or(0), max: max.unwrap_or(0) })
     }
@@ -235,17 +227,17 @@ impl OpenCodeDbService {
 
     pub fn get_summary(&self, params: &FilterParams) -> Result<SummaryData, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params);
+        let (where_sql, binds) = Self::build_where_clause(params, false);
         let sql = format!(
             "SELECT
                 COUNT(*) AS total_requests,
-                SUM(CASE WHEN json_extract(data, '$.finish') IS NOT NULL THEN 1 ELSE 0 END) AS success_count,
-                SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)) AS total_input,
-                SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)) AS total_output,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER)) AS total_cache_read,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER)) AS total_cache_creation,
-                ROUND(AVG(json_extract(data, '$.time.completed') - json_extract(data, '$.time.created')), 0) AS avg_latency
-             FROM message {}",
+                COUNT(*) AS success_count,
+                SUM(input_tokens) AS total_input,
+                SUM(output_tokens) AS total_output,
+                SUM(cached_read_tokens) AS total_cache_read,
+                SUM(cached_write_tokens) AS total_cache_creation,
+                ROUND(AVG(duration_ms), 0) AS avg_latency
+             FROM token_stats {}",
             where_sql
         );
 
@@ -269,18 +261,18 @@ impl OpenCodeDbService {
 
     pub fn get_model_breakdown(&self, params: &FilterParams) -> Result<Vec<ModelBreakdown>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params);
+        let (where_sql, binds) = Self::build_where_clause(params, true);
         let sql = format!(
             "SELECT
-                json_extract(data, '$.modelID') AS model,
+                COALESCE(l.target_model, l.model),
                 COUNT(*) AS requests,
-                SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)) AS input_tokens,
-                SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)) AS output_tokens,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER)) AS cache_read,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER)) AS cache_creation
-             FROM message
+                SUM(l.input_tokens) AS input_tokens,
+                SUM(l.output_tokens) AS output_tokens,
+                SUM(l.cached_read_tokens) AS cache_read,
+                SUM(l.cached_write_tokens) AS cache_creation
+             FROM token_stats l
              {}
-             GROUP BY json_extract(data, '$.modelID')
+             GROUP BY COALESCE(l.target_model, l.model)
              ORDER BY requests DESC",
             where_sql
         );
@@ -305,19 +297,16 @@ impl OpenCodeDbService {
 
     pub fn get_provider_breakdown(&self, params: &FilterParams) -> Result<Vec<ProviderBreakdown>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params);
+        let (where_sql, binds) = Self::build_where_clause(params, false);
         let sql = format!(
             "SELECT
-                json_extract(data, '$.providerID') AS provider_name,
-                json_extract(data, '$.providerID') AS provider_id,
+                'AI Proxy' AS provider_name,
+                'ai-proxy' AS provider_id,
                 COUNT(*) AS requests,
-                SUM(CASE WHEN json_extract(data, '$.finish') IS NOT NULL THEN 1 ELSE 0 END) AS successes,
-                ROUND(100.0 * SUM(CASE WHEN json_extract(data, '$.finish') IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS success_rate,
-                ROUND(AVG(json_extract(data, '$.time.completed') - json_extract(data, '$.time.created')), 0) AS avg_latency
-             FROM message
-             {}
-             GROUP BY json_extract(data, '$.providerID')
-             ORDER BY requests DESC",
+                COUNT(*) AS successes,
+                100.0 AS success_rate,
+                ROUND(AVG(duration_ms), 0) AS avg_latency
+             FROM token_stats {}",
             where_sql
         );
 
@@ -341,23 +330,23 @@ impl OpenCodeDbService {
 
     pub fn get_combined_breakdown(&self, params: &FilterParams) -> Result<Vec<CombinedBreakdownRow>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params);
+        let (where_sql, binds) = Self::build_where_clause(params, true);
         let day_expr = Self::tz_date_expr(params);
         let sql = format!(
             "SELECT
                 {} AS day,
-                json_extract(data, '$.providerID') AS provider_id,
-                json_extract(data, '$.modelID') AS model,
+                'ai-proxy' AS provider_id,
+                COALESCE(l.target_model, l.model),
                 COUNT(*) AS requests,
-                SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)) AS input_tokens,
-                SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)) AS output_tokens,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER)) AS cache_read,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER)) AS cache_creation,
-                COALESCE(SUM(json_extract(data, '$.time.completed') - json_extract(data, '$.time.created')), 0) AS latency_sum
-             FROM message
+                SUM(l.input_tokens) AS input_tokens,
+                SUM(l.output_tokens) AS output_tokens,
+                SUM(l.cached_read_tokens) AS cache_read,
+                SUM(l.cached_write_tokens) AS cache_creation,
+                COALESCE(SUM(l.duration_ms), 0) AS latency_sum
+             FROM token_stats l
              {}
-             GROUP BY day, json_extract(data, '$.providerID'), json_extract(data, '$.modelID')
-             ORDER BY day, json_extract(data, '$.providerID'), json_extract(data, '$.modelID')",
+             GROUP BY day, COALESCE(l.target_model, l.model)
+             ORDER BY day",
             day_expr, where_sql
         );
 
@@ -384,18 +373,18 @@ impl OpenCodeDbService {
 
     pub fn get_provider_model_tokens(&self, params: &FilterParams) -> Result<Vec<ProviderModelToken>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params);
+        let (where_sql, binds) = Self::build_where_clause(params, true);
         let sql = format!(
             "SELECT
-                json_extract(data, '$.providerID') AS provider_id,
-                json_extract(data, '$.modelID') AS model,
-                SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)) AS input_tokens,
-                SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)) AS output_tokens,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER)) AS cache_read,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER)) AS cache_creation
-             FROM message
+                'ai-proxy' AS provider_id,
+                COALESCE(l.target_model, l.model),
+                SUM(l.input_tokens) AS input_tokens,
+                SUM(l.output_tokens) AS output_tokens,
+                SUM(l.cached_read_tokens) AS cache_read,
+                SUM(l.cached_write_tokens) AS cache_creation
+             FROM token_stats l
              {}
-             GROUP BY json_extract(data, '$.providerID'), json_extract(data, '$.modelID')",
+             GROUP BY COALESCE(l.target_model, l.model)",
             where_sql
         );
 
@@ -419,28 +408,39 @@ impl OpenCodeDbService {
 
     pub fn get_daily_trend(&self, params: &FilterParams) -> Result<Vec<DailyTrendRow>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params);
+        let (where_sql, binds) = Self::build_where_clause(params, true);
         let sql = format!(
             "SELECT
-                date(time_created / 1000, 'unixepoch') AS day,
-                json_extract(data, '$.modelID') AS model,
+                date({}, 'unixepoch') AS day,
+                COALESCE(l.target_model, l.model),
                 COUNT(*) AS requests,
-                SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)) AS input_tokens,
-                SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)) AS output_tokens,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER)) AS cache_read,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER)) AS cache_creation,
-                ROUND(AVG(json_extract(data, '$.time.completed') - json_extract(data, '$.time.created')), 0) AS avg_latency
-             FROM message
+                SUM(l.input_tokens) AS input_tokens,
+                SUM(l.output_tokens) AS output_tokens,
+                SUM(l.cached_read_tokens) AS cache_read,
+                SUM(l.cached_write_tokens) AS cache_creation,
+                ROUND(AVG(l.duration_ms), 0) AS avg_latency
+             FROM token_stats l
              {}
-             GROUP BY day, json_extract(data, '$.modelID')
+             GROUP BY day, COALESCE(l.target_model, l.model)
              ORDER BY day",
-            where_sql
+            Self::ts_epoch_col("l.request_ts"), where_sql
         );
 
         let mut stmt = db.prepare(&sql).map_err(|e| format!("查询每日趋势失败: {}", e))?;
         let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
         let rows = stmt
-            .query_map(refs.as_slice(), Self::map_trend_row)
+            .query_map(refs.as_slice(), |row| {
+                Ok(DailyTrendRow {
+                    day: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    requests: row.get(2)?,
+                    input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    avg_latency: row.get::<_, Option<f64>>(7)?.unwrap_or(0.0),
+                })
+            })
             .map_err(|e| format!("查询每日趋势失败: {}", e))?;
 
         Self::collect_rows(rows, "读取每日趋势")
@@ -448,21 +448,21 @@ impl OpenCodeDbService {
 
     pub fn get_hourly_trend(&self, params: &FilterParams) -> Result<Vec<DailyTrendRow>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params);
+        let (where_sql, binds) = Self::build_where_clause(params, true);
         let hour_expr = Self::tz_hour_expr(params);
         let sql = format!(
             "SELECT
                 {} AS day,
-                json_extract(data, '$.modelID') AS model,
+                COALESCE(l.target_model, l.model),
                 COUNT(*) AS requests,
-                SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)) AS input_tokens,
-                SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)) AS output_tokens,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER)) AS cache_read,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER)) AS cache_creation,
-                ROUND(AVG(json_extract(data, '$.time.completed') - json_extract(data, '$.time.created')), 0) AS avg_latency
-             FROM message
+                SUM(l.input_tokens) AS input_tokens,
+                SUM(l.output_tokens) AS output_tokens,
+                SUM(l.cached_read_tokens) AS cache_read,
+                SUM(l.cached_write_tokens) AS cache_creation,
+                ROUND(AVG(l.duration_ms), 0) AS avg_latency
+             FROM token_stats l
              {}
-             GROUP BY day, json_extract(data, '$.modelID')
+             GROUP BY day, COALESCE(l.target_model, l.model)
              ORDER BY day",
             hour_expr, where_sql
         );
@@ -470,7 +470,18 @@ impl OpenCodeDbService {
         let mut stmt = db.prepare(&sql).map_err(|e| format!("查询小时趋势失败: {}", e))?;
         let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
         let rows = stmt
-            .query_map(refs.as_slice(), Self::map_trend_row)
+            .query_map(refs.as_slice(), |row| {
+                Ok(DailyTrendRow {
+                    day: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    requests: row.get(2)?,
+                    input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    avg_latency: row.get::<_, Option<f64>>(7)?.unwrap_or(0.0),
+                })
+            })
             .map_err(|e| format!("查询小时趋势失败: {}", e))?;
 
         Self::collect_rows(rows, "读取小时趋势")
@@ -478,21 +489,22 @@ impl OpenCodeDbService {
 
     pub fn get_session_breakdown(&self, params: &FilterParams) -> Result<Vec<SessionBreakdown>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params);
+        let (where_sql, binds) = Self::build_where_clause(params, true);
+        let ts_expr = Self::ts_epoch_col("l.request_ts");
         let sql = format!(
             "SELECT
-                session_id,
+                l.session_id,
                 COUNT(*) AS requests,
-                SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)) AS input_tokens,
-                SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)) AS output_tokens,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER)) AS cache_read,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER)) AS cache_creation,
-                MIN(time_created / 1000) AS first_at,
-                MAX(time_created / 1000) AS last_at
-             FROM message
+                SUM(l.input_tokens) AS input_tokens,
+                SUM(l.output_tokens) AS output_tokens,
+                SUM(l.cached_read_tokens) AS cache_read,
+                SUM(l.cached_write_tokens) AS cache_creation,
+                MIN({ts_expr}) AS first_at,
+                MAX({ts_expr}) AS last_at
+             FROM token_stats l
              {}
-               AND session_id IS NOT NULL AND session_id != ''
-             GROUP BY session_id
+               AND l.session_id IS NOT NULL AND l.session_id != ''
+             GROUP BY l.session_id
              ORDER BY requests DESC
              LIMIT {}",
             where_sql, SESSION_TOP_N
@@ -526,14 +538,10 @@ impl OpenCodeDbService {
         let db = self.db()?;
         let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
         let sql = format!(
-            "SELECT session_id,
-                    MAX(CAST(json_extract(data, '$.tokens.input') AS INTEGER)
-                        + CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER)) AS max_ctx
-             FROM message
+            "SELECT session_id, MAX(input_tokens + cached_read_tokens) AS max_ctx
+             FROM token_stats
              WHERE session_id IN ({})
-               AND json_extract(data, '$.role') = 'assistant'
-               AND (CAST(json_extract(data, '$.tokens.input') AS INTEGER)
-                    + CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER)) > 0
+               AND input_tokens + cached_read_tokens > 0
              GROUP BY session_id",
             placeholders.join(",")
         );
@@ -555,26 +563,26 @@ impl OpenCodeDbService {
 
     pub fn get_session_model_tokens(&self, params: &FilterParams) -> Result<Vec<SessionModelToken>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params);
-        let (sub_where, sub_binds) = Self::build_where_clause(params);
+        let (where_sql, binds) = Self::build_where_clause(params, true);
+        let (sub_where, sub_binds) = Self::build_where_clause(params, false);
         let sql = format!(
             "SELECT
-                session_id,
-                json_extract(data, '$.modelID') AS model,
-                SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)) AS input_tokens,
-                SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)) AS output_tokens,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER)) AS cache_read,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER)) AS cache_creation
-             FROM message
+                l.session_id,
+                COALESCE(l.target_model, l.model),
+                SUM(l.input_tokens) AS input_tokens,
+                SUM(l.output_tokens) AS output_tokens,
+                SUM(l.cached_read_tokens) AS cache_read,
+                SUM(l.cached_write_tokens) AS cache_creation
+             FROM token_stats l
              {}
-               AND session_id IS NOT NULL AND session_id != ''
-               AND session_id IN (
-                   SELECT s.session_id FROM message s
+               AND l.session_id IS NOT NULL AND l.session_id != ''
+               AND l.session_id IN (
+                   SELECT s.session_id FROM token_stats s
                    {}
                      AND s.session_id IS NOT NULL AND s.session_id != ''
                    GROUP BY s.session_id ORDER BY COUNT(*) DESC LIMIT {}
                )
-             GROUP BY session_id, json_extract(data, '$.modelID')",
+             GROUP BY l.session_id, COALESCE(l.target_model, l.model)",
             where_sql, sub_where, SESSION_TOP_N
         );
 
@@ -600,27 +608,28 @@ impl OpenCodeDbService {
 
     pub fn get_session_request_tokens(&self, params: &FilterParams) -> Result<Vec<SessionRequestToken>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params);
-        let (sub_where, sub_binds) = Self::build_where_clause(params);
+        let (where_sql, binds) = Self::build_where_clause(params, true);
+        let (sub_where, sub_binds) = Self::build_where_clause(params, false);
+        let ts_expr = Self::ts_epoch_col("l.request_ts");
         let sql = format!(
             "SELECT
-                session_id,
-                json_extract(data, '$.modelID') AS model,
-                (time_created / 1000) AS created_at,
-                CAST(json_extract(data, '$.tokens.input') AS INTEGER),
-                CAST(json_extract(data, '$.tokens.output') AS INTEGER),
-                CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
-                CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER)
-             FROM message
+                l.session_id,
+                COALESCE(l.target_model, l.model),
+                {ts_expr},
+                l.input_tokens,
+                l.output_tokens,
+                l.cached_read_tokens,
+                l.cached_write_tokens
+             FROM token_stats l
              {}
-               AND session_id IS NOT NULL AND session_id != ''
-               AND session_id IN (
-                   SELECT s.session_id FROM message s
+               AND l.session_id IS NOT NULL AND l.session_id != ''
+               AND l.session_id IN (
+                   SELECT s.session_id FROM token_stats s
                    {}
                      AND s.session_id IS NOT NULL AND s.session_id != ''
                    GROUP BY s.session_id ORDER BY COUNT(*) DESC LIMIT {}
                )
-             ORDER BY session_id, time_created",
+             ORDER BY l.session_id, l.request_ts",
             where_sql, sub_where, SESSION_TOP_N
         );
 
@@ -650,24 +659,25 @@ impl OpenCodeDbService {
             return Ok(Vec::new());
         }
         let db = self.db()?;
-        let (where_sql, mut binds) = Self::build_where_clause(params);
+        let (where_sql, mut binds) = Self::build_where_clause(params, true);
         let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
         for sid in session_ids {
             binds.push(Box::new(sid.clone()));
         }
+        let ts_expr = Self::ts_epoch_col("l.request_ts");
         let sql = format!(
             "SELECT
-                session_id,
-                json_extract(data, '$.modelID') AS model,
-                (time_created / 1000) AS created_at,
-                CAST(json_extract(data, '$.tokens.input') AS INTEGER),
-                CAST(json_extract(data, '$.tokens.output') AS INTEGER),
-                CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
-                CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER)
-             FROM message
+                l.session_id,
+                COALESCE(l.target_model, l.model),
+                {ts_expr},
+                l.input_tokens,
+                l.output_tokens,
+                l.cached_read_tokens,
+                l.cached_write_tokens
+             FROM token_stats l
              {}
-               AND session_id IN ({})
-             ORDER BY session_id, time_created",
+               AND l.session_id IN ({})
+             ORDER BY l.session_id, l.request_ts",
             where_sql, placeholders.join(",")
         );
 
@@ -695,23 +705,23 @@ impl OpenCodeDbService {
             return Ok(Vec::new());
         }
         let db = self.db()?;
-        let (where_sql, mut binds) = Self::build_where_clause(params);
+        let (where_sql, mut binds) = Self::build_where_clause(params, true);
         let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
         for sid in session_ids {
             binds.push(Box::new(sid.clone()));
         }
         let sql = format!(
             "SELECT
-                session_id,
-                json_extract(data, '$.modelID') AS model,
-                SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)) AS input_tokens,
-                SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)) AS output_tokens,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER)) AS cache_read,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER)) AS cache_creation
-             FROM message
+                l.session_id,
+                COALESCE(l.target_model, l.model),
+                SUM(l.input_tokens) AS input_tokens,
+                SUM(l.output_tokens) AS output_tokens,
+                SUM(l.cached_read_tokens) AS cache_read,
+                SUM(l.cached_write_tokens) AS cache_creation
+             FROM token_stats l
              {}
-               AND session_id IN ({})
-             GROUP BY session_id, json_extract(data, '$.modelID')",
+               AND l.session_id IN ({})
+             GROUP BY l.session_id, COALESCE(l.target_model, l.model)",
             where_sql, placeholders.join(",")
         );
 
@@ -739,32 +749,32 @@ impl OpenCodeDbService {
         tier_thresholds: &[i64],
     ) -> Result<Vec<ModelContextTierBucket>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params);
+        let (where_sql, binds) = Self::build_where_clause(params, true);
         let day_expr = Self::tz_date_expr(params);
 
         let mut case_expr = String::from("CASE");
         for &th in tier_thresholds.iter().rev() {
             case_expr.push_str(&format!(
-                " WHEN (CAST(json_extract(data, '$.tokens.input') AS INTEGER) \
-                       + CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER)) >= {} THEN {}",
+                " WHEN (l.input_tokens + l.cached_read_tokens) >= {} THEN {}",
                 th, th
             ));
         }
         case_expr.push_str(" ELSE 0 END");
 
+        let ts_expr = Self::ts_epoch_col("l.request_ts");
         let sql = format!(
             "SELECT
-                json_extract(data, '$.modelID') AS model,
+                COALESCE(l.target_model, l.model),
                 {} AS day,
                 {} AS context_tier,
-                SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)) AS input_tokens,
-                SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)) AS output_tokens,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER)) AS cache_read,
-                SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER)) AS cache_creation,
-                MIN(time_created / 1000) AS representative_epoch
-             FROM message
+                SUM(l.input_tokens) AS input_tokens,
+                SUM(l.output_tokens) AS output_tokens,
+                SUM(l.cached_read_tokens) AS cache_read,
+                SUM(l.cached_write_tokens) AS cache_creation,
+                MIN({ts_expr}) AS representative_epoch
+             FROM token_stats l
              {}
-             GROUP BY json_extract(data, '$.modelID'), day, context_tier",
+             GROUP BY COALESCE(l.target_model, l.model), day, context_tier",
             day_expr, case_expr, where_sql
         );
 
@@ -794,13 +804,12 @@ impl OpenCodeDbService {
         }
         let db = self.db()?;
         let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
+        let ts_expr = Self::ts_epoch_col("request_ts");
         let sql = format!(
-            "SELECT session_id, (time_created / 1000) AS created_at
-             FROM message
+            "SELECT session_id, {} FROM token_stats
              WHERE session_id IN ({})
-               AND json_extract(data, '$.role') = 'assistant'
-             ORDER BY session_id, time_created",
-            placeholders.join(",")
+             ORDER BY session_id, request_ts",
+            ts_expr, placeholders.join(",")
         );
 
         let mut stmt = db.prepare(&sql).map_err(|e| format!("查询会话时间戳失败: {}", e))?;
@@ -822,24 +831,22 @@ impl OpenCodeDbService {
     pub fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String> {
         let db = self.db()?;
         let one_hour_ago = now_epoch_seconds() - REALTIME_WINDOW_SEC;
-        let sql = "
-            SELECT ((time_created / 1000) / 10) * 10 AS bucket,
+        let ts_expr = Self::ts_epoch_col("request_ts");
+        let sql = format!(
+            "SELECT (({ts_expr}) / 10) * 10 AS bucket,
                    COUNT(*) AS requests,
-                   SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)) AS input_tokens,
-                   SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)) AS output_tokens,
-                   SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER)) AS cache_read,
-                   SUM(CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER)) AS cache_creation
-            FROM message
-            WHERE (time_created / 1000) >= ?
-              AND json_extract(data, '$.role') = 'assistant'
-              AND (CAST(json_extract(data, '$.tokens.input') AS INTEGER) > 0
-                   OR CAST(json_extract(data, '$.tokens.output') AS INTEGER) > 0
-                   OR CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER) > 0
-                   OR CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER) > 0)
+                   SUM(input_tokens) AS input_tokens,
+                   SUM(output_tokens) AS output_tokens,
+                   SUM(cached_read_tokens) AS cache_read,
+                   SUM(cached_write_tokens) AS cache_creation
+            FROM token_stats
+            WHERE {ts_expr} >= ?
+              AND (input_tokens > 0 OR output_tokens > 0 OR cached_read_tokens > 0 OR cached_write_tokens > 0)
             GROUP BY bucket
-            ORDER BY bucket";
+            ORDER BY bucket"
+        );
 
-        let mut stmt = db.prepare(sql).map_err(|e| format!("查询实时趋势失败: {}", e))?;
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询实时趋势失败: {}", e))?;
         let rows = stmt
             .query_map(rusqlite::params![one_hour_ago], |row| {
                 Ok(RealtimeBucket {
@@ -858,48 +865,36 @@ impl OpenCodeDbService {
 
     pub fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String> {
         let db = self.db()?;
-        let base_filter = "json_extract(data, '$.role') = 'assistant'
-              AND (CAST(json_extract(data, '$.tokens.input') AS INTEGER) > 0
-                   OR CAST(json_extract(data, '$.tokens.output') AS INTEGER) > 0
-                   OR CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER) > 0
-                   OR CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER) > 0)";
-
-        let sql;
-        let params: Vec<Box<dyn rusqlite::types::ToSql>> = match since {
-            Some(s) => {
-                sql = format!(
-                    "SELECT session_id,
-                           json_extract(data, '$.modelID'),
-                           json_extract(data, '$.providerID'),
-                           (time_created / 1000),
-                           CAST(json_extract(data, '$.tokens.input') AS INTEGER),
-                           CAST(json_extract(data, '$.tokens.output') AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
-                           (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
-                    FROM message
-                    WHERE (time_created / 1000) > ?
-                      AND {}
-                    ORDER BY time_created DESC", base_filter);
-                vec![Box::new(s)]
-            }
-            None => {
-                sql = format!(
-                    "SELECT session_id,
-                           json_extract(data, '$.modelID'),
-                           json_extract(data, '$.providerID'),
-                           (time_created / 1000),
-                           CAST(json_extract(data, '$.tokens.input') AS INTEGER),
-                           CAST(json_extract(data, '$.tokens.output') AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
-                           (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
-                    FROM message
-                    WHERE {}
-                    ORDER BY time_created DESC
-                    LIMIT 500", base_filter);
-                vec![]
-            }
+        let ts_expr = Self::ts_epoch_col("request_ts");
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
+            Some(s) => (format!(
+                "SELECT session_id,
+                       COALESCE(target_model, model),
+                       'AI Proxy',
+                       {ts_expr},
+                       input_tokens,
+                       output_tokens,
+                       cached_read_tokens,
+                       cached_write_tokens,
+                       duration_ms
+                FROM token_stats
+                WHERE {ts_expr} > ?
+                  AND (input_tokens > 0 OR output_tokens > 0 OR cached_read_tokens > 0 OR cached_write_tokens > 0)
+                ORDER BY request_ts DESC"), vec![Box::new(s)]),
+            None => (format!(
+                "SELECT session_id,
+                       COALESCE(target_model, model),
+                       'AI Proxy',
+                       {ts_expr},
+                       input_tokens,
+                       output_tokens,
+                       cached_read_tokens,
+                       cached_write_tokens,
+                       duration_ms
+                FROM token_stats
+                WHERE (input_tokens > 0 OR output_tokens > 0 OR cached_read_tokens > 0 OR cached_write_tokens > 0)
+                ORDER BY request_ts DESC
+                LIMIT 500"), vec![]),
         };
 
         let mut stmt = db.prepare(&sql).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
@@ -927,48 +922,36 @@ impl OpenCodeDbService {
         on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64)),
     ) -> Result<(), String> {
         let db = self.db()?;
-        let base_filter = "json_extract(data, '$.role') = 'assistant'
-              AND (CAST(json_extract(data, '$.tokens.input') AS INTEGER) > 0
-                   OR CAST(json_extract(data, '$.tokens.output') AS INTEGER) > 0
-                   OR CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER) > 0
-                   OR CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER) > 0)";
-
-        let sql;
-        let params: Vec<Box<dyn rusqlite::types::ToSql>> = match since {
-            Some(s) => {
-                sql = format!(
-                    "SELECT session_id,
-                           json_extract(data, '$.modelID'),
-                           json_extract(data, '$.providerID'),
-                           (time_created / 1000),
-                           CAST(json_extract(data, '$.tokens.input') AS INTEGER),
-                           CAST(json_extract(data, '$.tokens.output') AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
-                           (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
-                    FROM message
-                    WHERE (time_created / 1000) > ?
-                      AND {}
-                    ORDER BY time_created DESC", base_filter);
-                vec![Box::new(s)]
-            }
-            None => {
-                sql = format!(
-                    "SELECT session_id,
-                           json_extract(data, '$.modelID'),
-                           json_extract(data, '$.providerID'),
-                           (time_created / 1000),
-                           CAST(json_extract(data, '$.tokens.input') AS INTEGER),
-                           CAST(json_extract(data, '$.tokens.output') AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
-                           (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
-                    FROM message
-                    WHERE {}
-                    ORDER BY time_created DESC
-                    LIMIT 500", base_filter);
-                vec![]
-            }
+        let ts_expr = Self::ts_epoch_col("request_ts");
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
+            Some(s) => (format!(
+                "SELECT session_id,
+                       COALESCE(target_model, model),
+                       'AI Proxy',
+                       {ts_expr},
+                       input_tokens,
+                       output_tokens,
+                       cached_read_tokens,
+                       cached_write_tokens,
+                       duration_ms
+                FROM token_stats
+                WHERE {ts_expr} > ?
+                  AND (input_tokens > 0 OR output_tokens > 0 OR cached_read_tokens > 0 OR cached_write_tokens > 0)
+                ORDER BY request_ts DESC"), vec![Box::new(s)]),
+            None => (format!(
+                "SELECT session_id,
+                       COALESCE(target_model, model),
+                       'AI Proxy',
+                       {ts_expr},
+                       input_tokens,
+                       output_tokens,
+                       cached_read_tokens,
+                       cached_write_tokens,
+                       duration_ms
+                FROM token_stats
+                WHERE (input_tokens > 0 OR output_tokens > 0 OR cached_read_tokens > 0 OR cached_write_tokens > 0)
+                ORDER BY request_ts DESC
+                LIMIT 500"), vec![]),
         };
 
         let mut stmt = db.prepare(&sql).map_err(|e| format!("stream_records 准备失败: {}", e))?;
@@ -996,20 +979,20 @@ impl OpenCodeDbService {
 
     pub fn get_filtered_raw_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params);
+        let (where_sql, binds) = Self::build_where_clause(params, false);
+        let ts_expr = Self::ts_epoch_col("request_ts");
         let sql = format!(
             "SELECT session_id,
-                    json_extract(data, '$.modelID'),
-                    json_extract(data, '$.providerID'),
-                    (time_created / 1000),
-                    CAST(json_extract(data, '$.tokens.input') AS INTEGER),
-                    CAST(json_extract(data, '$.tokens.output') AS INTEGER),
-                    CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
-                    CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
-                    (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
-             FROM message
-             {}
-             ORDER BY time_created",
+                    COALESCE(target_model, model),
+                    'ai-proxy',
+                    {ts_expr},
+                    input_tokens,
+                    output_tokens,
+                    cached_read_tokens,
+                    cached_write_tokens,
+                    duration_ms
+             FROM token_stats {}
+             ORDER BY request_ts",
             where_sql
         );
 
@@ -1031,44 +1014,9 @@ impl OpenCodeDbService {
 
         Self::collect_rows(rows, "读取过滤记录")
     }
-
-    pub fn get_session_titles_from_db(
-        &self,
-        session_ids: &[String],
-    ) -> Result<HashMap<String, (String, String)>, String> {
-        if session_ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let db = self.db()?;
-        let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
-        let sql = format!(
-            "SELECT s.id, s.title, s.directory
-             FROM session s
-             WHERE s.id IN ({})",
-            placeholders.join(",")
-        );
-        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询会话标题失败: {}", e))?;
-        let refs: Vec<&dyn rusqlite::types::ToSql> = session_ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
-        let rows = stmt
-            .query_map(refs.as_slice(), |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })
-            .map_err(|e| format!("查询会话标题失败: {}", e))?;
-
-        let mut result = HashMap::new();
-        for row in rows {
-            let (id, title, directory) = row.map_err(|e| format!("读取会话标题失败: {}", e))?;
-            result.insert(id, (title, directory));
-        }
-        Ok(result)
-    }
 }
 
-impl super::data_source::DataSource for OpenCodeDbService {
+impl super::data_source::DataSource for AiProxyDbService {
     fn open(&mut self, path: &str) -> Result<(), String> { self.open(path) }
     fn close(&mut self) { self.close() }
     fn is_open(&self) -> bool { self.is_open() }
@@ -1096,11 +1044,4 @@ impl super::data_source::DataSource for OpenCodeDbService {
     fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String> { self.get_recent_request_logs_raw(since) }
     fn stream_records(&self, since: Option<i64>, on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64))) -> Result<(), String> { self.stream_records(since, on_record) }
     fn get_filtered_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> { self.get_filtered_raw_records(params) }
-    fn title_source_tag(&self) -> Option<&'static str> { Some("opencode") }
-    fn get_session_titles_from_provider(
-        &self,
-        session_ids: &[String],
-    ) -> Option<Result<HashMap<String, (String, String)>, String>> {
-        Some(self.get_session_titles_from_db(session_ids))
-    }
 }

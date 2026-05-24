@@ -37,6 +37,10 @@ pub trait DataSource: Send + Sync {
     fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String>;
     fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String>;
 
+    /// 按 FilterParams 过滤查询原始请求记录，返回 RawRecord。
+    /// 这是去重管道的入口：所有聚合查询应从这里取数据。
+    fn get_filtered_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String>;
+
     /// 流式查询请求记录。逐行通过 callback 发射，避免一次性加载全部数据到内存。
     /// 默认实现委托给 `get_recent_request_logs_raw`。
     fn stream_records(
@@ -68,6 +72,7 @@ pub trait DataSource: Send + Sync {
 pub enum DbType {
     ExternalDb,
     OpenCode,
+    AiProxy,
 }
 
 impl DbType {
@@ -75,6 +80,7 @@ impl DbType {
         match self {
             DbType::ExternalDb => "CC-Switch",
             DbType::OpenCode => "OpenCode",
+            DbType::AiProxy => "AI-Proxy",
         }
     }
 }
@@ -128,6 +134,18 @@ pub fn detect_db_type(path: &str) -> Result<DbType, String> {
         return Ok(DbType::OpenCode);
     }
 
+    let has_token_stats: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='token_stats'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+
+    if has_token_stats {
+        return Ok(DbType::AiProxy);
+    }
+
     Err("无法识别数据库类型".to_string())
 }
 
@@ -137,157 +155,13 @@ pub fn create_source_entry(path: &str) -> Result<SourceEntry, String> {
     let mut source = match &db_type {
         DbType::ExternalDb => Box::new(super::external_db::ExternalDbService::new()) as Box<dyn DataSource>,
         DbType::OpenCode => Box::new(super::opencode_db::OpenCodeDbService::new()) as Box<dyn DataSource>,
+        DbType::AiProxy => Box::new(super::ai_proxy_db::AiProxyDbService::new()) as Box<dyn DataSource>,
     };
     source.open(path)?;
     Ok(SourceEntry { id, path: path.to_string(), db_type, source })
 }
 
-// ========== 合并函数 ==========
-
-pub fn merge_summaries(results: Vec<SummaryData>) -> SummaryData {
-    if results.is_empty() {
-        return SummaryData {
-            total_requests: 0, success_count: 0,
-            total_input: 0, total_output: 0,
-            total_cache_read: 0, total_cache_creation: 0,
-            avg_latency: 0.0,
-        };
-    }
-    if results.len() == 1 { return results.into_iter().next().unwrap(); }
-
-    let total_requests: i64 = results.iter().map(|r| r.total_requests).sum();
-    let weighted_latency: f64 = results.iter()
-        .map(|r| r.avg_latency * r.total_requests as f64)
-        .sum();
-
-    SummaryData {
-        total_requests,
-        success_count: results.iter().map(|r| r.success_count).sum(),
-        total_input: results.iter().map(|r| r.total_input).sum(),
-        total_output: results.iter().map(|r| r.total_output).sum(),
-        total_cache_read: results.iter().map(|r| r.total_cache_read).sum(),
-        total_cache_creation: results.iter().map(|r| r.total_cache_creation).sum(),
-        avg_latency: if total_requests > 0 { weighted_latency / total_requests as f64 } else { 0.0 },
-    }
-}
-
-pub fn merge_model_breakdowns(results: Vec<Vec<ModelBreakdown>>) -> Vec<ModelBreakdown> {
-    let mut map: HashMap<String, ModelBreakdown> = HashMap::new();
-    for list in results {
-        for mb in list {
-            map.entry(mb.model.clone())
-                .and_modify(|e| {
-                    e.requests += mb.requests;
-                    e.input_tokens += mb.input_tokens;
-                    e.output_tokens += mb.output_tokens;
-                    e.cache_read += mb.cache_read;
-                    e.cache_creation += mb.cache_creation;
-                })
-                .or_insert(mb);
-        }
-    }
-    let mut v: Vec<_> = map.into_values().collect();
-    v.sort_by(|a, b| b.requests.cmp(&a.requests));
-    v
-}
-
-pub fn merge_provider_breakdowns(results: Vec<Vec<ProviderBreakdown>>) -> Vec<ProviderBreakdown> {
-    let mut map: HashMap<String, ProviderBreakdown> = HashMap::new();
-    for list in results {
-        for pb in list {
-            map.entry(pb.provider_id.clone())
-                .and_modify(|e| {
-                    e.requests += pb.requests;
-                    e.successes += pb.successes;
-                })
-                .or_insert(pb);
-        }
-    }
-    let mut v: Vec<_> = map.into_values().map(|mut pb| {
-        pb.success_rate = if pb.requests > 0 { 100.0 * pb.successes as f64 / pb.requests as f64 } else { 0.0 };
-        pb
-    }).collect();
-    v.sort_by(|a, b| b.requests.cmp(&a.requests));
-    v
-}
-
-pub fn merge_combined(results: Vec<Vec<CombinedBreakdownRow>>) -> Vec<CombinedBreakdownRow> {
-    let mut map: HashMap<(String, String, String), CombinedBreakdownRow> = HashMap::new();
-    for list in results {
-        for row in list {
-            let key = (row.day.clone(), row.provider_id.clone(), row.model.clone());
-            map.entry(key)
-                .and_modify(|e| {
-                    e.requests += row.requests;
-                    e.input_tokens += row.input_tokens;
-                    e.output_tokens += row.output_tokens;
-                    e.cache_read += row.cache_read;
-                    e.cache_creation += row.cache_creation;
-                    e.latency_sum += row.latency_sum;
-                })
-                .or_insert(row);
-        }
-    }
-    let mut v: Vec<_> = map.into_values().collect();
-    v.sort_by(|a, b| (&a.day, &a.provider_id, &a.model).cmp(&(&b.day, &b.provider_id, &b.model)));
-    v
-}
-
-pub fn merge_provider_model_tokens(results: Vec<Vec<ProviderModelToken>>) -> Vec<ProviderModelToken> {
-    let mut map: HashMap<(String, String), ProviderModelToken> = HashMap::new();
-    for list in results {
-        for pmt in list {
-            let key = (pmt.provider_id.clone(), pmt.model.clone());
-            map.entry(key)
-                .and_modify(|e| {
-                    e.input_tokens += pmt.input_tokens;
-                    e.output_tokens += pmt.output_tokens;
-                    e.cache_read += pmt.cache_read;
-                    e.cache_creation += pmt.cache_creation;
-                })
-                .or_insert(pmt);
-        }
-    }
-    map.into_values().collect()
-}
-
-pub fn merge_daily_trends(results: Vec<Vec<DailyTrendRow>>) -> Vec<DailyTrendRow> {
-    struct Acc { requests: i64, weighted_latency: f64 }
-    let mut data: HashMap<(String, String), Acc> = HashMap::new();
-    let mut map: HashMap<(String, String), DailyTrendRow> = HashMap::new();
-    for list in results {
-        for row in list {
-            let key = (row.day.clone(), row.model.clone());
-            let entry = map.entry(key.clone()).or_insert_with(|| DailyTrendRow {
-                day: row.day.clone(),
-                model: row.model.clone(),
-                requests: 0,
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read: 0,
-                cache_creation: 0,
-                avg_latency: 0.0,
-            });
-            entry.requests += row.requests;
-            entry.input_tokens += row.input_tokens;
-            entry.output_tokens += row.output_tokens;
-            entry.cache_read += row.cache_read;
-            entry.cache_creation += row.cache_creation;
-
-            let acc = data.entry(key).or_insert(Acc { requests: 0, weighted_latency: 0.0 });
-            acc.requests += row.requests;
-            acc.weighted_latency += row.avg_latency * row.requests as f64;
-        }
-    }
-    let mut v: Vec<_> = map.into_values().map(|mut row| {
-        if let Some(acc) = data.get(&(row.day.clone(), row.model.clone())) {
-            row.avg_latency = if acc.requests > 0 { acc.weighted_latency / acc.requests as f64 } else { 0.0 };
-        }
-        row
-    }).collect();
-    v.sort_by(|a, b| (&a.day, &a.model).cmp(&(&b.day, &b.model)));
-    v
-}
+// ========== 合并函数（供 realtime 等仍用 per-source SQL 聚合的查询使用）==========
 
 pub fn merge_realtime_buckets(results: Vec<Vec<RealtimeBucket>>) -> Vec<RealtimeBucket> {
     let mut map: HashMap<i64, RealtimeBucket> = HashMap::new();

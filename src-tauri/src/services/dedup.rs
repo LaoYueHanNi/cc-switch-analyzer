@@ -1,5 +1,16 @@
 use std::collections::HashSet;
 
+use crate::models::RawRecord;
+
+/// 对 RawRecord 做 RequestFingerprint 去重，先到先保留。
+pub fn dedup_records(records: Vec<RawRecord>) -> Vec<RawRecord> {
+    let mut seen = HashSet::new();
+    records.into_iter().filter(|r| {
+        let fp = RequestFingerprint::new(&r.session_id, &r.model, r.input_tokens, r.output_tokens, r.created_at);
+        seen.insert(fp)
+    }).collect()
+}
+
 /// 请求级去重缓存。
 /// 维护跨刷新周期的去重状态，支持增量合并。
 pub struct RequestCache {
@@ -30,7 +41,7 @@ impl RequestCache {
     pub fn merge(&mut self, new_records: Vec<crate::models::SessionRequestToken>) -> usize {
         let mut added = 0;
         for record in new_records {
-            let fp = RequestFingerprint::new(&record.session_id, &record.model, record.input_tokens, record.output_tokens);
+            let fp = RequestFingerprint::new(&record.session_id, &record.model, record.input_tokens, record.output_tokens, record.created_at);
             if self.seen.insert(fp) {
                 self.records.push(record);
                 added += 1;
@@ -40,7 +51,7 @@ impl RequestCache {
         if self.records.len() > self.max_size {
             self.records.sort_by(|a, b| b.created_at.cmp(&a.created_at));
             for r in &self.records[self.max_size..] {
-                self.seen.remove(&RequestFingerprint::new(&r.session_id, &r.model, r.input_tokens, r.output_tokens));
+                self.seen.remove(&RequestFingerprint::new(&r.session_id, &r.model, r.input_tokens, r.output_tokens, r.created_at));
             }
             self.records.truncate(self.max_size);
         }
@@ -57,7 +68,8 @@ impl RequestCache {
 /// 4 字段：session_id + model + input_tokens + output_tokens
 ///
 /// 设计依据：
-/// - 不含 created_at：同一次 API 调用在两源间可能有秒级偏差
+/// - 不含 created_at：不同源记录时间语义不同（请求开始 vs 请求结束），
+///   差值可达数分钟，无法用时间桶可靠匹配
 /// - 不含 provider_id：同一请求可能被不同源以不同 provider 记录
 /// - 不含 cache_*：不参与判定，但同 fingerprint 的 cache 值理论上一致
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
@@ -69,7 +81,7 @@ pub struct RequestFingerprint {
 }
 
 impl RequestFingerprint {
-    pub fn new(session_id: &str, model: &str, input_tokens: i64, output_tokens: i64) -> Self {
+    pub fn new(session_id: &str, model: &str, input_tokens: i64, output_tokens: i64, _created_at: i64) -> Self {
         Self {
             session_id: session_id.to_string(),
             model: model.to_string(),
@@ -86,7 +98,7 @@ pub fn dedup_request_tokens(items: Vec<crate::models::SessionRequestToken>) -> V
     items
         .into_iter()
         .filter(|item| {
-            let fp = RequestFingerprint::new(&item.session_id, &item.model, item.input_tokens, item.output_tokens);
+            let fp = RequestFingerprint::new(&item.session_id, &item.model, item.input_tokens, item.output_tokens, item.created_at);
             seen.insert(fp)
         })
         .collect()
@@ -112,30 +124,30 @@ mod tests {
 
     #[test]
     fn fingerprint_equality() {
-        let a = RequestFingerprint::new("s1", "m1", 100, 200);
-        let b = RequestFingerprint::new("s1", "m1", 100, 200);
+        let a = RequestFingerprint::new("s1", "m1", 100, 200, 1000);
+        let b = RequestFingerprint::new("s1", "m1", 100, 200, 2000);
         assert_eq!(a, b);
     }
 
     #[test]
     fn fingerprint_inequality_different_session() {
-        let a = RequestFingerprint::new("s1", "m1", 100, 200);
-        let b = RequestFingerprint::new("s2", "m1", 100, 200);
+        let a = RequestFingerprint::new("s1", "m1", 100, 200, 1000);
+        let b = RequestFingerprint::new("s2", "m1", 100, 200, 1000);
         assert_ne!(a, b);
     }
 
     #[test]
     fn fingerprint_inequality_different_tokens() {
-        let a = RequestFingerprint::new("s1", "m1", 100, 200);
-        let b = RequestFingerprint::new("s1", "m1", 100, 300);
+        let a = RequestFingerprint::new("s1", "m1", 100, 200, 1000);
+        let b = RequestFingerprint::new("s1", "m1", 100, 300, 1000);
         assert_ne!(a, b);
     }
 
     #[test]
     fn fingerprint_ignores_timestamp() {
-        // 同一请求在两源间可能有秒级时间偏差，指纹不应包含 created_at
-        let a = RequestFingerprint::new("s1", "m1", 100, 200);
-        let b = RequestFingerprint::new("s1", "m1", 100, 200);
+        // 不同源记录时间语义不同（请求开始 vs 请求结束），时间差可达数分钟
+        let a = RequestFingerprint::new("s1", "m1", 100, 200, 1000);
+        let b = RequestFingerprint::new("s1", "m1", 100, 200, 9999);
         assert_eq!(a, b);
     }
 

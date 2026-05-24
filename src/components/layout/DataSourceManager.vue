@@ -55,8 +55,8 @@ defineEmits<{ 'update:show': [value: boolean] }>()
 const dbStore = useDatabaseStore()
 const { addDatabase, removeDatabase } = useDatabase()
 
-interface DefaultPaths { ccSwitch: string | null; opencode: string | null }
-const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null })
+interface DefaultPaths { ccSwitch: string | null; opencode: string | null; aiProxy: string | null }
+const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null })
 
 async function loadDefaultPaths(): Promise<void> {
   try {
@@ -78,13 +78,19 @@ const slots = computed(() => [
     path: dbStore.sources.find(s => s.dbType === 'OpenCode')?.path || '',
     defaultPath: defaultPaths.value.opencode,
   },
+  {
+    key: 'ai-proxy',
+    label: 'AI-Proxy',
+    path: dbStore.sources.find(s => s.dbType === 'AI-Proxy')?.path || '',
+    defaultPath: defaultPaths.value.aiProxy,
+  },
 ])
 
 async function onSelect(key: string): Promise<void> {
   const slot = slots.value.find(s => s.key === key)
   const filePath = await platformAdapter.pickDatabaseFile(slot?.defaultPath || undefined)
   if (!filePath) return
-  const dbType = key === 'cc-switch' ? 'CC-Switch' : 'OpenCode'
+  const dbType = key === 'cc-switch' ? 'CC-Switch' : key === 'opencode' ? 'OpenCode' : 'AI-Proxy'
   const existing = dbStore.sources.find(s => s.dbType === dbType)
   if (existing) {
     await removeDatabase(existing.id)
@@ -93,7 +99,7 @@ async function onSelect(key: string): Promise<void> {
 }
 
 async function onRemove(key: string): Promise<void> {
-  const dbType = key === 'cc-switch' ? 'CC-Switch' : 'OpenCode'
+  const dbType = key === 'cc-switch' ? 'CC-Switch' : key === 'opencode' ? 'OpenCode' : 'AI-Proxy'
   const src = dbStore.sources.find(s => s.dbType === dbType)
   if (src) {
     await removeDatabase(src.id)
@@ -179,6 +185,15 @@ async function toggleService(enabled: boolean): Promise<void> {
 }
 
 .source-type.opencode:hover {
+  opacity: 0.85;
+}
+
+.source-type.ai-proxy {
+  background: var(--color-green);
+  color: #fff;
+}
+
+.source-type.ai-proxy:hover {
   opacity: 0.85;
 }
 
