@@ -360,10 +360,26 @@ pub struct DefaultPaths {
 #[tauri::command]
 pub fn get_default_paths() -> Result<DefaultPaths, String> {
     let cc_switch = crate::utils::get_default_db_path().ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()));
+        .map(|p| best_default_path(&p));
     let opencode = crate::utils::get_default_opencode_db_path().ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()));
+        .map(|p| best_default_path(&p));
     let ai_proxy = crate::utils::get_default_ai_proxy_db_path().ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()));
+        .map(|p| best_default_path(&p));
     Ok(DefaultPaths { cc_switch, opencode, ai_proxy })
+}
+
+/// 为文件选择对话框选择最佳默认路径：
+/// 文件存在 → 用文件路径；父目录存在 → 用父目录；否则 → home 目录
+fn best_default_path(target: &std::path::Path) -> String {
+    if target.exists() {
+        target.to_string_lossy().to_string()
+    } else if let Some(parent) = target.parent() {
+        if parent.exists() {
+            parent.to_string_lossy().to_string()
+        } else {
+            dirs::home_dir().map(|h| h.to_string_lossy().to_string()).unwrap_or_else(|| ".".to_string())
+        }
+    } else {
+        dirs::home_dir().map(|h| h.to_string_lossy().to_string()).unwrap_or_else(|| ".".to_string())
+    }
 }
