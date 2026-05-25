@@ -954,16 +954,18 @@ impl ExternalDbService {
         let mut stmt = db.prepare(&sql).map_err(|e| format!("查询过滤记录失败: {}", e))?;
         let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
         let rows = stmt.query_map(refs.as_slice(), |row| {
+            let provider_id: String = row.get::<_, Option<String>>(2)?.unwrap_or_default();
             Ok(RawRecord {
                 session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                provider_id: provider_id.clone(),
                 created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                 input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
                 output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
                 cache_read: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                 cache_creation: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 latency: row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+                is_codex: provider_id.contains("codex"),
             })
         }).map_err(|e| format!("查询过滤记录失败: {}", e))?;
 

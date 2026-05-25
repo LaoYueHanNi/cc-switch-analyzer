@@ -13,6 +13,7 @@ pub struct RawRecord {
     pub cache_read: i64,
     pub cache_creation: i64,
     pub latency: i64,
+    pub is_codex: bool,
 }
 
 // ========== 查询参数 ==========

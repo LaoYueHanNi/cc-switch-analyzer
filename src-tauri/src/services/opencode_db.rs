@@ -1026,6 +1026,7 @@ impl OpenCodeDbService {
                 cache_read: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                 cache_creation: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 latency: row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+                is_codex: false,
             })
         }).map_err(|e| format!("查询过滤记录失败: {}", e))?;
 

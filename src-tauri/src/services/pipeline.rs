@@ -90,7 +90,13 @@ pub fn fetch_deduped_records(
         handles.into_iter().filter_map(|h| h.join().unwrap()).collect()
     });
 
-    let flat: Vec<RawRecord> = all_records.into_iter().flatten().collect();
+    let mut flat: Vec<RawRecord> = all_records.into_iter().flatten().collect();
+    // AI Proxy 优先：去重先到先保留，AI Proxy 有原始 target_model 和准确 input
+    flat.sort_by(|a, b| {
+        let a_priority = a.provider_id == "ai-proxy";
+        let b_priority = b.provider_id == "ai-proxy";
+        b_priority.cmp(&a_priority)
+    });
     Ok(super::dedup::dedup_records(flat))
 }
 

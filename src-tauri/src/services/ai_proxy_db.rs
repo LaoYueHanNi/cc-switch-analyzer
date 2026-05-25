@@ -990,7 +990,8 @@ impl AiProxyDbService {
                     output_tokens,
                     cached_read_tokens,
                     cached_write_tokens,
-                    duration_ms
+                    duration_ms,
+                    request_type
              FROM token_stats {}
              ORDER BY request_ts",
             where_sql
@@ -999,6 +1000,7 @@ impl AiProxyDbService {
         let mut stmt = db.prepare(&sql).map_err(|e| format!("查询过滤记录失败: {}", e))?;
         let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
         let rows = stmt.query_map(refs.as_slice(), |row| {
+            let request_type: Option<String> = row.get(9).ok().flatten();
             Ok(RawRecord {
                 session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
@@ -1009,6 +1011,7 @@ impl AiProxyDbService {
                 cache_read: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                 cache_creation: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 latency: row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+                is_codex: request_type.as_deref() == Some("responses"),
             })
         }).map_err(|e| format!("查询过滤记录失败: {}", e))?;
 

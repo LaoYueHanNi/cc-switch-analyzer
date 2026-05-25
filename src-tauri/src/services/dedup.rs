@@ -3,10 +3,20 @@ use std::collections::HashSet;
 use crate::models::RawRecord;
 
 /// 对 RawRecord 做 RequestFingerprint 去重，先到先保留。
+/// codex 记录使用归一化指纹（不含 model，input 减去 cache_read）。
 pub fn dedup_records(records: Vec<RawRecord>) -> Vec<RawRecord> {
     let mut seen = HashSet::new();
     records.into_iter().filter(|r| {
-        let fp = RequestFingerprint::new(&r.session_id, &r.model, r.input_tokens, r.output_tokens);
+        let fp = if r.is_codex {
+            let normalized_input = if r.provider_id == "ai-proxy" {
+                r.input_tokens
+            } else {
+                r.input_tokens.saturating_sub(r.cache_read)
+            };
+            RequestFingerprint::new_codex(&r.session_id, normalized_input, r.output_tokens)
+        } else {
+            RequestFingerprint::new(&r.session_id, &r.model, r.input_tokens, r.output_tokens)
+        };
         seen.insert(fp)
     }).collect()
 }
@@ -65,28 +75,37 @@ impl RequestCache {
 }
 
 /// 请求指纹 — 用于跨数据源去重
-/// 4 字段：session_id + model + input_tokens + output_tokens
-///
-/// 设计依据：
-/// - 不含 created_at：不同源记录时间语义不同（请求开始 vs 请求结束），
-///   差值可达数分钟，无法用时间桶可靠匹配
-/// - 不含 provider_id：同一请求可能被不同源以不同 provider 记录
-/// - 不含 cache_*：不参与判定，但同 fingerprint 的 cache 值理论上一致
+/// codex: session_id + output_tokens（model 不参与，input 归一化）
+/// 非codex: session_id + model + input_tokens + output_tokens
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct RequestFingerprint {
     session_id: String,
     model: String,
     input_tokens: i64,
     output_tokens: i64,
+    is_codex: bool,
 }
 
 impl RequestFingerprint {
+    /// 非codex 指纹（is_codex = false）
     pub fn new(session_id: &str, model: &str, input_tokens: i64, output_tokens: i64) -> Self {
         Self {
             session_id: session_id.to_string(),
             model: model.to_string(),
             input_tokens,
             output_tokens,
+            is_codex: false,
+        }
+    }
+
+    /// codex 指纹：不用 model，input 已归一化（不含 cache_read）
+    pub fn new_codex(session_id: &str, normalized_input: i64, output_tokens: i64) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            model: String::new(),
+            input_tokens: normalized_input,
+            output_tokens,
+            is_codex: true,
         }
     }
 }
@@ -306,5 +325,95 @@ mod tests {
         // clear 后可以重新插入相同数据
         let added = cache.merge(vec![token("s1", "m1", 1000, 100, 200)]);
         assert_eq!(added, 1);
+    }
+
+    // ========== codex 去重 ==========
+
+    fn raw_record(session_id: &str, model: &str, provider_id: &str, input: i64, output: i64, cache_read: i64, is_codex: bool) -> RawRecord {
+        RawRecord {
+            session_id: session_id.to_string(),
+            model: model.to_string(),
+            provider_id: provider_id.to_string(),
+            created_at: 0,
+            input_tokens: input,
+            output_tokens: output,
+            cache_read,
+            cache_creation: 0,
+            latency: 0,
+            is_codex,
+        }
+    }
+
+    #[test]
+    fn codex_cross_source_dedup() {
+        // CCS: input=27505 (含 cache_read=26624), model=gpt-5.4-mini
+        // AI Proxy: input=881 (不含 cache_read), model=deepseek-v4-flash
+        // 归一化后 CCS input: 27505-26624=881，两边指纹应相同
+        let ccs = raw_record("s1", "gpt-5.4-mini", "_codex_session", 27505, 16857, 26624, true);
+        let aiproxy = raw_record("s1", "deepseek-v4-flash", "ai-proxy", 881, 16857, 26624, true);
+
+        let result = dedup_records(vec![aiproxy, ccs]);
+        assert_eq!(result.len(), 1);
+        // 先到先保留：AI Proxy 在前，保留 target_model
+        assert_eq!(result[0].model, "deepseek-v4-flash");
+        assert_eq!(result[0].provider_id, "ai-proxy");
+    }
+
+    #[test]
+    fn codex_ccs_only_preserved() {
+        // 只有 CCS codex 记录，无匹配，应保留
+        let ccs = raw_record("s1", "gpt-5.3-codex", "_codex_session", 15468, 7923, 13952, true);
+        let result = dedup_records(vec![ccs]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].model, "gpt-5.3-codex");
+    }
+
+    #[test]
+    fn codex_and_noncodex_never_cross() {
+        // codex 和非 codex 即使 session_id/output_tokens 相同也不应交叉
+        let codex = raw_record("s1", "deepseek-v4-flash", "ai-proxy", 881, 200, 0, true);
+        let non_codex = raw_record("s1", "deepseek-v4-flash", "ai-proxy", 881, 200, 0, false);
+
+        let result = dedup_records(vec![codex, non_codex]);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn codex_fingerprint_ignores_model() {
+        // codex 指纹不包含 model，不同 model 应去重
+        let a = raw_record("s1", "model-a", "ai-proxy", 100, 200, 0, true);
+        let b = raw_record("s1", "model-b", "ai-proxy", 100, 200, 0, true);
+
+        let result = dedup_records(vec![a, b]);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn codex_ai_proxy_priority() {
+        // AI Proxy 排在前面应被优先保留（由调用方排序保证）
+        let ccs = raw_record("s1", "gpt-5.4-mini", "_codex_session", 1000, 500, 900, true);
+        let aiproxy = raw_record("s1", "deepseek-v4-flash", "ai-proxy", 100, 500, 900, true);
+
+        let result = dedup_records(vec![aiproxy.clone(), ccs]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].provider_id, "ai-proxy");
+        // AI Proxy 的 input 不含 cache，是准确值
+        assert_eq!(result[0].input_tokens, 100);
+    }
+
+    #[test]
+    fn codex_fingerprint_equality() {
+        // CCS input=1000 cache_read=900 → 归一化 100
+        // AI Proxy input=100 → 归一化 100
+        let fp_ccs = {
+            let r = raw_record("s1", "gpt-5.3-codex", "_codex_session", 1000, 200, 900, true);
+            let normalized = r.input_tokens.saturating_sub(r.cache_read);
+            RequestFingerprint::new_codex(&r.session_id, normalized, r.output_tokens)
+        };
+        let fp_aiproxy = {
+            let r = raw_record("s1", "deepseek-v4-flash", "ai-proxy", 100, 200, 900, true);
+            RequestFingerprint::new_codex(&r.session_id, r.input_tokens, r.output_tokens)
+        };
+        assert_eq!(fp_ccs, fp_aiproxy);
     }
 }
