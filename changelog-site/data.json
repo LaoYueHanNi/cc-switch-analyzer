@@ -1,6 +1,22 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-05-25",
+    "commits": [
+      {
+        "hash": "d2c1ffb",
+        "subject": "fix: 切换数据源启用状态时保持当前日期筛选范围",
+        "date": "2026-05-25"
+      },
+      {
+        "hash": "7f69d9a",
+        "subject": "fix: codex 请求跨数据源去重，归一化 model 和 input_tokens 指纹",
+        "date": "2026-05-25"
+      }
+    ]
+  },
+  {
+    "version": "0.7.3",
     "date": "2026-05-24",
     "commits": [
       {
