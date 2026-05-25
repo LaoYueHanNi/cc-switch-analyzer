@@ -126,7 +126,24 @@ export function useDatabase() {
 
   async function refreshAfterToggle(): Promise<void> {
     queryStore.reset()
-    await updateFilterOptions()
+    await updateFilterOptionsPreserveDate()
+    dbStore.refreshVersion++
+  }
+
+  async function updateFilterOptionsPreserveDate(): Promise<void> {
+    try {
+      const options = await platformAdapter.getFilterOptions()
+      if (options.dateRange && options.dateRange.min > 0) {
+        filterStore.setOptions(
+          options.providers || [],
+          options.models || [],
+          options.dateRange.min,
+          options.dateRange.max
+        )
+      }
+    } catch (err: any) {
+      console.error('[useDatabase] 更新筛选选项失败:', err)
+    }
   }
 
   return {
