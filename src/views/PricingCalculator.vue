@@ -353,6 +353,7 @@ async function onRestorePricing(modelId: string): Promise<void> {
 function onAddTimeRule(modelId: string): void {
   currentTimeRuleModelId.value = modelId
   editingTimeRule.value = null
+  viewingCloudRule.value = null
   showTimeDialog.value = true
 }
 
