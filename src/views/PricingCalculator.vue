@@ -493,14 +493,6 @@ watch(() => dbStore.hasDatabase, async (val) => {
     await loadPricingData()
   }
 }, { immediate: true })
-
-// 时间弹窗关闭时清理查看状态
-watch(showTimeDialog, (val) => {
-  if (!val) {
-    viewingCloudRule.value = null
-    editingTimeRule.value = null
-  }
-})
 </script>
 
 <style scoped>
