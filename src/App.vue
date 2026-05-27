@@ -38,11 +38,11 @@ const themeOverrides = computed(() => ({
 }
 
 :root {
-  --bg-base: #f5f5f5;
-  --bg-card: #fff;
-  --bg-card-alt: #fafafa;
-  --bg-hover: #f0f0f0;
-  --bg-flash: #e8f5e9;
+  --bg-base: #e2e2e2;
+  --bg-card: #eaeaea;
+  --bg-card-alt: #e5e5e5;
+  --bg-hover: #dadada;
+  --bg-flash: #d8e8d8;
 
   --text-primary: #333;
   --text-secondary: #555;
@@ -50,9 +50,9 @@ const themeOverrides = computed(() => ({
   --text-muted: #999;
   --text-faint: #bbb;
 
-  --border-main: #e8e8e8;
-  --border-light: #f0f0f0;
-  --border-faint: #f2f2f2;
+  --border-main: #dcdcdc;
+  --border-light: #e5e5e5;
+  --border-faint: #ececec;
 
   --color-cost: #e74c3c;
   --color-green: #16a085;
