@@ -2,7 +2,7 @@
   <div class="project-card" @click="$emit('click')">
     <div class="card-header">
       <span class="project-name" :title="projectDir">{{ displayName }}</span>
-      <button class="terminal-btn" @click.stop="$emit('terminal', projectDir)" title="打开终端启动 Claude">
+      <button class="terminal-btn" @click.stop="$emit('terminal', projectDir)" @contextmenu.prevent="$emit('contextTerminal', projectDir, $event)" title="打开终端启动 Claude（右键选择供应商配置）">
         &gt;_
       </button>
     </div>
@@ -42,7 +42,7 @@ const props = defineProps<{
   totalTokens: number
 }>()
 
-defineEmits<{ click: []; terminal: [dir: string] }>()
+defineEmits<{ click: []; terminal: [dir: string]; contextTerminal: [dir: string, event: MouseEvent] }>()
 
 const copied = ref(false)
 

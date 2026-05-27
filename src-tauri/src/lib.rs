@@ -192,6 +192,9 @@ pub fn run() {
             commands::session_manager::open_claude_terminal,
             commands::session_manager::resume_claude_session,
             commands::session_manager::delete_claude_session,
+            commands::session_manager::get_ccswitch_providers,
+            commands::session_manager::open_claude_terminal_with_provider,
+            commands::session_manager::resume_claude_session_with_provider,
             // 定价操作
             commands::pricing::get_all_pricing,
             commands::pricing::get_pricing_overrides,

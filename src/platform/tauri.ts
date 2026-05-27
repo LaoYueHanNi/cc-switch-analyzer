@@ -192,5 +192,14 @@ export const platformAdapter: PlatformAdapter = {
   },
   async deleteClaudeSession(sessionId: string): Promise<boolean> {
     return invoke<boolean>('delete_claude_session', { sessionId })
+  },
+  async getCcswitchProviders(dbPath: string): Promise<{ id: string; name: string; hasEnv: boolean }[]> {
+    return invoke<{ id: string; name: string; hasEnv: boolean }[]>('get_ccswitch_providers', { dbPath })
+  },
+  async openClaudeTerminalWithProvider(projectDir: string, providerId: string, dbPath: string): Promise<void> {
+    return invoke<void>('open_claude_terminal_with_provider', { projectDir, providerId, dbPath })
+  },
+  async resumeClaudeSessionWithProvider(sessionId: string, providerId: string, dbPath: string, projectDir?: string): Promise<void> {
+    return invoke<void>('resume_claude_session_with_provider', { sessionId, projectDir: projectDir || null, providerId, dbPath })
   }
 }

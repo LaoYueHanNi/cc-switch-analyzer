@@ -158,4 +158,7 @@ export interface PlatformAdapter {
   openClaudeTerminal(projectDir: string): Promise<void>
   resumeClaudeSession(sessionId: string, projectDir?: string): Promise<void>
   deleteClaudeSession(sessionId: string): Promise<boolean>
+  getCcswitchProviders(dbPath: string): Promise<{ id: string; name: string; hasEnv: boolean }[]>
+  openClaudeTerminalWithProvider(projectDir: string, providerId: string, dbPath: string): Promise<void>
+  resumeClaudeSessionWithProvider(sessionId: string, providerId: string, dbPath: string, projectDir?: string): Promise<void>
 }

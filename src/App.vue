@@ -16,6 +16,8 @@ const themeStore = useThemeStore()
 
 onMounted(() => {
   themeStore.init()
+  // 全局禁用浏览器右键菜单（Tauri webview）
+  document.addEventListener('contextmenu', e => e.preventDefault())
 })
 
 const themeOverrides = computed(() => ({

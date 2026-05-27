@@ -27,6 +27,7 @@
           :total-tokens="group.totalTokens"
           @click="enterProject(group.projectDir)"
           @terminal="onOpenTerminal"
+          @contextTerminal="onContextTerminal"
         />
       </div>
 
@@ -66,13 +67,22 @@
               :model-breakdown="s.modelBreakdown"
             />
             <div class="wrap-actions">
-              <span class="action-terminal" @click="onResume(s.sessionId, s.projectDir)" title="在终端恢复会话">&gt;_</span>
+              <span class="action-terminal" @click="onResume(s.sessionId, s.projectDir)" @contextmenu.prevent="onContextTerminalForSession(s.sessionId, s.projectDir, $event)" title="在终端恢复会话（右键选择供应商配置）">&gt;_</span>
               <span v-if="s.sourcePath" class="action-delete" @click="confirmDelete(s)" title="删除会话">删除</span>
             </div>
           </div>
         </div>
       </div>
     </template>
+
+    <!-- 供应商配置选择右键菜单 -->
+    <Teleport to="body">
+      <div v-if="providerDropdown.show" class="provider-ctx-overlay" @click="providerDropdown.show = false" @contextmenu.prevent="providerDropdown.show = false" />
+      <div v-if="providerDropdown.show" class="provider-ctx-menu" :style="{ left: providerDropdown.x + 'px', top: providerDropdown.y + 'px' }">
+        <div class="provider-ctx-header">选择供应商配置</div>
+        <div v-for="item in providerDropdown.items" :key="item.id" class="provider-ctx-item" @click="onProviderItemSelect(item.id)">{{ item.name }}</div>
+      </div>
+    </Teleport>
 
     <!-- 删除确认 -->
     <div v-if="deleteTarget" class="confirm-overlay" @click.self="deleteTarget = null">
@@ -92,7 +102,7 @@
 
 <script setup lang="ts">
 defineOptions({ name: 'SessionAnalysis' })
-import { ref, computed, watch, onActivated, onDeactivated } from 'vue'
+import { ref, reactive, computed, watch, nextTick, onActivated, onDeactivated } from 'vue'
 import { NSpin } from 'naive-ui'
 import { platformAdapter } from '@/platform'
 import { useDatabaseStore } from '@/stores/database'
@@ -103,6 +113,22 @@ import type { ProjectGroupStats, ProjectSessionDetail } from '@/platform/types'
 
 const dbStore = useDatabaseStore()
 const filterStore = useFilterStore()
+
+// CC-Switch 数据库路径
+const ccswitchDbPath = computed(() =>
+  dbStore.sources.find(s => s.dbType === 'CC-Switch')?.path
+)
+
+// 供应商配置右键菜单状态
+const providerDropdown = reactive({
+  show: false,
+  x: 0,
+  y: 0,
+  items: [] as { id: string; name: string }[],
+  mode: 'new' as 'new' | 'resume',
+  projectDir: '',
+  sessionId: '',
+})
 
 const projectGroups = ref<ProjectGroupStats[]>([])
 const sessionDetails = ref<ProjectSessionDetail[]>([])
@@ -165,6 +191,90 @@ async function onResume(sessionId: string, projectDir?: string) {
 async function onOpenTerminal(projectDir: string) {
   try { await platformAdapter.openClaudeTerminal(projectDir) }
   catch (err: any) { console.error('[SessionAnalysis] 打开终端失败:', err.message || err) }
+}
+
+async function loadProviderItems(): Promise<{ id: string; name: string }[]> {
+  const dbPath = ccswitchDbPath.value
+  if (!dbPath) return []
+  try {
+    const providers = await platformAdapter.getCcswitchProviders(dbPath)
+    return providers.filter(p => p.hasEnv)
+  } catch (err: any) {
+    console.error('[SessionAnalysis] 获取供应商列表失败:', err.message || err)
+    return []
+  }
+}
+
+function clampPosition(x: number, y: number): { x: number; y: number } {
+  const DROPDOWN_W = 180
+  const MARGIN = 8
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  return {
+    x: Math.min(x, vw - DROPDOWN_W - MARGIN),
+    y: Math.min(y, vh - MARGIN),
+  }
+}
+
+function menuPositionFromElement(el: HTMLElement): { x: number; y: number } {
+  const rect = el.getBoundingClientRect()
+  const zoom = parseFloat(getComputedStyle(document.body).zoom) || 1
+  const max_x = window.innerWidth / zoom - 8
+  const max_y = window.innerHeight / zoom - 8
+  let x = rect.left / zoom
+  let y = (rect.bottom + 4) / zoom
+  // 右边溢出时，右对齐按钮
+  if (x + 130 > max_x) x = Math.max(8, rect.right / zoom - 130)
+  if (y + 80 > max_y) y = Math.max(8, rect.top / zoom - 80)
+  return { x, y }
+}
+
+async function onContextTerminal(projectDir: string, event: MouseEvent) {
+  if (!ccswitchDbPath.value) return
+  const items = await loadProviderItems()
+  if (items.length === 0) return
+  providerDropdown.items = items
+  providerDropdown.mode = 'new'
+  providerDropdown.projectDir = projectDir
+  providerDropdown.sessionId = ''
+  const el = (event.target as HTMLElement).closest('button') as HTMLElement
+  nextTick(() => {
+    const pos = el ? menuPositionFromElement(el) : clampPosition(event.clientX, event.clientY)
+    providerDropdown.x = pos.x
+    providerDropdown.y = pos.y
+    providerDropdown.show = true
+  })
+}
+
+async function onContextTerminalForSession(sessionId: string, projectDir: string | undefined, event: MouseEvent) {
+  if (!ccswitchDbPath.value) return
+  const items = await loadProviderItems()
+  if (items.length === 0) return
+  providerDropdown.items = items
+  providerDropdown.mode = 'resume'
+  providerDropdown.projectDir = projectDir || ''
+  providerDropdown.sessionId = sessionId
+  const el = (event.target as HTMLElement).closest('.action-terminal') as HTMLElement
+  nextTick(() => {
+    const pos = el ? menuPositionFromElement(el) : clampPosition(event.clientX, event.clientY)
+    providerDropdown.x = pos.x
+    providerDropdown.y = pos.y
+    providerDropdown.show = true
+  })
+}
+
+async function onProviderItemSelect(providerId: string) {
+  providerDropdown.show = false
+  const dbPath = ccswitchDbPath.value!
+  try {
+    if (providerDropdown.mode === 'new') {
+      await platformAdapter.openClaudeTerminalWithProvider(providerDropdown.projectDir, providerId, dbPath)
+    } else {
+      await platformAdapter.resumeClaudeSessionWithProvider(providerDropdown.sessionId, providerId, dbPath, providerDropdown.projectDir || undefined)
+    }
+  } catch (err: any) {
+    console.error('[SessionAnalysis] 携带配置打开终端失败:', err.message || err)
+  }
 }
 
 function confirmDelete(s: ProjectSessionDetail) { deleteTarget.value = s }
@@ -307,3 +417,39 @@ onDeactivated(() => { isActive.value = false })
 .confirm-btn.danger { background: var(--color-cost); color: #fff; }
 .confirm-btn.danger:hover { opacity: 0.85; }
 </style>
+
+<style>
+/* 供应商配置右键菜单 */
+.provider-ctx-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+}
+.provider-ctx-menu {
+  position: fixed; z-index: 10000;
+  min-width: 120px; max-width: 220px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-main);
+  border-radius: 6px;
+  box-shadow: var(--shadow-card);
+  padding: 3px 0;
+  font-size: 11px;
+}
+.provider-ctx-header {
+  padding: 3px 10px;
+  font-size: 10px;
+  color: var(--text-muted);
+  user-select: none;
+}
+.provider-ctx-item {
+  padding: 4px 10px;
+  color: var(--text-primary);
+  cursor: pointer;
+  border-radius: 3px;
+  margin: 0 3px;
+  transition: background var(--transition-speed);
+}
+.provider-ctx-item:hover {
+  background: var(--bg-hover);
+  color: var(--color-blue);
+}
+</style>
+
