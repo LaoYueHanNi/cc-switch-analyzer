@@ -59,6 +59,7 @@
           @add-time-rule="onAddTimeRule(card.modelId)"
           @edit-time-rule="(rule) => onEditTimeRule(rule)"
           @delete-time-rule="(rule) => onDeleteTimeRule(rule)"
+          @view-time-rule="(rule) => onViewTimeRule(rule)"
           @manage-aliases="onManageAliases(card)"
         />
       </div>
@@ -87,6 +88,7 @@
           @add-time-rule="onAddTimeRule(card.modelId)"
           @edit-time-rule="(rule) => onEditTimeRule(rule)"
           @delete-time-rule="(rule) => onDeleteTimeRule(rule)"
+          @view-time-rule="(rule) => onViewTimeRule(rule)"
           @manage-aliases="onManageAliases(card)"
         />
       </div>
@@ -106,8 +108,9 @@
     <TimePricingDialog
       v-model:show="showTimeDialog"
       :is-edit="!!editingTimeRule"
+      :readonly="isTimeDialogReadonly"
       :initial-data="timeDialogData"
-      :context-tiers="editingTimeRule?.contextTiers || []"
+      :context-tiers="editingTimeRule?.contextTiers || viewingCloudRule?.contextTiers || []"
       @confirm="onConfirmTimeRule"
     />
 
@@ -137,7 +140,7 @@ import PricingEditDialog from '@/components/pricing/PricingEditDialog.vue'
 import TimePricingDialog from '@/components/pricing/TimePricingDialog.vue'
 import AliasDialog from '@/components/pricing/AliasDialog.vue'
 import { getActiveRate } from '@/utils/pricing'
-import type { PricingData, TimePricingRule, ContextTier } from '@/types/pricing'
+import type { PricingData, TimePricingRule, CloudPricingTimeRule, ContextTier } from '@/types/pricing'
 import { epochToDateStr } from '@/utils/format'
 
 const dbStore = useDatabaseStore()
@@ -162,7 +165,10 @@ const editContextTiers = ref<ContextTier[]>([])
 // 时间定价弹窗
 const showTimeDialog = ref(false)
 const editingTimeRule = ref<TimePricingRule | null>(null)
+const viewingCloudRule = ref<CloudPricingTimeRule | null>(null)
 const currentTimeRuleModelId = ref('')
+
+const isTimeDialogReadonly = computed(() => !!viewingCloudRule.value)
 
 // 别名管理弹窗
 const showAliasDialog = ref(false)
@@ -185,17 +191,31 @@ async function onAliasChanged(): Promise<void> {
 }
 
 const timeDialogData = computed(() => {
-  if (!editingTimeRule.value) return undefined
-  const r = editingTimeRule.value
-  return {
-    label: r.label,
-    startTime: r.startTime,
-    endTime: r.endTime,
-    input: r.inputCostPerMillion,
-    output: r.outputCostPerMillion,
-    cacheRead: r.cacheReadCostPerMillion,
-    cacheCreation: r.cacheCreationCostPerMillion
+  if (editingTimeRule.value) {
+    const r = editingTimeRule.value
+    return {
+      label: r.label,
+      startTime: r.startTime,
+      endTime: r.endTime,
+      input: r.inputCostPerMillion,
+      output: r.outputCostPerMillion,
+      cacheRead: r.cacheReadCostPerMillion,
+      cacheCreation: r.cacheCreationCostPerMillion
+    }
   }
+  if (viewingCloudRule.value) {
+    const r = viewingCloudRule.value
+    return {
+      label: r.label,
+      startTime: r.startTime,
+      endTime: r.endTime,
+      input: r.inputCostPerMillion,
+      output: r.outputCostPerMillion,
+      cacheRead: r.cacheReadCostPerMillion,
+      cacheCreation: r.cacheCreationCostPerMillion
+    }
+  }
+  return undefined
 })
 
 // 模拟 Token 参数（以千为单位，200ms 防抖）
@@ -339,10 +359,32 @@ function onAddTimeRule(modelId: string): void {
 function onEditTimeRule(rule: TimePricingRule): void {
   currentTimeRuleModelId.value = rule.modelId
   editingTimeRule.value = rule
+  viewingCloudRule.value = null
+  showTimeDialog.value = true
+}
+
+function onViewTimeRule(rule: { label: string; startTime: number; endTime: number; inputCostPerMillion: number; outputCostPerMillion: number; cacheReadCostPerMillion: number; cacheCreationCostPerMillion: number; contextTiers: ContextTier[] }): void {
+  editingTimeRule.value = null
+  viewingCloudRule.value = {
+    label: rule.label,
+    startTime: rule.startTime,
+    endTime: rule.endTime,
+    inputCostPerMillion: rule.inputCostPerMillion,
+    outputCostPerMillion: rule.outputCostPerMillion,
+    cacheReadCostPerMillion: rule.cacheReadCostPerMillion,
+    cacheCreationCostPerMillion: rule.cacheCreationCostPerMillion,
+    contextTiers: rule.contextTiers
+  }
   showTimeDialog.value = true
 }
 
 async function onConfirmTimeRule(data: { label: string; startTime: number; endTime: number; input: number; output: number; cacheRead: number; cacheCreation: number }, tiers: ContextTier[]): Promise<void> {
+  if (isTimeDialogReadonly.value) {
+    showTimeDialog.value = false
+    viewingCloudRule.value = null
+    return
+  }
+
   const modelId = currentTimeRuleModelId.value
 
   // 检查时间冲突：云端规则 + 其他用户规则
@@ -451,6 +493,14 @@ watch(() => dbStore.hasDatabase, async (val) => {
     await loadPricingData()
   }
 }, { immediate: true })
+
+// 时间弹窗关闭时清理查看状态
+watch(showTimeDialog, (val) => {
+  if (!val) {
+    viewingCloudRule.value = null
+    editingTimeRule.value = null
+  }
+})
 </script>
 
 <style scoped>

@@ -70,6 +70,11 @@
             <template #icon><n-icon size="11"><trash-outline /></n-icon></template>
           </n-button>
         </template>
+        <template v-else>
+          <n-button size="tiny" quaternary class="rule-icon-btn" @click="$emit('viewTimeRule', rule)">
+            <template #icon><n-icon size="11"><eye-outline /></n-icon></template>
+          </n-button>
+        </template>
       </div>
     </div>
 
@@ -83,7 +88,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { NButton, NIcon } from 'naive-ui'
-import { TimeOutline, CreateOutline, TrashOutline, AddOutline } from '@vicons/ionicons5'
+import { TimeOutline, CreateOutline, TrashOutline, AddOutline, EyeOutline } from '@vicons/ionicons5'
 import { formatRate } from '@/utils/format'
 import { epochToDateStr } from '@/utils/format'
 import PricingGrid from '@/components/common/PricingGrid.vue'
@@ -123,6 +128,7 @@ defineEmits<{
   addTimeRule: []
   editTimeRule: [rule: TimePricingRule]
   deleteTimeRule: [rule: TimePricingRule]
+  viewTimeRule: [rule: DisplayTimeRule]
 }>()
 
 // 合并用户 + 云端时间规则
