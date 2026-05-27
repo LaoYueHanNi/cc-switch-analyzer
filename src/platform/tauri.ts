@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail } from './types'
+import { check } from '@tauri-apps/plugin-updater'
+import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo } from './types'
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
 import type { PricingData } from '@/types/pricing'
@@ -201,5 +202,26 @@ export const platformAdapter: PlatformAdapter = {
   },
   async resumeClaudeSessionWithProvider(sessionId: string, providerId: string, dbPath: string, projectDir?: string): Promise<void> {
     return invoke<void>('resume_claude_session_with_provider', { sessionId, projectDir: projectDir || null, providerId, dbPath })
+  },
+  async checkForUpdate(): Promise<UpdateInfo | null> {
+    const update = await check()
+    if (!update) return null
+    return {
+      version: update.version,
+      currentVersion: update.currentVersion.version,
+      date: update.date ?? undefined,
+      body: update.body ?? undefined,
+    }
+  },
+  async downloadAndInstall(onProgress?: (downloaded: number) => void): Promise<void> {
+    const update = await check()
+    if (!update) throw new Error('没有可用的更新')
+    let downloaded = 0
+    await update.downloadAndInstall((event) => {
+      if (event.event === 'Progress') {
+        downloaded += event.data.chunkLength
+        onProgress?.(downloaded)
+      }
+    })
   }
 }

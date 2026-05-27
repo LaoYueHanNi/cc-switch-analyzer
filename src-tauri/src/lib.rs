@@ -11,7 +11,7 @@ use services::data_source::SourceEntry;
 use services::dedup::RequestCache;
 use services::pricing_engine::PricingEngine;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder};
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 
 // 跨线程共享的状态（Tauri 命令 + HTTP 服务共用）
 pub struct SharedState {
@@ -74,6 +74,7 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             app.handle().plugin(
                 tauri_plugin_log::Builder::default()
@@ -85,6 +86,7 @@ pub fn run() {
             let menu = tauri::menu::MenuBuilder::new(app)
                 .item(&tauri::menu::MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?)
                 .separator()
+                .item(&tauri::menu::MenuItem::with_id(app, "check-update", "检查更新", true, None::<&str>)?)
                 .item(&tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?)
                 .build()?;
             let tray_builder = if let Some(icon) = app.default_window_icon() {
@@ -117,6 +119,8 @@ pub fn run() {
                             let _ = win.show();
                             let _ = win.set_focus();
                         }
+                    } else if event.id() == "check-update" {
+                        let _ = app_handle.emit("check-update", ());
                     }
                 })
                 .build(app)?;

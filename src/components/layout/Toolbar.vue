@@ -4,6 +4,9 @@
       <button class="toolbar-btn" :disabled="!dbStore.hasDatabase" @click="showManager = true">
         <n-icon size="14"><settings-outline /></n-icon>
       </button>
+      <button v-if="updaterStore.status === 'available'" class="toolbar-btn update-badge" @click="updaterStore.downloadAndInstall()" title="有新版本可用">
+        <n-icon size="14"><cloud-download-outline /></n-icon>
+      </button>
       <span class="db-info" v-if="dbStore.hasDatabase">
         {{ dbStore.sources.length }} 个数据源 · {{ dbStore.recordCount }} 条记录
       </span>
@@ -15,11 +18,13 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { NIcon } from 'naive-ui'
-import { SettingsOutline } from '@vicons/ionicons5'
+import { SettingsOutline, CloudDownloadOutline } from '@vicons/ionicons5'
 import { useDatabaseStore } from '@/stores/database'
+import { useUpdaterStore } from '@/stores/updater'
 import DataSourceManager from './DataSourceManager.vue'
 
 const dbStore = useDatabaseStore()
+const updaterStore = useUpdaterStore()
 const showManager = ref(false)
 </script>
 
@@ -57,7 +62,12 @@ const showManager = ref(false)
 
 .toolbar-btn:disabled {
   opacity: 0.4;
-  cursor: not-allowed;
+  cursor: not-disabled;
+}
+
+.update-badge {
+  border-color: var(--color-green);
+  color: var(--color-green);
 }
 
 .db-info {

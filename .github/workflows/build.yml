@@ -32,6 +32,8 @@ jobs:
   build-windows:
     needs: create-release
     runs-on: windows-latest
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -67,7 +69,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-msi
-          path: src-tauri/target/release/bundle/msi/*.msi
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/msi/*.msi.sig
 
       - name: Upload to Release
         env:
@@ -75,12 +79,14 @@ jobs:
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         shell: bash
         run: |
-          # 用 find 精确匹配当前版本的安装包，避免缓存中的旧文件
           find src-tauri/target/release/bundle/msi -name "CC-Switch*${TAG#v}*.msi" -exec echo "Uploading: {}" \; -exec gh release upload "$TAG" {} --clobber \;
+          find src-tauri/target/release/bundle/msi -name "CC-Switch*${TAG#v}*.msi.sig" -exec echo "Uploading: {}" \; -exec gh release upload "$TAG" {} --clobber \;
 
   build-macos:
     needs: create-release
     runs-on: macos-latest
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -116,7 +122,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg
-          path: src-tauri/target/release/bundle/dmg/*.dmg
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/*.tar.gz
+            src-tauri/target/release/bundle/macos/*.tar.gz.sig
 
       - name: Upload to Release
         env:
@@ -125,3 +134,31 @@ jobs:
         shell: bash
         run: |
           find src-tauri/target/release/bundle/dmg -name "*${TAG#v}*.dmg" -exec echo "Uploading: {}" \; -exec gh release upload "$TAG" {} --clobber \;
+          find src-tauri/target/release/bundle/macos -name "*.tar.gz" -exec echo "Uploading: {}" \; -exec gh release upload "$TAG" {} --clobber \;
+          find src-tauri/target/release/bundle/macos -name "*.tar.gz.sig" -exec echo "Uploading: {}" \; -exec gh release upload "$TAG" {} --clobber \;
+
+  generate-manifest:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate latest.json
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: node scripts/generate-latest-json.js
+
+      - name: Upload latest.json to Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: gh release upload "$TAG" latest.json --clobber

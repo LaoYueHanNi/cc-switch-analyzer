@@ -112,6 +112,13 @@ export interface DeleteTimePricingRuleData {
   id: number
 }
 
+export interface UpdateInfo {
+  version: string
+  currentVersion: string
+  date?: string
+  body?: string
+}
+
 export interface PlatformAdapter {
   // 数据库
   selectDatabase(): Promise<DbResult | null>
@@ -161,4 +168,7 @@ export interface PlatformAdapter {
   getCcswitchProviders(dbPath: string): Promise<{ id: string; name: string; hasEnv: boolean }[]>
   openClaudeTerminalWithProvider(projectDir: string, providerId: string, dbPath: string): Promise<void>
   resumeClaudeSessionWithProvider(sessionId: string, providerId: string, dbPath: string, projectDir?: string): Promise<void>
+  // 更新
+  checkForUpdate(): Promise<UpdateInfo | null>
+  downloadAndInstall(onProgress?: (downloaded: number) => void): Promise<void>
 }

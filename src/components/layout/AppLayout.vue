@@ -72,6 +72,8 @@
         </div>
       </div>
     </div>
+
+    <UpdateNotification />
   </div>
 </template>
 
@@ -91,9 +93,12 @@ import { useQueryStore } from '@/stores/query'
 import { useThemeStore } from '@/stores/theme'
 import { useDatabase } from '@/composables/useDatabase'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useUpdaterStore } from '@/stores/updater'
+import { listen } from '@tauri-apps/api/event'
 import Toolbar from './Toolbar.vue'
 import FilterBar from './FilterBar.vue'
 import SummaryBar from './SummaryBar.vue'
+import UpdateNotification from './UpdateNotification.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -102,6 +107,7 @@ const filterStore = useFilterStore()
 const queryStore = useQueryStore()
 const themeStore = useThemeStore()
 const { selectDatabase, autoLoadDatabase, refreshDatabase } = useDatabase()
+const updaterStore = useUpdaterStore()
 
 const navItems: { name: string; label: string; icon: Component }[] = [
   { name: 'by-model', label: '模型', icon: GridOutline },
@@ -157,6 +163,10 @@ onMounted(async () => {
   syncLayoutHeight()
   window.addEventListener('resize', syncLayoutHeight)
   await autoLoadDatabase()
+  // 延迟 3 秒自动检查更新
+  setTimeout(() => updaterStore.checkForUpdate(), 3000)
+  // 监听托盘菜单的"检查更新"事件
+  listen('check-update', () => updaterStore.checkForUpdate())
 })
 
 onUnmounted(() => {

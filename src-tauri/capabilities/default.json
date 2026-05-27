@@ -9,6 +9,7 @@
     "core:tray:allow-set-icon",
     "core:tray:allow-set-menu",
     "dialog:default",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "updater:default"
   ]
 }
