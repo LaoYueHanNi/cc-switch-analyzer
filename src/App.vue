@@ -127,6 +127,11 @@ html, body {
   text-rendering: optimizeLegibility;
 }
 
+/* Naive UI Modal/Card 背景色跟随全局主题 */
+.n-card {
+  background-color: var(--bg-card) !important;
+}
+
 body {
   zoom: 1.1;
 }
