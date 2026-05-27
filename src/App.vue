@@ -31,6 +31,13 @@ const themeOverrides = computed(() => ({
 </script>
 
 <style>
+@font-face {
+  font-family: 'Inter';
+  src: url('@/assets/fonts/InterVariable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -112,7 +119,7 @@ html.dark {
 }
 
 html, body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   background-color: var(--bg-base);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
