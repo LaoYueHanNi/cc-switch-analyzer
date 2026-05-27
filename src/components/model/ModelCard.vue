@@ -3,7 +3,7 @@
     <!-- 模型名称 -->
     <div class="card-header">
       <span class="model-name">{{ modelId }}</span>
-      <span v-if="hasTimePricing" class="time-badge" :title="timeBadgeTitle">
+      <span v-if="timeBadgeText" class="time-badge" :title="timeBadgeTitle">
         <n-icon size="14"><time-outline /></n-icon>
         {{ timeBadgeText }}
       </span>
@@ -117,25 +117,44 @@ const tierLabel = computed(() => {
 })
 
 const allDisplayTimeRules = computed(() => [
-  ...props.timeRules.map(r => ({ label: r.label, startTime: r.startTime, endTime: r.endTime })),
-  ...(props.cloudTimeRules || []).map(r => ({ label: r.label, startTime: r.startTime, endTime: r.endTime }))
+  ...props.timeRules.map(r => ({
+    label: r.label, startTime: r.startTime, endTime: r.endTime,
+    inputCostPerMillion: r.inputCostPerMillion,
+    outputCostPerMillion: r.outputCostPerMillion,
+    cacheReadCostPerMillion: r.cacheReadCostPerMillion,
+    cacheCreationCostPerMillion: r.cacheCreationCostPerMillion
+  })),
+  ...(props.cloudTimeRules || []).map(r => ({
+    label: r.label, startTime: r.startTime, endTime: r.endTime,
+    inputCostPerMillion: r.inputCostPerMillion,
+    outputCostPerMillion: r.outputCostPerMillion,
+    cacheReadCostPerMillion: r.cacheReadCostPerMillion,
+    cacheCreationCostPerMillion: r.cacheCreationCostPerMillion
+  }))
 ])
 
+// 仅当前生效的时间规则
+const activeTimeRules = computed(() => {
+  const now = Math.floor(Date.now() / 1000)
+  return allDisplayTimeRules.value.filter(r => now >= r.startTime && now <= r.endTime)
+})
+
 const timeBadgeText = computed(() => {
-  const labels = allDisplayTimeRules.value.map(r => r.label).filter(Boolean)
+  if (activeTimeRules.value.length === 0) return ''
+  const labels = activeTimeRules.value.map(r => r.label).filter(Boolean)
   return labels.length > 0 ? labels.join('、') : '时段定价'
 })
 
 const timeBadgeTitle = computed(() => {
-  if (allDisplayTimeRules.value.length === 0) return '包含时段定价'
-  return allDisplayTimeRules.value.map(r => r.label || `${epochToDateStr(r.startTime)} ~ ${epochToDateStr(r.endTime)}`).join('\n')
+  if (activeTimeRules.value.length === 0) return ''
+  return activeTimeRules.value.map(r => r.label || `${epochToDateStr(r.startTime)} ~ ${epochToDateStr(r.endTime)}`).join('\n')
 })
 
 type RateField = 'inputCostPerMillion' | 'outputCostPerMillion' | 'cacheReadCostPerMillion' | 'cacheCreationCostPerMillion'
 
 function getRateStr(field: RateField): string {
-  if (props.hasTimePricing && props.pricing?.timeRules?.length) {
-    const rules = props.pricing.timeRules
+  if (activeTimeRules.value.length > 0) {
+    const rules = activeTimeRules.value
     if (rules.length === 1) return formatRate(rules[0][field]) + '/M'
     return rules.map(r => (r.label ? r.label + ':' : '') + formatRate(r[field]) + '/M').join(' ')
   }
