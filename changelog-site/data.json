@@ -4,6 +4,47 @@
     "date": "2026-05-27",
     "commits": [
       {
+        "hash": "b90da16",
+        "subject": "fix: 用全局 CSS 覆盖 Naive UI Modal/Card 背景色，与自定义组件一致",
+        "date": "2026-05-27"
+      },
+      {
+        "hash": "70b0967",
+        "subject": "feat: 本地集成 Inter 可变字体，英文/数字使用 Inter 显示",
+        "date": "2026-05-27"
+      },
+      {
+        "hash": "1c23476",
+        "subject": "fix: 亮色模式基底色调灰，降低刺眼感",
+        "date": "2026-05-27"
+      },
+      {
+        "hash": "51aaab0",
+        "subject": "feat: 摘要栏增加缓存命中率 + 全局配色统一 + 响应式换行",
+        "date": "2026-05-27"
+      },
+      {
+        "hash": "a2440c7",
+        "subject": "fix: 趋势Tab重置后无数据 + 重置按钮改为「所有」查询全量数据",
+        "date": "2026-05-27"
+      },
+      {
+        "hash": "1fa56ac",
+        "subject": "refactor: 重写筛选栏和定价Tab所有Naive UI表单控件为自定义紧凑组件",
+        "date": "2026-05-27"
+      },
+      {
+        "hash": "c48bd3d",
+        "subject": "feat: 会话Tab右键>_按钮携带供应商配置启动Claude Code",
+        "date": "2026-05-27"
+      }
+    ]
+  },
+  {
+    "version": "0.7.5",
+    "date": "2026-05-27",
+    "commits": [
+      {
         "hash": "b0414a3",
         "subject": "fix: 查看云端规则后添加时间定价误入只读模式",
         "date": "2026-05-27"
