@@ -38,8 +38,8 @@
         </button>
       </div>
       <div class="filter-actions">
+        <button class="action-btn" :disabled="!dbStore.hasDatabase" @click="onAll">所有</button>
         <button class="action-btn primary" :disabled="!dbStore.hasDatabase" @click="onQuery">查询</button>
-        <button class="action-btn" :disabled="!dbStore.hasDatabase" @click="onReset">重置</button>
       </div>
     </div>
   </div>
@@ -108,9 +108,13 @@ async function onQuery(): Promise<void> {
   await queryStore.executeQuery(filterStore.filterParams, true)
 }
 
-function onReset(): void {
+async function onAll(): Promise<void> {
   filterStore.reset()
-  dateRange.value = null
+  if (filterStore.dateRangeMin != null && filterStore.dateRangeMax != null) {
+    filterStore.fromDate = new Date(filterStore.dateRangeMin * 1000)
+    filterStore.toDate = new Date(filterStore.dateRangeMax * 1000)
+  }
+  await queryStore.executeQuery(filterStore.filterParams, true)
 }
 
 async function onQuickDate(days: number): Promise<void> {

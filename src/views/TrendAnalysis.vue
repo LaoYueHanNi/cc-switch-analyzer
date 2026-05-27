@@ -180,7 +180,7 @@ function aggregateHourlyRows(getter: (row: DailyTrendRow) => number): number[] {
   return ALL_HOURS.map(h => map.get(h) || 0)
 }
 
-function aggregateWeekday(pre: PrecomputedResult): {
+function aggregateWeekday(pre: PrecomputedResult, from: Date, to: Date): {
   dates: string[]; cost: number[]; token: number[];
   input: number[]; output: number[]; cacheR: number[]; cacheW: number[]
 } {
@@ -191,10 +191,8 @@ function aggregateWeekday(pre: PrecomputedResult): {
   const cacheRB = new Array(W).fill(0)
   const cacheWB = new Array(W).fill(0)
 
-  const f = filterStore.fromDate!
-  const t = filterStore.toDate!
-  const d = new Date(f.getFullYear(), f.getMonth(), f.getDate())
-  const end = new Date(t.getFullYear(), t.getMonth(), t.getDate())
+  const d = new Date(from.getFullYear(), from.getMonth(), from.getDate())
+  const end = new Date(to.getFullYear(), to.getMonth(), to.getDate())
   while (d <= end) {
     const key = localDateStr(d)
     const w = (d.getDay() + 6) % 7 // Mon=0 .. Sun=6
@@ -223,10 +221,14 @@ const allSeriesData = computed<SeriesData | null>(() => {
   const f = filterStore.fromDate
   const t = filterStore.toDate
 
+  // 重置后日期为 null 时，回退到全量数据的日期范围
+  const fromDate = f || (filterStore.dateRangeMin != null ? new Date(filterStore.dateRangeMin * 1000) : null)
+  const toDate = t || (filterStore.dateRangeMax != null ? new Date(filterStore.dateRangeMax * 1000) : null)
+
   // 星期视图：从 precomputed day*Map 按星期聚合
-  if (viewMode.value === 'weekday' && f && t) {
+  if (viewMode.value === 'weekday' && fromDate && toDate) {
     const pre = queryStore.precomputed
-    if (pre) return aggregateWeekday(pre)
+    if (pre) return aggregateWeekday(pre, fromDate!, toDate!)
   }
 
   // 小时视图：复用后端 queryHourlyTrend（跨天聚合到 24 小时桶）
@@ -243,8 +245,8 @@ const allSeriesData = computed<SeriesData | null>(() => {
   }
 
   // 每日视图（默认）：基于日期范围的完整序列
-  if (!f || !t) return null
-  const dateList = generateDateRange(f, t)
+  if (!fromDate || !toDate) return null
+  const dateList = generateDateRange(fromDate, toDate)
   const pre = queryStore.precomputed
   return {
     dates: dateList,
