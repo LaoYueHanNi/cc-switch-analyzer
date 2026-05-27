@@ -4,6 +4,22 @@
     "date": "2026-05-27",
     "commits": [
       {
+        "hash": "1d60529",
+        "subject": "fix: CI pnpm 版本固定为 10.26 避免 registry 404",
+        "date": "2026-05-27"
+      },
+      {
+        "hash": "2039d14",
+        "subject": "feat: 自动更新功能",
+        "date": "2026-05-27"
+      }
+    ]
+  },
+  {
+    "version": "0.7.6",
+    "date": "2026-05-27",
+    "commits": [
+      {
         "hash": "b90da16",
         "subject": "fix: 用全局 CSS 覆盖 Naive UI Modal/Card 背景色，与自定义组件一致",
         "date": "2026-05-27"

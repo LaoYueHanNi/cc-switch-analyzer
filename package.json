@@ -1,6 +1,6 @@
 {
   "name": "cc-switch-analyzer",
-  "version": "0.7.6",
+  "version": "0.7.7",
   "description": "CC-Switch 使用分析器",
   "type": "module",
   "scripts": {

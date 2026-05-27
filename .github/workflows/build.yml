@@ -155,7 +155,7 @@ jobs:
       - name: Generate latest.json
         env:
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: node scripts/generate-latest-json.js
+        run: node scripts/generate-latest-json.cjs
 
       - name: Upload latest.json to Release
         env:
