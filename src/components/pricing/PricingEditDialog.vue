@@ -1,53 +1,42 @@
 <template>
-  <n-modal :show="show" @update:show="$emit('update:show', $event)">
-    <n-card style="width: 300px" :bordered="false" size="small" :title="modelName + ' — 编辑定价'">
-      <div class="edit-form">
-        <div class="edit-row">
-          <span class="edit-label">输入单价 /M</span>
-          <n-input-number v-model:value="input" size="tiny" :show-button="false" :min="0" :step="0.01" style="width: 130px" />
-        </div>
-        <div class="edit-row">
-          <span class="edit-label">输出单价 /M</span>
-          <n-input-number v-model:value="output" size="tiny" :show-button="false" :min="0" :step="0.01" style="width: 130px" />
-        </div>
-        <div class="edit-row">
-          <span class="edit-label">缓存读取单价 /M</span>
-          <n-input-number v-model:value="cacheRead" size="tiny" :show-button="false" :min="0" :step="0.01" style="width: 130px" />
-        </div>
-        <div class="edit-row">
-          <span class="edit-label">缓存写入单价 /M</span>
-          <n-input-number v-model:value="cacheCreation" size="tiny" :show-button="false" :min="0" :step="0.01" style="width: 130px" />
-        </div>
-
-        <!-- 上下文定价档位 -->
-        <div v-if="localTiers.length > 0" class="tier-divider">上下文档位</div>
-        <div v-for="(tier, idx) in localTiers" :key="idx" class="tier-row">
-          <span class="tier-info">>= {{ Math.round(tier.threshold / 1000) }}K &nbsp; {{ formatRate(tier.inputCostPerMillion) }}/M</span>
-          <n-button size="tiny" quaternary class="tier-btn" @click="onEditTier(idx)">
-            <template #icon><n-icon size="11"><create-outline /></n-icon></template>
-          </n-button>
-          <n-button size="tiny" quaternary class="tier-btn" @click="onRemoveTier(idx)">
-            <template #icon><n-icon size="11"><trash-outline /></n-icon></template>
-          </n-button>
-        </div>
-        <n-button size="tiny" quaternary class="add-tier-btn" @click="onAddTier">
-          <template #icon><n-icon size="11"><add-outline /></n-icon></template>
-          添加上下文档位
-        </n-button>
+  <CompactDialog :show="show" :title="modelName + ' — 编辑定价'" @update:show="emit('update:show', $event)">
+    <div class="edit-form">
+      <div class="edit-row">
+        <span class="edit-label">输入单价 /M</span>
+        <CompactNumber v-model:model-value="input" :min="0" :step="0.01" width="130px" />
       </div>
-      <template #footer>
-        <div class="edit-footer">
-          <n-button v-if="showRestore" size="tiny" quaternary @click="$emit('restore')">恢复默认</n-button>
-          <div class="footer-right">
-            <n-button size="tiny" @click="$emit('update:show', false)">取消</n-button>
-            <n-button size="tiny" type="primary" @click="onSave">保存</n-button>
-          </div>
-        </div>
-      </template>
-    </n-card>
-  </n-modal>
+      <div class="edit-row">
+        <span class="edit-label">输出单价 /M</span>
+        <CompactNumber v-model:model-value="output" :min="0" :step="0.01" width="130px" />
+      </div>
+      <div class="edit-row">
+        <span class="edit-label">缓存读取单价 /M</span>
+        <CompactNumber v-model:model-value="cacheRead" :min="0" :step="0.01" width="130px" />
+      </div>
+      <div class="edit-row">
+        <span class="edit-label">缓存写入单价 /M</span>
+        <CompactNumber v-model:model-value="cacheCreation" :min="0" :step="0.01" width="130px" />
+      </div>
 
-  <!-- 上下文档位子弹窗 -->
+      <div v-if="localTiers.length > 0" class="tier-divider">上下文档位</div>
+      <div v-for="(tier, idx) in localTiers" :key="idx" class="tier-row">
+        <span class="tier-info">>= {{ Math.round(tier.threshold / 1000) }}K &nbsp; {{ formatRate(tier.inputCostPerMillion) }}/M</span>
+        <button class="tier-btn" title="编辑" @click="onEditTier(idx)">✎</button>
+        <button class="tier-btn" title="删除" @click="onRemoveTier(idx)">✕</button>
+      </div>
+      <button class="add-tier-btn" @click="onAddTier">+ 添加上下文档位</button>
+    </div>
+    <template #footer>
+      <div class="edit-footer">
+        <button v-if="showRestore" class="cd-btn" @click="emit('restore')">恢复默认</button>
+        <div class="footer-right">
+          <button class="cd-btn" @click="emit('update:show', false)">取消</button>
+          <button class="cd-btn primary" @click="onSave">保存</button>
+        </div>
+      </div>
+    </template>
+  </CompactDialog>
+
   <ContextTierDialog
     v-model:show="showTierDialog"
     :is-edit="editingTierIdx !== null"
@@ -58,8 +47,8 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { NModal, NCard, NInputNumber, NButton, NIcon } from 'naive-ui'
-import { CreateOutline, TrashOutline, AddOutline } from '@vicons/ionicons5'
+import CompactDialog from '@/components/common/CompactDialog.vue'
+import CompactNumber from '@/components/common/CompactNumber.vue'
 import ContextTierDialog from './ContextTierDialog.vue'
 import { formatRate } from '@/utils/format'
 import { useContextTierEditor } from '@/composables/useContextTierEditor'
@@ -118,69 +107,29 @@ function onSave(): void {
 </script>
 
 <style scoped>
-.edit-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.edit-form { display: flex; flex-direction: column; gap: 6px; }
+.edit-row { display: flex; align-items: center; justify-content: space-between; }
+.edit-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+.edit-footer { display: flex; align-items: center; justify-content: space-between; width: 100%; }
+.footer-right { display: flex; gap: 6px; }
+.cd-btn {
+  font-size: 11px; padding: 2px 10px; border: 1px solid var(--border-main);
+  border-radius: 3px; background: transparent; color: var(--text-primary); cursor: pointer;
 }
-
-.edit-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.edit-label {
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.edit-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.footer-right {
-  display: flex;
-  gap: 6px;
-}
-
-.tier-divider {
-  font-size: 10px;
-  color: var(--text-faint);
-  border-top: 1px solid var(--border-main);
-  padding-top: 4px;
-  margin-top: 2px;
-}
-
-.tier-row {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.tier-info {
-  flex: 1;
-  font-size: 10px;
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+.cd-btn:hover { border-color: var(--color-blue); color: var(--color-blue); }
+.cd-btn.primary { background: var(--color-blue); border-color: var(--color-blue); color: #fff; }
+.cd-btn.primary:hover { opacity: 0.85; }
+.tier-divider { font-size: 10px; color: var(--text-faint); border-top: 1px solid var(--border-main); padding-top: 4px; margin-top: 2px; }
+.tier-row { display: flex; align-items: center; gap: 3px; }
+.tier-info { flex: 1; font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tier-btn {
-  padding: 0 !important;
-  min-width: 18px !important;
-  height: 18px !important;
-  color: var(--text-faint) !important;
+  width: 18px; height: 18px; border: none; background: none; font-size: 10px;
+  color: var(--text-faint); cursor: pointer; border-radius: 2px; padding: 0;
 }
-.tier-btn:hover {
-  color: var(--text-tertiary) !important;
-}
-
+.tier-btn:hover { color: var(--text-tertiary); background: var(--bg-hover); }
 .add-tier-btn {
-  font-size: 10px;
+  font-size: 10px; border: none; background: none; color: var(--color-blue);
+  cursor: pointer; padding: 2px 0;
 }
+.add-tier-btn:hover { opacity: 0.7; }
 </style>

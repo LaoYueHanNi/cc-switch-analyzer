@@ -1,39 +1,38 @@
 <template>
-  <n-modal :show="show" @update:show="$emit('update:show', $event)">
-    <n-card style="width: 300px" :title="isEdit ? '编辑上下文档位' : '添加上下文档位'" :bordered="false" size="small">
-      <div class="tier-form">
-        <div class="form-row">
-          <span class="form-label">边界值 (K tokens)</span>
-          <n-input-number v-model:value="threshold" size="tiny" :show-button="false" :min="1" :step="1" style="width: 130px" />
-        </div>
-        <div class="form-row">
-          <span class="form-label">输入单价 /M</span>
-          <n-input-number v-model:value="input" size="tiny" :show-button="false" :min="0" :step="0.01" style="width: 130px" />
-        </div>
-        <div class="form-row">
-          <span class="form-label">输出单价 /M</span>
-          <n-input-number v-model:value="output" size="tiny" :show-button="false" :min="0" :step="0.01" style="width: 130px" />
-        </div>
-        <div class="form-row">
-          <span class="form-label">缓存读取单价 /M</span>
-          <n-input-number v-model:value="cacheRead" size="tiny" :show-button="false" :min="0" :step="0.01" style="width: 130px" />
-        </div>
-        <div class="form-row">
-          <span class="form-label">缓存写入单价 /M</span>
-          <n-input-number v-model:value="cacheCreation" size="tiny" :show-button="false" :min="0" :step="0.01" style="width: 130px" />
-        </div>
-        <div class="form-actions">
-          <n-button size="tiny" @click="$emit('update:show', false)">取消</n-button>
-          <n-button size="tiny" type="primary" @click="onConfirm">{{ isEdit ? '更新' : '添加' }}</n-button>
-        </div>
+  <CompactDialog :show="show" :title="isEdit ? '编辑上下文档位' : '添加上下文档位'" @update:show="emit('update:show', $event)">
+    <div class="tier-form">
+      <div class="form-row">
+        <span class="form-label">边界值 (K tokens)</span>
+        <CompactNumber v-model:model-value="threshold" :min="1" :step="1" width="130px" />
       </div>
-    </n-card>
-  </n-modal>
+      <div class="form-row">
+        <span class="form-label">输入单价 /M</span>
+        <CompactNumber v-model:model-value="input" :min="0" :step="0.01" width="130px" />
+      </div>
+      <div class="form-row">
+        <span class="form-label">输出单价 /M</span>
+        <CompactNumber v-model:model-value="output" :min="0" :step="0.01" width="130px" />
+      </div>
+      <div class="form-row">
+        <span class="form-label">缓存读取单价 /M</span>
+        <CompactNumber v-model:model-value="cacheRead" :min="0" :step="0.01" width="130px" />
+      </div>
+      <div class="form-row">
+        <span class="form-label">缓存写入单价 /M</span>
+        <CompactNumber v-model:model-value="cacheCreation" :min="0" :step="0.01" width="130px" />
+      </div>
+    </div>
+    <template #footer>
+      <button class="cd-btn" @click="emit('update:show', false)">取消</button>
+      <button class="cd-btn primary" @click="onConfirm">{{ isEdit ? '更新' : '添加' }}</button>
+    </template>
+  </CompactDialog>
 </template>
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { NModal, NCard, NInputNumber, NButton } from 'naive-ui'
+import CompactDialog from '@/components/common/CompactDialog.vue'
+import CompactNumber from '@/components/common/CompactNumber.vue'
 
 const props = defineProps<{
   show: boolean
@@ -93,25 +92,14 @@ function onConfirm(): void {
 </script>
 
 <style scoped>
-.tier-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.tier-form { display: flex; flex-direction: column; gap: 6px; }
+.form-row { display: flex; align-items: center; justify-content: space-between; }
+.form-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+.cd-btn {
+  font-size: 11px; padding: 2px 10px; border: 1px solid var(--border-main);
+  border-radius: 3px; background: transparent; color: var(--text-primary); cursor: pointer;
 }
-.form-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.form-label {
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-.form-actions {
-  display: flex;
-  gap: 6px;
-  justify-content: flex-end;
-  margin-top: 8px;
-}
+.cd-btn:hover { border-color: var(--color-blue); color: var(--color-blue); }
+.cd-btn.primary { background: var(--color-blue); border-color: var(--color-blue); color: #fff; }
+.cd-btn.primary:hover { opacity: 0.85; }
 </style>

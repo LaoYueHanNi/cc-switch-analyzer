@@ -1,16 +1,29 @@
 <template>
   <div class="filter-bar">
-    <!-- 第一行：日期 + 快捷日期 + 查询/重置 -->
     <div class="filter-row">
       <div class="filter-group">
-        <span class="filter-label">日期</span>
-        <n-date-picker
-          v-model:value="dateRange"
-          type="daterange"
-          size="tiny"
+        <span class="filter-label">供应商</span>
+        <CompactSelect
+          :model-value="filterStore.providerId"
+          :options="providerSelectOptions"
           clearable
-          style="width: 200px"
+          placeholder="全部"
+          @update:model-value="filterStore.providerId = $event"
         />
+      </div>
+      <div class="filter-group">
+        <span class="filter-label">模型</span>
+        <CompactSelect
+          :model-value="filterStore.modelId"
+          :options="modelSelectOptions"
+          clearable
+          placeholder="全部"
+          @update:model-value="filterStore.modelId = $event"
+        />
+      </div>
+      <div class="filter-group">
+        <span class="filter-label">日期</span>
+        <CompactDateRange v-model:value="dateRange" />
       </div>
       <div class="quick-dates">
         <button
@@ -29,40 +42,13 @@
         <button class="action-btn" :disabled="!dbStore.hasDatabase" @click="onReset">重置</button>
       </div>
     </div>
-
-    <!-- 第二行：供应商 + 模型 -->
-    <div class="filter-row">
-      <div class="filter-group">
-        <span class="filter-label">供应商</span>
-        <n-select
-          v-model:value="filterStore.providerId"
-          :options="providerSelectOptions"
-          size="tiny"
-          clearable
-          style="width: 150px"
-          placeholder="全部"
-          teleport-disabled
-        />
-      </div>
-      <div class="filter-group">
-        <span class="filter-label">模型</span>
-        <n-select
-          v-model:value="filterStore.modelId"
-          :options="modelSelectOptions"
-          size="tiny"
-          clearable
-          style="width: 150px"
-          placeholder="全部"
-          teleport-disabled
-        />
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { NDatePicker, NSelect } from 'naive-ui'
+import CompactSelect from '@/components/common/CompactSelect.vue'
+import CompactDateRange from '@/components/common/CompactDateRange.vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useFilterStore } from '@/stores/filter'
 import { useQueryStore } from '@/stores/query'
@@ -114,15 +100,9 @@ const quickDateButtons = [
   { label: '180天', days: 180 }
 ]
 
-const providerSelectOptions = computed(() => [
-  { label: '全部供应商', value: '' },
-  ...filterStore.providerOptions
-])
+const providerSelectOptions = computed(() => [...filterStore.providerOptions])
 
-const modelSelectOptions = computed(() => [
-  { label: '全部模型', value: '' },
-  ...filterStore.modelOptions
-])
+const modelSelectOptions = computed(() => [...filterStore.modelOptions])
 
 async function onQuery(): Promise<void> {
   await queryStore.executeQuery(filterStore.filterParams, true)
@@ -149,11 +129,7 @@ async function onQuickDate(days: number): Promise<void> {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 4px;
-}
-
-.filter-row:last-child {
-  margin-bottom: 0;
+  flex-wrap: wrap;
 }
 
 .filter-group {

@@ -5,35 +5,32 @@
       <div class="toolbar-row">
         <div class="filter-group">
           <span class="filter-label">模型</span>
-          <n-select
-            v-model:value="searchModel"
+          <CompactSelect
+            :model-value="searchModel"
             :options="modelOptions"
-            filterable
             clearable
-            size="tiny"
             placeholder="全部"
-            style="width: 180px"
-            teleport-disabled
+            @update:model-value="searchModel = $event"
           />
         </div>
         <div class="filter-group">
           <span class="filter-label">输入</span>
-          <n-input-number v-model:value="simInput" size="tiny" :show-button="false" :min="0" :step="1" style="width: 52px" />
+          <CompactNumber v-model:model-value="simInput" :min="0" :step="1" width="52px" />
           <span class="filter-label">K</span>
         </div>
         <div class="filter-group">
           <span class="filter-label">缓存读</span>
-          <n-input-number v-model:value="simCacheRead" size="tiny" :show-button="false" :min="0" :step="1" style="width: 52px" />
+          <CompactNumber v-model:model-value="simCacheRead" :min="0" :step="1" width="52px" />
           <span class="filter-label">K</span>
         </div>
         <div class="filter-group">
           <span class="filter-label">输出</span>
-          <n-input-number v-model:value="simOutput" size="tiny" :show-button="false" :min="0" :step="1" style="width: 52px" />
+          <CompactNumber v-model:model-value="simOutput" :min="0" :step="1" width="52px" />
           <span class="filter-label">K</span>
         </div>
         <div class="filter-group">
           <span class="filter-label">缓存写</span>
-          <n-input-number v-model:value="simCacheCreation" size="tiny" :show-button="false" :min="0" :step="1" style="width: 52px" />
+          <CompactNumber v-model:model-value="simCacheCreation" :min="0" :step="1" width="52px" />
           <span class="filter-label">K</span>
         </div>
       </div>
@@ -68,7 +65,7 @@
     <!-- 未使用模型（折叠） -->
     <div class="pricing-section">
       <div class="section-title collapsible" @click="showUnused = !showUnused">
-        <n-icon size="14"><chevron-down-outline v-if="!showUnused" /><chevron-up-outline v-else /></n-icon>
+        <span class="chevron">{{ showUnused ? '▴' : '▾' }}</span>
         未使用模型 ({{ unusedCards.length }})
       </div>
       <div v-if="showUnused" class="pricing-grid">
@@ -130,8 +127,9 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
-import { NSelect, NInputNumber, NIcon, useMessage } from 'naive-ui'
-import { ChevronDownOutline, ChevronUpOutline } from '@vicons/ionicons5'
+import { useMessage } from 'naive-ui'
+import CompactSelect from '@/components/common/CompactSelect.vue'
+import CompactNumber from '@/components/common/CompactNumber.vue'
 import { platformAdapter } from '@/platform'
 import { useDatabaseStore } from '@/stores/database'
 import { usePricingStore } from '@/stores/pricing'
@@ -147,7 +145,7 @@ const dbStore = useDatabaseStore()
 const pricingStore = usePricingStore()
 const message = useMessage()
 
-const searchModel = ref<string | null>(null)
+const searchModel = ref('')
 const simInput = ref(1)
 const simCacheRead = ref(70)
 const simOutput = ref(1)
@@ -544,6 +542,10 @@ watch(() => dbStore.hasDatabase, async (val) => {
 
 .section-title.collapsible {
   cursor: pointer;
+}
+.chevron {
+  font-size: 12px;
+  color: var(--text-tertiary);
 }
 
 .pricing-grid {

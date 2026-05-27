@@ -1,71 +1,56 @@
 <template>
-  <n-modal :show="show" @update:show="$emit('update:show', $event)">
-    <n-card style="width: 300px" :title="isReadonly ? '查看时间定价' : (isEdit ? '编辑时间定价' : '添加时间定价')" :bordered="false" size="small">
-      <div class="time-form">
-        <div class="form-row">
-          <span class="form-label">标签</span>
-          <n-input v-model:value="label" size="tiny" placeholder="如：限时折扣" style="width: 150px" :disabled="isReadonly" />
-        </div>
-        <div class="form-row">
-          <span class="form-label">起始日期</span>
-          <n-date-picker v-model:value="startDate" type="date" size="small" style="width: 150px" :disabled="isReadonly" />
-        </div>
-        <div class="form-row">
-          <span class="form-label">结束日期</span>
-          <n-date-picker v-model:value="endDate" type="date" size="small" style="width: 150px" :disabled="isReadonly" />
-        </div>
-        <div class="form-row">
-          <span class="form-label">输入单价 /M</span>
-          <n-input-number v-model:value="input" size="tiny" :show-button="false" :min="0" :step="0.01" style="width: 130px" :disabled="isReadonly" />
-        </div>
-        <div class="form-row">
-          <span class="form-label">输出单价 /M</span>
-          <n-input-number v-model:value="output" size="tiny" :show-button="false" :min="0" :step="0.01" style="width: 130px" :disabled="isReadonly" />
-        </div>
-        <div class="form-row">
-          <span class="form-label">缓存读取单价 /M</span>
-          <n-input-number v-model:value="cacheRead" size="tiny" :show-button="false" :min="0" :step="0.01" style="width: 130px" :disabled="isReadonly" />
-        </div>
-        <div class="form-row">
-          <span class="form-label">缓存写入单价 /M</span>
-          <n-input-number v-model:value="cacheCreation" size="tiny" :show-button="false" :min="0" :step="0.01" style="width: 130px" :disabled="isReadonly" />
-        </div>
-
-        <!-- 上下文定价档位 -->
-        <template v-if="localTiers.length > 0">
-          <div class="tier-divider">上下文档位</div>
-          <div v-for="(tier, idx) in localTiers" :key="idx" class="tier-row">
-            <span class="tier-info">
-              >= {{ Math.round(tier.threshold / 1000) }}K &nbsp;
-              <span class="tier-rate" :style="{ color: 'var(--color-purple)' }">{{ formatRate(tier.inputCostPerMillion) }}</span>
-              <span class="tier-rate" :style="{ color: 'var(--color-orange)' }">{{ formatRate(tier.outputCostPerMillion) }}</span>
-              <span class="tier-rate" :style="{ color: 'var(--color-blue)' }">{{ formatRate(tier.cacheReadCostPerMillion) }}</span>
-              <span class="tier-rate" :style="{ color: 'var(--color-dark-orange)' }">{{ formatRate(tier.cacheCreationCostPerMillion) }}</span>
-            </span>
-            <template v-if="!isReadonly">
-              <n-button size="tiny" quaternary class="tier-btn" @click="onEditTier(idx)">
-                <template #icon><n-icon size="11"><create-outline /></n-icon></template>
-              </n-button>
-              <n-button size="tiny" quaternary class="tier-btn" @click="onRemoveTier(idx)">
-                <template #icon><n-icon size="11"><trash-outline /></n-icon></template>
-              </n-button>
-            </template>
-          </div>
-        </template>
-        <n-button v-if="!isReadonly" size="tiny" quaternary class="add-tier-btn" @click="onAddTier">
-          <template #icon><n-icon size="11"><add-outline /></n-icon></template>
-          添加上下文档位
-        </n-button>
-
-        <div class="form-actions">
-          <n-button size="tiny" @click="$emit('update:show', false)">取消</n-button>
-          <n-button v-if="!isReadonly" size="tiny" type="primary" @click="onConfirm">{{ isEdit ? '更新' : '添加' }}</n-button>
-        </div>
+  <CompactDialog :show="show" :title="isReadonly ? '查看时间定价' : (isEdit ? '编辑时间定价' : '添加时间定价')" @update:show="emit('update:show', $event)">
+    <div class="time-form">
+      <div class="form-row">
+        <span class="form-label">标签</span>
+        <CompactInput v-model:model-value="label" placeholder="如：限时折扣" width="150px" :disabled="!!isReadonly" />
       </div>
-    </n-card>
-  </n-modal>
+      <div class="form-row">
+        <span class="form-label">时间范围</span>
+        <CompactDateRange :value="dateRange" :disabled="!!isReadonly" @update:value="onDateRangeChange" />
+      </div>
+      <div class="form-row">
+        <span class="form-label">输入单价 /M</span>
+        <CompactNumber v-model:model-value="input" :min="0" :step="0.01" width="130px" :disabled="!!isReadonly" />
+      </div>
+      <div class="form-row">
+        <span class="form-label">输出单价 /M</span>
+        <CompactNumber v-model:model-value="output" :min="0" :step="0.01" width="130px" :disabled="!!isReadonly" />
+      </div>
+      <div class="form-row">
+        <span class="form-label">缓存读取单价 /M</span>
+        <CompactNumber v-model:model-value="cacheRead" :min="0" :step="0.01" width="130px" :disabled="!!isReadonly" />
+      </div>
+      <div class="form-row">
+        <span class="form-label">缓存写入单价 /M</span>
+        <CompactNumber v-model:model-value="cacheCreation" :min="0" :step="0.01" width="130px" :disabled="!!isReadonly" />
+      </div>
 
-  <!-- 上下文档位编辑子弹窗 -->
+      <template v-if="localTiers.length > 0">
+        <div class="tier-divider">上下文档位</div>
+        <div v-for="(tier, idx) in localTiers" :key="idx" class="tier-row">
+          <span class="tier-info">
+            >= {{ Math.round(tier.threshold / 1000) }}K &nbsp;
+            <span class="tier-rate" :style="{ color: 'var(--color-purple)' }">{{ formatRate(tier.inputCostPerMillion) }}</span>
+            <span class="tier-rate" :style="{ color: 'var(--color-orange)' }">{{ formatRate(tier.outputCostPerMillion) }}</span>
+            <span class="tier-rate" :style="{ color: 'var(--color-blue)' }">{{ formatRate(tier.cacheReadCostPerMillion) }}</span>
+            <span class="tier-rate" :style="{ color: 'var(--color-dark-orange)' }">{{ formatRate(tier.cacheCreationCostPerMillion) }}</span>
+          </span>
+          <template v-if="!isReadonly">
+            <button class="tier-btn" title="编辑" @click="onEditTier(idx)">✎</button>
+            <button class="tier-btn" title="删除" @click="onRemoveTier(idx)">✕</button>
+          </template>
+        </div>
+      </template>
+      <button v-if="!isReadonly" class="add-tier-btn" @click="onAddTier">+ 添加上下文档位</button>
+
+      <div v-if="!isReadonly" class="form-actions">
+        <button class="cd-btn" @click="emit('update:show', false)">取消</button>
+        <button class="cd-btn primary" @click="onConfirm">{{ isEdit ? '更新' : '添加' }}</button>
+      </div>
+    </div>
+  </CompactDialog>
+
   <ContextTierDialog
     v-model:show="showTierDialog"
     :is-edit="editingTierIdx !== null"
@@ -75,9 +60,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import { NModal, NCard, NInput, NDatePicker, NInputNumber, NButton, NIcon } from 'naive-ui'
-import { CreateOutline, TrashOutline, AddOutline } from '@vicons/ionicons5'
+import { ref, computed, watch } from 'vue'
+import CompactDialog from '@/components/common/CompactDialog.vue'
+import CompactInput from '@/components/common/CompactInput.vue'
+import CompactNumber from '@/components/common/CompactNumber.vue'
+import CompactDateRange from '@/components/common/CompactDateRange.vue'
 import ContextTierDialog from './ContextTierDialog.vue'
 import { formatRate } from '@/utils/format'
 import { useContextTierEditor } from '@/composables/useContextTierEditor'
@@ -119,9 +106,22 @@ const input = ref(0)
 const output = ref(0)
 const cacheRead = ref(0)
 const cacheCreation = ref(0)
-
-// 缓存 isReadonly 状态，避免关闭动画期间 props 波动导致按钮闪现
 const isReadonly = ref(false)
+
+const dateRange = computed<[number, number] | null>(() => {
+  if (startDate.value != null && endDate.value != null) return [startDate.value, endDate.value]
+  return null
+})
+
+function onDateRangeChange(val: [number, number] | null) {
+  if (val) {
+    startDate.value = val[0]
+    endDate.value = val[1]
+  } else {
+    startDate.value = null
+    endDate.value = null
+  }
+}
 
 const {
   localTiers,
@@ -175,70 +175,28 @@ function onConfirm(): void {
 </script>
 
 <style scoped>
-.time-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.time-form { display: flex; flex-direction: column; gap: 6px; }
+.form-row { display: flex; align-items: center; justify-content: space-between; }
+.form-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+.form-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; }
+.cd-btn {
+  font-size: 11px; padding: 2px 10px; border: 1px solid var(--border-main);
+  border-radius: 3px; background: transparent; color: var(--text-primary); cursor: pointer;
 }
-
-.form-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.form-label {
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.form-actions {
-  display: flex;
-  gap: 6px;
-  justify-content: flex-end;
-  margin-top: 8px;
-}
-
-.tier-divider {
-  font-size: 10px;
-  color: var(--text-faint);
-  border-top: 1px solid var(--border-main);
-  padding-top: 4px;
-  margin-top: 2px;
-}
-
-.tier-row {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.tier-info {
-  flex: 1;
-  font-size: 10px;
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tier-rate {
-  font-size: 10px;
-  margin-left: 3px;
-}
-
+.cd-btn:hover { border-color: var(--color-blue); color: var(--color-blue); }
+.cd-btn.primary { background: var(--color-blue); border-color: var(--color-blue); color: #fff; }
+.tier-divider { font-size: 10px; color: var(--text-faint); border-top: 1px solid var(--border-main); padding-top: 4px; margin-top: 2px; }
+.tier-row { display: flex; align-items: center; gap: 3px; }
+.tier-info { flex: 1; font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tier-rate { font-size: 10px; margin-left: 3px; }
 .tier-btn {
-  padding: 0 !important;
-  min-width: 18px !important;
-  height: 18px !important;
-  color: var(--text-faint) !important;
+  width: 18px; height: 18px; border: none; background: none; font-size: 10px;
+  color: var(--text-faint); cursor: pointer; border-radius: 2px; padding: 0;
 }
-.tier-btn:hover {
-  color: var(--text-tertiary) !important;
-}
-
+.tier-btn:hover { color: var(--text-tertiary); background: var(--bg-hover); }
 .add-tier-btn {
-  font-size: 10px;
+  font-size: 10px; border: none; background: none; color: var(--color-blue);
+  cursor: pointer; padding: 2px 0;
 }
+.add-tier-btn:hover { opacity: 0.7; }
 </style>
