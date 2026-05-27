@@ -56,12 +56,20 @@ const items = computed(() => {
           rawValue = (s.totalInput || 0) + (s.totalOutput || 0) + (s.totalCacheRead || 0) + (s.totalCacheCreation || 0)
         }
         break
+      case 'cacheHitRate':
+        if (s) {
+          const total = (s.totalInput || 0) + (s.totalCacheRead || 0)
+          rawValue = total > 0 ? (s.totalCacheRead || 0) / total * 100 : 0
+        }
+        break
     }
 
     let displayValue: string
     if (typeof rawValue === 'number') {
       if (item.key === 'totalCost') {
         displayValue = formatCost(rawValue)
+      } else if (item.key === 'cacheHitRate') {
+        displayValue = rawValue.toFixed(1) + '%'
       } else {
         displayValue = formatNum(rawValue)
       }
@@ -104,15 +112,15 @@ const items = computed(() => {
 
 .summary-bar {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
   padding: 6px 12px 8px;
-  overflow-x: auto;
 }
 
 .summary-card {
-  flex-shrink: 0;
-  min-width: 110px;
-  padding: 6px 10px;
+  flex: 1 1 0;
+  min-width: 70px;
+  padding: 4px 8px;
   background: var(--bg-card);
   border-radius: 4px;
   border: 1px solid var(--border-main);
@@ -120,14 +128,14 @@ const items = computed(() => {
 }
 
 .summary-label {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-muted);
   white-space: nowrap;
 }
 
 .summary-value {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
-  margin-top: 2px;
+  margin-top: 1px;
 }
 </style>

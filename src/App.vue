@@ -58,12 +58,14 @@ const themeOverrides = computed(() => ({
   --color-green: #16a085;
   --color-amber: #e67e22;
   --color-amber-bg: #fef9e7;
-  --color-teal-bg: #e8f8f5;
+  --color-teal: #e91e63;
+  --color-teal-bg: #fce4ec;
   --color-blue-bg: #eef5ff;
   --color-purple: #8e44ad;
   --color-purple-bg: #f3e5f5;
   --color-orange: #f39c12;
   --color-blue: #2980b9;
+  --color-indigo: #3f51b5;
   --color-dark-orange: #d35400;
 
   --shadow-card: 0 2px 6px rgba(0,0,0,0.06);
@@ -96,12 +98,14 @@ html.dark {
   --color-green: #2ed8a4;
   --color-amber: #ffc857;
   --color-amber-bg: #3a3520;
-  --color-teal-bg: #1a3a30;
+  --color-teal: #f06292;
+  --color-teal-bg: #3a1a25;
   --color-blue-bg: #1a2a40;
   --color-purple: #b370cf;
   --color-purple-bg: #2a1a30;
   --color-orange: #ffc857;
   --color-blue: #5dade2;
+  --color-indigo: #7986cb;
   --color-dark-orange: #e67e22;
 
   --shadow-card: 0 2px 6px rgba(0,0,0,0.3);

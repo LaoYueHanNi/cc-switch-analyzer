@@ -5,12 +5,12 @@
       <span class="stat-title">最近 500 条请求</span>
       <div class="stat-items">
         <div class="realtime-stat">
-          <span class="stat-label">总费用</span>
+          <span class="stat-label label-cost">总费用</span>
           <span class="stat-value cost">{{ formatCost(totalCost) }}</span>
         </div>
         <div class="realtime-stat">
-          <span class="stat-label">总 Token</span>
-          <span class="stat-value">{{ formatNum(totalTokens) }}</span>
+          <span class="stat-label label-green">总 Token</span>
+          <span class="stat-value value-green">{{ formatNum(totalTokens) }}</span>
         </div>
         <div class="realtime-stat">
           <span class="stat-label label-purple">输入费用</span>
@@ -29,8 +29,8 @@
           <span class="stat-value value-dark-orange">{{ formatCost(totalCacheCreationCost) }}</span>
         </div>
         <div class="realtime-stat">
-          <span class="stat-label">缓存命中率</span>
-          <span class="stat-value">{{ formatPercent(cacheHitRate) }}</span>
+          <span class="stat-label label-teal">缓存命中率</span>
+          <span class="stat-value value-teal">{{ formatPercent(cacheHitRate) }}</span>
         </div>
       </div>
       <div class="live-badge" :class="{ 'live-pulse': hasNewData }">
@@ -300,7 +300,7 @@ watch(() => dbStore.hasDatabase, (val) => {
 .realtime-stat { display: flex; flex-direction: column; }
 .stat-label { font-size: 10px; color: var(--text-faint); }
 .stat-value { font-size: 15px; font-weight: 600; color: var(--text-primary); }
-.stat-value.cost { color: var(--color-amber); }
+.stat-value.cost { color: var(--color-cost); }
 
 .live-badge {
   display: flex; align-items: center; gap: 4px;
@@ -430,10 +430,10 @@ watch(() => dbStore.hasDatabase, (val) => {
 .c-cache-w em { color: var(--color-dark-orange); }
 
 /* 总 Token 列 */
-.col-total { width: 64px; flex-shrink: 0; text-align: right; font-weight: 600; color: var(--text-primary); font-size: 12px; }
+.col-total { width: 64px; flex-shrink: 0; text-align: right; font-weight: 600; color: var(--color-green); font-size: 12px; }
 
 /* 费用列 */
-.col-cost { width: 68px; flex-shrink: 0; text-align: right; font-weight: 700; color: var(--color-amber); font-size: 12px; }
+.col-cost { width: 68px; flex-shrink: 0; text-align: right; font-weight: 700; color: var(--color-cost); font-size: 12px; }
 
 /* 档位列 */
 .col-tier { width: 48px; flex-shrink: 0; text-align: right; font-size: 10px; color: var(--text-secondary); }
@@ -450,4 +450,7 @@ watch(() => dbStore.hasDatabase, (val) => {
 .label-orange, .value-orange { color: var(--color-orange); }
 .label-blue, .value-blue { color: var(--color-blue); }
 .label-dark-orange, .value-dark-orange { color: var(--color-dark-orange); }
+.label-teal, .value-teal { color: var(--color-teal); }
+.label-green, .value-green { color: var(--color-green); }
+.label-cost { color: var(--color-cost); }
 </style>
