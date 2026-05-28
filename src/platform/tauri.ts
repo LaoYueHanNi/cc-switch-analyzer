@@ -208,7 +208,7 @@ export const platformAdapter: PlatformAdapter = {
     if (!update) return null
     return {
       version: update.version,
-      currentVersion: update.currentVersion.version,
+      currentVersion: update.currentVersion,
       date: update.date ?? undefined,
       body: update.body ?? undefined,
     }
