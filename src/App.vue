@@ -46,23 +46,23 @@ const themeOverrides = computed(() => ({
 
 :root {
   --bg-base: #e2e2e2;
-  --bg-card: #eaeaea;
-  --bg-card-alt: #e5e5e5;
+  --bg-card: #f5f5f5;
+  --bg-card-alt: #ededed;
   --bg-hover: #dadada;
   --bg-flash: #d8e8d8;
 
   --text-primary: #333;
   --text-secondary: #555;
   --text-tertiary: #666;
-  --text-muted: #999;
-  --text-faint: #bbb;
+  --text-muted: #777;
+  --text-faint: #888;
 
-  --border-main: #dcdcdc;
-  --border-light: #e5e5e5;
+  --border-main: #d0d0d0;
+  --border-light: #ddd;
   --border-faint: #ececec;
 
   --color-cost: #e74c3c;
-  --color-green: #16a085;
+  --color-green: #0d8c6f;
   --color-amber: #e67e22;
   --color-amber-bg: #fef9e7;
   --color-teal: #e91e63;
@@ -86,19 +86,19 @@ const themeOverrides = computed(() => ({
 
 html.dark {
   --bg-base: #1a1a2e;
-  --bg-card: #222240;
-  --bg-card-alt: #2a2a4a;
+  --bg-card: #282848;
+  --bg-card-alt: #2e2e50;
   --bg-hover: #303050;
   --bg-flash: #1a3a2a;
 
   --text-primary: #e0e0e0;
   --text-secondary: #c0c0c0;
   --text-tertiary: #a0a0a0;
-  --text-muted: #777;
-  --text-faint: #555;
+  --text-muted: #888888;
+  --text-faint: #6a6a6a;
 
-  --border-main: #3a3a5a;
-  --border-light: #2e2e4e;
+  --border-main: #4a4a6a;
+  --border-light: #3a3a5a;
   --border-faint: #2a2a4a;
 
   --color-cost: #ff6b6b;
