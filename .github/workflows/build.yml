@@ -62,6 +62,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Clean old MSI artifacts
+        shell: bash
+        run: rm -rf src-tauri/target/release/bundle/msi/*.msi src-tauri/target/release/bundle/msi/*.msi.sig
+
       - name: Build MSI
         run: pnpm tauri build
 
@@ -114,6 +118,10 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install
+
+      - name: Clean old macOS artifacts
+        shell: bash
+        run: rm -rf src-tauri/target/release/bundle/dmg/*.dmg src-tauri/target/release/bundle/macos/*.tar.gz src-tauri/target/release/bundle/macos/*.tar.gz.sig
 
       - name: Build APP
         run: pnpm tauri build
