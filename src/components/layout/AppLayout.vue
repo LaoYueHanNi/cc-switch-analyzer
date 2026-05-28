@@ -163,9 +163,6 @@ onMounted(async () => {
   syncLayoutHeight()
   window.addEventListener('resize', syncLayoutHeight)
   await autoLoadDatabase()
-  // 延迟 3 秒自动检查更新
-  setTimeout(() => updaterStore.checkForUpdate(), 3000)
-  // 监听托盘菜单的"检查更新"事件
   listen('check-update', () => updaterStore.checkForUpdate())
 })
 

@@ -38,6 +38,18 @@
         </span>
       </div>
     </div>
+
+    <!-- 更新 -->
+    <n-divider style="margin: 12px 0 8px" />
+    <div class="tm-section">
+      <div class="tm-header">更新</div>
+      <div class="tm-row">
+        <button class="check-update-btn" :disabled="updaterStore.status === 'checking'" @click="updaterStore.checkForUpdate()">
+          {{ updaterStore.status === 'checking' ? '检查中...' : '检查更新' }}
+        </button>
+        <span class="tm-hint" v-if="updaterStore.status === 'idle'">当前版本 v{{ currentVersion }}</span>
+      </div>
+    </div>
   </n-modal>
 </template>
 
@@ -46,14 +58,19 @@ import { computed, ref } from 'vue'
 import { NModal, NIcon, NButton, NSwitch, NDivider } from 'naive-ui'
 import { CloseOutline } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
+import { getVersion } from '@tauri-apps/api/app'
 import { useDatabaseStore } from '@/stores/database'
 import { useDatabase } from '@/composables/useDatabase'
+import { useUpdaterStore } from '@/stores/updater'
 import { platformAdapter } from '@/platform'
 
 defineProps<{ show: boolean }>()
 defineEmits<{ 'update:show': [value: boolean] }>()
 
 const dbStore = useDatabaseStore()
+const updaterStore = useUpdaterStore()
+const currentVersion = ref('')
+getVersion().then(v => currentVersion.value = v).catch(() => {})
 const { addDatabase, removeDatabase, refreshAfterToggle } = useDatabase()
 
 interface DefaultPaths { ccSwitch: string | null; opencode: string | null; aiProxy: string | null }
@@ -269,5 +286,26 @@ async function toggleService(enabled: boolean): Promise<void> {
 .tm-hint {
   font-size: 11px;
   color: var(--text-tertiary);
+}
+
+.check-update-btn {
+  font-size: 11px;
+  padding: 3px 12px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.check-update-btn:hover:not(:disabled) {
+  border-color: var(--color-blue);
+  color: var(--color-blue);
+}
+
+.check-update-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>
