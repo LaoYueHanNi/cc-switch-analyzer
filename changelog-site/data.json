@@ -1,6 +1,42 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-05-28",
+    "commits": [
+      {
+        "hash": "d75f8a2",
+        "subject": "fix: latest.json URL encode 文件名修复 + 更新下载添加日志",
+        "date": "2026-05-28"
+      },
+      {
+        "hash": "97abce9",
+        "subject": "fix: currentVersion 为空时 fallback 到 Tauri API 获取版本号",
+        "date": "2026-05-28"
+      },
+      {
+        "hash": "c88b77f",
+        "subject": "fix: 修复更新弹窗当前版本号显示为空的问题",
+        "date": "2026-05-28"
+      },
+      {
+        "hash": "ae3f43c",
+        "subject": "fix: 检查更新无新版本时提示「已是最新版本」",
+        "date": "2026-05-28"
+      },
+      {
+        "hash": "6944446",
+        "subject": "fix: 更新栏标题改为「版本更新」",
+        "date": "2026-05-28"
+      },
+      {
+        "hash": "44a3b73",
+        "subject": "fix: 移除自动检查和Toolbar更新按钮，更新入口移至数据源管理弹窗",
+        "date": "2026-05-28"
+      }
+    ]
+  },
+  {
+    "version": "0.7.7",
     "date": "2026-05-27",
     "commits": [
       {
