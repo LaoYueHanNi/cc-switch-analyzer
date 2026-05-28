@@ -485,9 +485,9 @@ pub struct ProjectGroupStats {
     pub last_at: i64,
     #[serde(default)]
     pub session_ids: Vec<String>,
+    #[serde(default)]
+    pub source_types: Vec<String>,
 }
-
-// ========== 会话管理：会话详情（第二屏） ==========
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -508,4 +508,5 @@ pub struct ProjectSessionDetail {
     pub title: Option<String>,
     pub project_dir: Option<String>,
     pub source_path: Option<String>,
+    pub source_type: Option<String>,
 }

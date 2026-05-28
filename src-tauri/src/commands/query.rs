@@ -551,6 +551,15 @@ pub fn query_session_project_groups(
         resolve_session_projects(&all_ids, &app_db, &sources)?
     };
 
+    // 2.5 获取 source_type 映射
+    let source_type_map: HashMap<String, String> = {
+        let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+        let cached = app_db.get_sessions(&all_ids)?;
+        cached.into_iter()
+            .filter_map(|(sid, (_, _, src))| if !src.is_empty() { Some((sid, src)) } else { None })
+            .collect()
+    };
+
     // 3. 计算基础费用（不做模型分解）
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
     let all_request_tokens: Vec<SessionRequestToken> = {
@@ -564,8 +573,8 @@ pub fn query_session_project_groups(
     };
     let session_costs = compute_session_costs(&all_request_tokens, &pricing);
 
-    // 4. 按 projectDir 分组聚合（保留 session_ids）
-    let mut groups: HashMap<String, (i64, f64, i64, i64, i64, Vec<String>)> = HashMap::new();
+    // 4. 按 projectDir 分组聚合（保留 session_ids + source_types）
+    let mut groups: HashMap<String, (i64, f64, i64, i64, i64, Vec<String>, std::collections::HashSet<String>)> = HashMap::new();
     for s in &all_sessions {
         let dir = project_map.get(&s.session_id).map(|s| s.as_str()).unwrap_or("");
         let cost = session_costs.get(&s.session_id).copied().unwrap_or(0.0);
@@ -577,10 +586,13 @@ pub fn query_session_project_groups(
         entry.3 = entry.3.min(s.first_at);
         entry.4 = entry.4.max(s.last_at);
         entry.5.push(s.session_id.clone());
+        if let Some(st) = source_type_map.get(&s.session_id) {
+            entry.6.insert(st.clone());
+        }
     }
 
     // 5. 组装结果
-    let mut result: Vec<ProjectGroupStats> = groups.into_iter().map(|(dir, (count, cost, tokens, first, last, session_ids))| {
+    let mut result: Vec<ProjectGroupStats> = groups.into_iter().map(|(dir, (count, cost, tokens, first, last, session_ids, source_set))| {
         let display_name = if dir.is_empty() {
             "未知项目".to_string()
         } else {
@@ -590,6 +602,8 @@ pub fn query_session_project_groups(
                 .unwrap_or(&dir)
                 .to_string()
         };
+        let mut source_types: Vec<String> = source_set.into_iter().collect();
+        source_types.sort();
         ProjectGroupStats {
             project_dir: dir,
             display_name,
@@ -599,6 +613,7 @@ pub fn query_session_project_groups(
             first_at: first,
             last_at: last,
             session_ids,
+            source_types,
         }
     }).collect();
     result.sort_by(|a, b| b.last_at.cmp(&a.last_at));
@@ -618,16 +633,18 @@ pub fn query_project_session_details(
     require_sources!(sources);
 
     // 1. 从 sessions 表拿标题和目录（不查 JSONL）
-    let (title_map, project_map) = {
+    let (title_map, project_map, source_type_map) = {
         let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
         let cached = app_db.get_sessions(&session_ids)?;
         let mut titles = HashMap::new();
         let mut projects = HashMap::new();
-        for (sid, (dir, title, _)) in &cached {
+        let mut source_types = HashMap::new();
+        for (sid, (dir, title, src)) in &cached {
             if !title.is_empty() { titles.insert(sid.clone(), title.clone()); }
             if !dir.is_empty() { projects.insert(sid.clone(), dir.clone()); }
+            if !src.is_empty() { source_types.insert(sid.clone(), src.clone()); }
         }
-        (titles, projects)
+        (titles, projects, source_types)
     };
 
     // 2. 中心去重管道获取 session_breakdown
@@ -742,6 +759,7 @@ pub fn query_project_session_details(
             title: title_map.get(&s.session_id).cloned(),
             project_dir: project_map.get(&s.session_id).cloned(),
             source_path: source_path_map.get(&s.session_id).cloned(),
+            source_type: source_type_map.get(&s.session_id).cloned(),
         }
     }).collect();
 

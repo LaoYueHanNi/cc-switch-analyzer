@@ -2,9 +2,14 @@
   <div class="project-card" @click="$emit('click')">
     <div class="card-header">
       <span class="project-name" :title="projectDir">{{ displayName }}</span>
-      <button class="terminal-btn" @click.stop="$emit('terminal', projectDir)" @contextmenu.prevent="$emit('contextTerminal', projectDir, $event)" title="打开终端启动 Claude（右键选择供应商配置）">
-        &gt;_
-      </button>
+      <div v-if="projectDir" class="terminal-btns" :class="{ active: terminalActive }">
+        <button class="terminal-btn" @click.stop="$emit('terminal', projectDir)" @contextmenu.prevent="$emit('contextTerminal', projectDir, $event)" title="Claude Code（右键选择供应商配置）">
+          <span v-html="claudeSvg"></span>
+        </button>
+        <button class="terminal-btn" @click.stop="$emit('openCodeTerminal', projectDir)" title="OpenCode">
+          <span v-html="opencodeSvg"></span>
+        </button>
+      </div>
     </div>
 
     <div v-if="totalCost > 0" class="cost-section">
@@ -32,6 +37,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { formatNum, formatCost } from '@/utils/format'
+import claudeSvg from '@/assets/claude.svg?raw'
+import opencodeSvg from '@/assets/opencode.svg?raw'
 
 const props = defineProps<{
   displayName: string
@@ -40,9 +47,10 @@ const props = defineProps<{
   lastActiveAt: number
   totalCost: number
   totalTokens: number
+  terminalActive?: boolean
 }>()
 
-defineEmits<{ click: []; terminal: [dir: string]; contextTerminal: [dir: string, event: MouseEvent] }>()
+defineEmits<{ click: []; terminal: [dir: string]; contextTerminal: [dir: string, event: MouseEvent]; openCodeTerminal: [dir: string] }>()
 
 const copied = ref(false)
 
@@ -101,11 +109,26 @@ function formatTime(ts: number): string {
   flex: 1;
 }
 
+.terminal-btns {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--transition-speed);
+}
+.project-card:hover .terminal-btns,
+.terminal-btns.active {
+  opacity: 1;
+}
 .terminal-btn {
   border: none; background: none;
-  color: var(--text-secondary); font-size: 10px; font-weight: 700; font-family: monospace;
-  cursor: pointer; flex-shrink: 0; padding: 0 2px;
+  cursor: pointer; padding: 0 2px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-tertiary);
   transition: color var(--transition-speed);
+}
+.terminal-btn :deep(svg) {
+  width: 14px; height: 14px;
 }
 .terminal-btn:hover {
   color: var(--color-blue);

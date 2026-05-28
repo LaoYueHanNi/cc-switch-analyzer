@@ -25,9 +25,11 @@
           :last-active-at="group.lastAt"
           :total-cost="group.totalCost"
           :total-tokens="group.totalTokens"
+          :terminal-active="providerDropdown.show && providerDropdown.projectDir === group.projectDir"
           @click="enterProject(group.projectDir)"
           @terminal="onOpenTerminal"
           @contextTerminal="onContextTerminal"
+          @openCodeTerminal="onOpenCodeTerminal"
         />
       </div>
 
@@ -67,8 +69,10 @@
               :model-breakdown="s.modelBreakdown"
             />
             <div class="wrap-actions">
-              <span class="action-terminal" @click="onResume(s.sessionId, s.projectDir)" @contextmenu.prevent="onContextTerminalForSession(s.sessionId, s.projectDir, $event)" title="在终端恢复会话（右键选择供应商配置）">&gt;_</span>
-              <span v-if="s.sourcePath" class="action-delete" @click="confirmDelete(s)" title="删除会话">删除</span>
+              <span v-if="s.sourceType !== 'opencode'" class="action-terminal" @click="onResume(s.sessionId, s.projectDir)" @contextmenu.prevent="onContextTerminalForSession(s.sessionId, s.projectDir, $event)" title="恢复 Claude 会话（右键选择供应商配置）"><span v-html="claudeSvg"></span></span>
+              <span v-else class="action-terminal action-opencode" @click="onResumeOpenCode(s.sessionId, s.projectDir)" title="恢复 OpenCode 会话"><span v-html="opencodeSvg"></span></span>
+              <!-- TODO: 会话删除功能暂未开放，待 UI 确认后恢复 -->
+              <!-- <span v-if="s.sourcePath" class="action-delete" @click="confirmDelete(s)" title="删除会话">删除</span> -->
             </div>
           </div>
         </div>
@@ -78,7 +82,7 @@
     <!-- 供应商配置选择右键菜单 -->
     <Teleport to="body">
       <div v-if="providerDropdown.show" class="provider-ctx-overlay" @click="providerDropdown.show = false" @contextmenu.prevent="providerDropdown.show = false" />
-      <div v-if="providerDropdown.show" class="provider-ctx-menu" :style="{ left: providerDropdown.x + 'px', top: providerDropdown.y + 'px' }">
+      <div v-if="providerDropdown.show" ref="ctxMenuRef" class="provider-ctx-menu" :style="{ left: providerDropdown.x + 'px', top: providerDropdown.y + 'px' }">
         <div class="provider-ctx-header">选择供应商配置</div>
         <div v-for="item in providerDropdown.items" :key="item.id" class="provider-ctx-item" @click="onProviderItemSelect(item.id)">{{ item.name }}</div>
       </div>
@@ -109,6 +113,8 @@ import { useDatabaseStore } from '@/stores/database'
 import { useFilterStore } from '@/stores/filter'
 import ProjectCard from '@/components/session/ProjectCard.vue'
 import SessionCard from '@/components/session/SessionCard.vue'
+import claudeSvg from '@/assets/claude.svg?raw'
+import opencodeSvg from '@/assets/opencode.svg?raw'
 import type { ProjectGroupStats, ProjectSessionDetail } from '@/platform/types'
 
 const dbStore = useDatabaseStore()
@@ -118,6 +124,8 @@ const filterStore = useFilterStore()
 const ccswitchDbPath = computed(() =>
   dbStore.sources.find(s => s.dbType === 'CC-Switch')?.path
 )
+
+const ctxMenuRef = ref<HTMLElement | null>(null)
 
 // 供应商配置右键菜单状态
 const providerDropdown = reactive({
@@ -188,9 +196,19 @@ async function onResume(sessionId: string, projectDir?: string) {
   catch (err: any) { console.error('[SessionAnalysis] 恢复失败:', err.message || err) }
 }
 
+async function onResumeOpenCode(sessionId: string, projectDir?: string) {
+  try { await platformAdapter.resumeOpenCodeSession(sessionId, projectDir) }
+  catch (err: any) { console.error('[SessionAnalysis] 恢复 OpenCode 失败:', err.message || err) }
+}
+
 async function onOpenTerminal(projectDir: string) {
   try { await platformAdapter.openClaudeTerminal(projectDir) }
   catch (err: any) { console.error('[SessionAnalysis] 打开终端失败:', err.message || err) }
+}
+
+async function onOpenCodeTerminal(projectDir: string) {
+  try { await platformAdapter.openOpenCodeTerminal(projectDir) }
+  catch (err: any) { console.error('[SessionAnalysis] 打开 OpenCode 终端失败:', err.message || err) }
 }
 
 async function loadProviderItems(): Promise<{ id: string; name: string }[]> {
@@ -220,13 +238,21 @@ function menuPositionFromElement(el: HTMLElement): { x: number; y: number } {
   const rect = el.getBoundingClientRect()
   const zoom = parseFloat(getComputedStyle(document.body).zoom) || 1
   const max_x = window.innerWidth / zoom - 8
-  const max_y = window.innerHeight / zoom - 8
   let x = rect.left / zoom
   let y = (rect.bottom + 4) / zoom
-  // 右边溢出时，右对齐按钮
   if (x + 130 > max_x) x = Math.max(8, rect.right / zoom - 130)
-  if (y + 80 > max_y) y = Math.max(8, rect.top / zoom - 80)
   return { x, y }
+}
+
+function adjustMenuPosition() {
+  const menu = ctxMenuRef.value
+  if (!menu) return
+  const zoom = parseFloat(getComputedStyle(document.body).zoom) || 1
+  const max_y = window.innerHeight / zoom - 8
+  const bottom = providerDropdown.y + menu.offsetHeight
+  if (bottom > max_y) {
+    providerDropdown.y = Math.max(8, max_y - menu.offsetHeight)
+  }
 }
 
 async function onContextTerminal(projectDir: string, event: MouseEvent) {
@@ -237,12 +263,13 @@ async function onContextTerminal(projectDir: string, event: MouseEvent) {
   providerDropdown.mode = 'new'
   providerDropdown.projectDir = projectDir
   providerDropdown.sessionId = ''
-  const el = (event.target as HTMLElement).closest('button') as HTMLElement
+  const el = (event.target as HTMLElement).closest('button, .action-terminal') as HTMLElement
   nextTick(() => {
     const pos = el ? menuPositionFromElement(el) : clampPosition(event.clientX, event.clientY)
     providerDropdown.x = pos.x
     providerDropdown.y = pos.y
     providerDropdown.show = true
+    nextTick(adjustMenuPosition)
   })
 }
 
@@ -254,12 +281,13 @@ async function onContextTerminalForSession(sessionId: string, projectDir: string
   providerDropdown.mode = 'resume'
   providerDropdown.projectDir = projectDir || ''
   providerDropdown.sessionId = sessionId
-  const el = (event.target as HTMLElement).closest('.action-terminal') as HTMLElement
+  const el = (event.target as HTMLElement).closest('button, .action-terminal') as HTMLElement
   nextTick(() => {
     const pos = el ? menuPositionFromElement(el) : clampPosition(event.clientX, event.clientY)
     providerDropdown.x = pos.x
     providerDropdown.y = pos.y
     providerDropdown.show = true
+    nextTick(adjustMenuPosition)
   })
 }
 
@@ -382,18 +410,23 @@ onDeactivated(() => { isActive.value = false })
 .wrap-actions {
   position: absolute; top: 8px; right: 8px;
   display: flex; gap: 14px; z-index: 1;
-  opacity: 0; transition: opacity var(--transition-speed);
 }
 .session-wrap:hover .wrap-actions { opacity: 1; }
 
 /* 操作 */
 .action-terminal, .action-delete {
-  cursor: pointer; font-size: 11px; transition: opacity var(--transition-speed);
+  cursor: pointer; font-size: 11px; transition: color var(--transition-speed);
 }
 .action-terminal {
-  font-family: monospace; font-weight: 700; color: var(--text-secondary);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-tertiary);
 }
-.action-terminal:hover { color: var(--color-blue); }
+.action-terminal :deep(svg) {
+  width: 14px; height: 14px;
+}
+.action-terminal:hover {
+  color: var(--color-blue);
+}
 .action-delete {
   color: var(--color-cost); font-size: 11px;
 }
@@ -426,6 +459,7 @@ onDeactivated(() => { isActive.value = false })
 .provider-ctx-menu {
   position: fixed; z-index: 10000;
   min-width: 120px; max-width: 220px;
+  max-height: 280px; overflow-y: auto;
   background: var(--bg-card);
   border: 1px solid var(--border-main);
   border-radius: 6px;

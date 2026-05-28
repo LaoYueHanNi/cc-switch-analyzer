@@ -11,6 +11,7 @@ export interface ProjectGroupStats {
   firstAt: number
   lastAt: number
   sessionIds: string[]
+  sourceTypes?: string[]
 }
 
 export interface ProjectSessionDetail {
@@ -28,6 +29,7 @@ export interface ProjectSessionDetail {
   title?: string
   projectDir?: string
   sourcePath?: string
+  sourceType?: string
 }
 
 export interface DbResult {
@@ -163,11 +165,13 @@ export interface PlatformAdapter {
   querySessionProjectGroups(params: FilterParams): Promise<ProjectGroupStats[]>
   queryProjectSessionDetails(params: FilterParams, sessionIds: string[]): Promise<ProjectSessionDetail[]>
   openClaudeTerminal(projectDir: string): Promise<void>
+  openOpenCodeTerminal(projectDir: string): Promise<void>
   resumeClaudeSession(sessionId: string, projectDir?: string): Promise<void>
   deleteClaudeSession(sessionId: string): Promise<boolean>
   getCcswitchProviders(dbPath: string): Promise<{ id: string; name: string; hasEnv: boolean }[]>
   openClaudeTerminalWithProvider(projectDir: string, providerId: string, dbPath: string): Promise<void>
   resumeClaudeSessionWithProvider(sessionId: string, providerId: string, dbPath: string, projectDir?: string): Promise<void>
+  resumeOpenCodeSession(sessionId: string, projectDir?: string): Promise<void>
   // 更新
   checkForUpdate(proxy?: string): Promise<UpdateInfo | null>
   downloadAndInstall(onProgress?: (downloaded: number) => void, proxy?: string): Promise<void>

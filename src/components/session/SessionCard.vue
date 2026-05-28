@@ -4,9 +4,6 @@
     <div class="session-overview">
       <div class="session-id-row">
         <div class="session-id" :title="sessionId">{{ shortId }}</div>
-        <div class="session-sources" v-if="titleSource">
-          <span class="source-tag" :class="'source-' + titleSource">{{ sourceLabel }}</span>
-        </div>
       </div>
       <div class="session-project" v-if="project" :title="project">{{ project }}</div>
       <div class="session-title" v-if="title" :title="title">{{ truncateText(title, 20) }}</div>
@@ -62,7 +59,6 @@ const props = defineProps<{
   maxContextWidth: number
   cacheHitRate: number
   timestamps: number[]
-  titleSource?: string
   modelBreakdown: Array<{
     sessionId: string
     model: string
@@ -84,13 +80,6 @@ const shortId = computed(() => {
   if (id.startsWith('ses_')) return id.slice(0, 8)
   const parts = id.split('-')
   return parts[0] || id.slice(0, 8)
-})
-
-const sourceLabel = computed(() => {
-  const s = props.titleSource
-  if (s === 'claudecode') return 'ClaudeCode'
-  if (s === 'opencode') return 'OpenCode'
-  return ''
 })
 
 const modelBreakdownWithCosts = computed(() =>
@@ -148,7 +137,6 @@ function formatRange(start: number, end: number): string {
   align-items: center;
   gap: 5px;
   margin-bottom: 2px;
-  overflow: hidden;
 }
 
 .session-id {
@@ -156,34 +144,6 @@ function formatRange(start: number, end: number): string {
   font-weight: 600;
   color: var(--text-primary);
   cursor: default;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-sources {
-  display: flex;
-  gap: 3px;
-  flex-shrink: 0;
-}
-
-.source-tag {
-  font-size: 9px;
-  font-weight: 600;
-  padding: 1px 5px;
-  border-radius: 3px;
-  line-height: 1.4;
-  letter-spacing: 0.3px;
-}
-
-.source-claudecode {
-  background: var(--color-blue-bg);
-  color: var(--color-blue);
-}
-
-.source-opencode {
-  background: var(--color-purple-bg, #f3e5f5);
-  color: var(--color-purple);
 }
 
 .session-project {

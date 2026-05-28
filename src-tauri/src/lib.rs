@@ -194,8 +194,10 @@ pub fn run() {
             commands::session_title::get_session_titles,
             // 会话管理
             commands::session_manager::open_claude_terminal,
+            commands::session_manager::open_opencode_terminal,
             commands::session_manager::resume_claude_session,
             commands::session_manager::delete_claude_session,
+            commands::session_manager::resume_opencode_session,
             commands::session_manager::get_ccswitch_providers,
             commands::session_manager::open_claude_terminal_with_provider,
             commands::session_manager::resume_claude_session_with_provider,

@@ -189,6 +189,9 @@ export const platformAdapter: PlatformAdapter = {
   async openClaudeTerminal(projectDir: string): Promise<void> {
     return invoke<void>('open_claude_terminal', { projectDir })
   },
+  async openOpenCodeTerminal(projectDir: string): Promise<void> {
+    return invoke<void>('open_opencode_terminal', { projectDir })
+  },
   async resumeClaudeSession(sessionId: string, projectDir?: string): Promise<void> {
     return invoke<void>('resume_claude_session', { sessionId, projectDir: projectDir || null })
   },
@@ -203,6 +206,9 @@ export const platformAdapter: PlatformAdapter = {
   },
   async resumeClaudeSessionWithProvider(sessionId: string, providerId: string, dbPath: string, projectDir?: string): Promise<void> {
     return invoke<void>('resume_claude_session_with_provider', { sessionId, projectDir: projectDir || null, providerId, dbPath })
+  },
+  async resumeOpenCodeSession(sessionId: string, projectDir?: string): Promise<void> {
+    return invoke<void>('resume_opencode_session', { sessionId, projectDir: projectDir || null })
   },
   async checkForUpdate(proxy?: string): Promise<UpdateInfo | null> {
     const opts = proxy ? { proxy } : undefined

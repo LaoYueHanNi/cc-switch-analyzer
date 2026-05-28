@@ -77,11 +77,7 @@ fn prepare_settings_file(provider_id: &str, db_path: &str) -> Result<String, Str
     let settings_json = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("序列化配置失败: {}", e))?;
 
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let temp_file = std::env::temp_dir().join(format!("ccsa_{}_{}.json", provider_id, timestamp));
+    let temp_file = std::env::temp_dir().join(format!("ccsa_{}.json", provider_id));
 
     fs::write(&temp_file, settings_json)
         .map_err(|e| format!("写入临时配置文件失败: {}", e))?;
@@ -95,6 +91,26 @@ pub fn open_claude_terminal(project_dir: String) -> Result<(), String> {
     {
         std::process::Command::new("wt")
             .args(["-w", "0", "-d", &project_dir, "powershell", "-NoExit", "-Command", "claude"])
+            .spawn()
+            .map_err(|e| format!("启动终端失败: {}", e))?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = project_dir;
+        return Err("当前仅支持 Windows".to_string());
+    }
+
+    Ok(())
+}
+
+/// 打开 OpenCode 终端
+#[tauri::command]
+pub fn open_opencode_terminal(project_dir: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("wt")
+            .args(["-w", "0", "-d", &project_dir, "powershell", "-NoExit", "-Command", "opencode"])
             .spawn()
             .map_err(|e| format!("启动终端失败: {}", e))?;
     }
@@ -183,6 +199,34 @@ pub fn resume_claude_session(session_id: String, project_dir: Option<String>) ->
             }
         }
         cmd.args(["powershell", "-NoExit", "-Command", &claude_cmd])
+            .spawn()
+            .map_err(|e| format!("启动终端失败: {}", e))?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = session_id;
+        let _ = project_dir;
+        return Err("当前仅支持 Windows".to_string());
+    }
+
+    Ok(())
+}
+
+/// 恢复 OpenCode 会话
+#[tauri::command]
+pub fn resume_opencode_session(session_id: String, project_dir: Option<String>) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let opencode_cmd = format!("opencode -s {}", session_id);
+        let mut cmd = std::process::Command::new("wt");
+        cmd.arg("-w").arg("0");
+        if let Some(dir) = &project_dir {
+            if !dir.is_empty() {
+                cmd.arg("-d").arg(dir);
+            }
+        }
+        cmd.args(["powershell", "-NoExit", "-Command", &opencode_cmd])
             .spawn()
             .map_err(|e| format!("启动终端失败: {}", e))?;
     }
