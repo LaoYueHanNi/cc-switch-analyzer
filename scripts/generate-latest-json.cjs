@@ -24,7 +24,7 @@ if (fs.existsSync(msiDir)) {
     const sigPath = path.join(msiDir, sigName)
     const signature = fs.existsSync(sigPath) ? fs.readFileSync(sigPath, 'utf-8').trim() : ''
     const size = fs.statSync(path.join(msiDir, msiName)).size
-    const url = `${PLATFORM_BASE}/${encodeURIComponent(msiName)}`
+    const url = `${PLATFORM_BASE}/${msiName.replace(/ /g, '.')}`
     console.log(`Windows MSI: ${msiName} (${(size / 1024 / 1024).toFixed(1)} MB)`)
     console.log(`  URL: ${url}`)
     console.log(`  Signature: ${signature ? 'OK' : 'MISSING'}`)
@@ -42,7 +42,7 @@ if (fs.existsSync(dmgDir)) {
     const sigPath = filePath + '.sig'
     const signature = fs.existsSync(sigPath) ? fs.readFileSync(sigPath, 'utf-8').trim() : ''
     const size = fs.statSync(filePath).size
-    const url = `${PLATFORM_BASE}/${encodeURIComponent(file)}`
+    const url = `${PLATFORM_BASE}/${file.replace(/ /g, '.')}`
     const platformKey = (file.includes('x86_64') || file.includes('x64')) ? 'darwin-x86_64' : 'darwin-aarch64'
     console.log(`macOS ${platformKey}: ${file} (${(size / 1024 / 1024).toFixed(1)} MB)`)
     console.log(`  URL: ${url}`)
