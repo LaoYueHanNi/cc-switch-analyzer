@@ -204,8 +204,9 @@ export const platformAdapter: PlatformAdapter = {
   async resumeClaudeSessionWithProvider(sessionId: string, providerId: string, dbPath: string, projectDir?: string): Promise<void> {
     return invoke<void>('resume_claude_session_with_provider', { sessionId, projectDir: projectDir || null, providerId, dbPath })
   },
-  async checkForUpdate(): Promise<UpdateInfo | null> {
-    const update = await check()
+  async checkForUpdate(proxy?: string): Promise<UpdateInfo | null> {
+    const opts = proxy ? { proxy } : undefined
+    const update = await check(opts)
     if (!update) return null
     const currentVersion = update.currentVersion || await getVersion()
     return {
@@ -215,8 +216,9 @@ export const platformAdapter: PlatformAdapter = {
       body: update.body ?? undefined,
     }
   },
-  async downloadAndInstall(onProgress?: (downloaded: number) => void): Promise<void> {
-    const update = await check()
+  async downloadAndInstall(onProgress?: (downloaded: number) => void, proxy?: string): Promise<void> {
+    const opts = proxy ? { proxy } : undefined
+    const update = await check(opts)
     if (!update) throw new Error('没有可用的更新')
     console.log('[updater] downloading version', update.version)
     let downloaded = 0

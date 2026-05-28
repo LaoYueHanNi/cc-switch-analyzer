@@ -50,6 +50,15 @@
         <span class="tm-hint" v-if="updaterStore.status === 'idle'">当前版本 v{{ currentVersion }}</span>
         <span class="tm-hint up-to-date" v-if="updaterStore.status === 'upToDate'">已是最新版本</span>
       </div>
+      <div class="tm-row">
+        <span class="proxy-label">代理</span>
+        <input
+          class="proxy-input"
+          :value="updaterStore.proxy"
+          @input="updaterStore.setProxy(($event.target as HTMLInputElement).value)"
+          placeholder="http://127.0.0.1:7890"
+        />
+      </div>
     </div>
   </n-modal>
 </template>
@@ -312,5 +321,30 @@ async function toggleService(enabled: boolean): Promise<void> {
 
 .up-to-date {
   color: var(--color-green);
+}
+
+.proxy-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.proxy-input {
+  flex: 1;
+  font-size: 11px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.proxy-input:focus {
+  border-color: var(--color-blue);
+}
+
+.proxy-input::placeholder {
+  color: var(--text-faint);
 }
 </style>

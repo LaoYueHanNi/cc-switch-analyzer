@@ -5,17 +5,29 @@ import type { UpdateInfo } from '@/platform/types'
 
 export type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'error' | 'upToDate'
 
+const PROXY_KEY = 'updater_proxy'
+
 export const useUpdaterStore = defineStore('updater', () => {
   const status = ref<UpdateStatus>('idle')
   const updateInfo = ref<UpdateInfo | null>(null)
   const downloadedBytes = ref(0)
   const errorMessage = ref('')
+  const proxy = ref(localStorage.getItem(PROXY_KEY) || '')
+
+  function setProxy(value: string): void {
+    proxy.value = value
+    if (value) {
+      localStorage.setItem(PROXY_KEY, value)
+    } else {
+      localStorage.removeItem(PROXY_KEY)
+    }
+  }
 
   async function checkForUpdate(): Promise<void> {
     if (status.value === 'checking' || status.value === 'downloading') return
     status.value = 'checking'
     try {
-      const info = await platformAdapter.checkForUpdate()
+      const info = await platformAdapter.checkForUpdate(proxy.value || undefined)
       if (info) {
         updateInfo.value = info
         status.value = 'available'
@@ -36,7 +48,7 @@ export const useUpdaterStore = defineStore('updater', () => {
     try {
       await platformAdapter.downloadAndInstall((downloaded) => {
         downloadedBytes.value = downloaded
-      })
+      }, proxy.value || undefined)
       status.value = 'idle'
     } catch (e: any) {
       status.value = 'error'
@@ -56,6 +68,8 @@ export const useUpdaterStore = defineStore('updater', () => {
     updateInfo: computed(() => updateInfo.value),
     downloadedBytes: computed(() => downloadedBytes.value),
     errorMessage: computed(() => errorMessage.value),
+    proxy: computed(() => proxy.value),
+    setProxy,
     checkForUpdate,
     downloadAndInstall,
     dismiss,
