@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { platformAdapter } from '@/platform'
 import type { UpdateInfo } from '@/platform/types'
 
-export type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'error'
+export type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'error' | 'upToDate'
 
 export const useUpdaterStore = defineStore('updater', () => {
   const status = ref<UpdateStatus>('idle')
@@ -20,7 +20,8 @@ export const useUpdaterStore = defineStore('updater', () => {
         updateInfo.value = info
         status.value = 'available'
       } else {
-        status.value = 'idle'
+        status.value = 'upToDate'
+        setTimeout(() => { if (status.value === 'upToDate') status.value = 'idle' }, 3000)
       }
     } catch (e: any) {
       status.value = 'error'

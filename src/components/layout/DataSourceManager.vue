@@ -48,6 +48,7 @@
           {{ updaterStore.status === 'checking' ? '检查中...' : '检查更新' }}
         </button>
         <span class="tm-hint" v-if="updaterStore.status === 'idle'">当前版本 v{{ currentVersion }}</span>
+        <span class="tm-hint up-to-date" v-if="updaterStore.status === 'upToDate'">已是最新版本</span>
       </div>
     </div>
   </n-modal>
@@ -307,5 +308,9 @@ async function toggleService(enabled: boolean): Promise<void> {
 .check-update-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.up-to-date {
+  color: var(--color-green);
 }
 </style>
