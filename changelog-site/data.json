@@ -4,6 +4,22 @@
     "date": "2026-05-28",
     "commits": [
       {
+        "hash": "b8d8d0d",
+        "subject": "style: 优化亮色/暗色模式文字对比度和卡片层次感",
+        "date": "2026-05-28"
+      },
+      {
+        "hash": "51283c8",
+        "subject": "fix: 供应商右键菜单溢出修复 + 临时文件固定命名 + 会话Tab区分Claude/OpenCode双图标按钮启动终端",
+        "date": "2026-05-28"
+      }
+    ]
+  },
+  {
+    "version": "0.7.10",
+    "date": "2026-05-28",
+    "commits": [
+      {
         "hash": "d9d7941",
         "subject": "feat: 版本更新栏增加代理地址设置，更新时通过代理访问 GitHub",
         "date": "2026-05-28"
