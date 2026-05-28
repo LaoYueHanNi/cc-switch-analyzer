@@ -18,37 +18,36 @@ const platforms = {}
 const msiDir = path.join('artifacts', 'windows-msi')
 if (fs.existsSync(msiDir)) {
   const msiFiles = fs.readdirSync(msiDir).filter(f => f.endsWith('.msi'))
-  const sigFiles = fs.readdirSync(msiDir).filter(f => f.endsWith('.msi.sig'))
   if (msiFiles.length > 0) {
     const msiName = msiFiles[0]
-    const sigName = sigFiles[0] || msiName + '.sig'
+    const sigName = msiName + '.sig'
     const sigPath = path.join(msiDir, sigName)
     const signature = fs.existsSync(sigPath) ? fs.readFileSync(sigPath, 'utf-8').trim() : ''
     const size = fs.statSync(path.join(msiDir, msiName)).size
-    platforms['windows-x86_64'] = { url: `${PLATFORM_BASE}/${msiName}`, size, signature }
+    const url = `${PLATFORM_BASE}/${encodeURIComponent(msiName)}`
+    console.log(`Windows MSI: ${msiName} (${(size / 1024 / 1024).toFixed(1)} MB)`)
+    console.log(`  URL: ${url}`)
+    console.log(`  Signature: ${signature ? 'OK' : 'MISSING'}`)
+    platforms['windows-x86_64'] = { url, size, signature }
   }
 }
 
-// macOS DMG
+// macOS
 const dmgDir = path.join('artifacts', 'macos-dmg')
 if (fs.existsSync(dmgDir)) {
-  const dmgFiles = fs.readdirSync(dmgDir).filter(f => f.endsWith('.dmg'))
-  // Also check for .tar.gz (Tauri updater on macOS uses tar.gz, not dmg)
+  // .tar.gz for updater (Tauri v2 uses tar.gz on macOS, not dmg)
   const tarFiles = fs.readdirSync(dmgDir).filter(f => f.endsWith('.tar.gz'))
-  const allFiles = dmgFiles.concat(tarFiles)
-
-  for (const file of allFiles) {
+  for (const file of tarFiles) {
     const filePath = path.join(dmgDir, file)
     const sigPath = filePath + '.sig'
     const signature = fs.existsSync(sigPath) ? fs.readFileSync(sigPath, 'utf-8').trim() : ''
     const size = fs.statSync(filePath).size
-
-    let platformKey = 'darwin-aarch64'
-    if (file.includes('x86_64') || file.includes('x64')) {
-      platformKey = 'darwin-x86_64'
-    }
-
-    platforms[platformKey] = { url: `${PLATFORM_BASE}/${file}`, size, signature }
+    const url = `${PLATFORM_BASE}/${encodeURIComponent(file)}`
+    const platformKey = (file.includes('x86_64') || file.includes('x64')) ? 'darwin-x86_64' : 'darwin-aarch64'
+    console.log(`macOS ${platformKey}: ${file} (${(size / 1024 / 1024).toFixed(1)} MB)`)
+    console.log(`  URL: ${url}`)
+    console.log(`  Signature: ${signature ? 'OK' : 'MISSING'}`)
+    platforms[platformKey] = { url, size, signature }
   }
 }
 
@@ -60,5 +59,5 @@ const manifest = {
 }
 
 fs.writeFileSync('latest.json', JSON.stringify(manifest, null, 2))
-console.log('Generated latest.json:')
+console.log('\nGenerated latest.json:')
 console.log(JSON.stringify(manifest, null, 2))

@@ -218,12 +218,22 @@ export const platformAdapter: PlatformAdapter = {
   async downloadAndInstall(onProgress?: (downloaded: number) => void): Promise<void> {
     const update = await check()
     if (!update) throw new Error('没有可用的更新')
+    console.log('[updater] downloading version', update.version)
     let downloaded = 0
     await update.downloadAndInstall((event) => {
-      if (event.event === 'Progress') {
-        downloaded += event.data.chunkLength
-        onProgress?.(downloaded)
+      switch (event.event) {
+        case 'Started':
+          console.log('[updater] download started, contentLength:', event.data.contentLength)
+          break
+        case 'Progress':
+          downloaded += event.data.chunkLength
+          onProgress?.(downloaded)
+          break
+        case 'Finished':
+          console.log('[updater] download finished, total:', downloaded)
+          break
       }
     })
+    console.log('[updater] install complete')
   }
 }
