@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { getVersion } from '@tauri-apps/api/app'
 import { open } from '@tauri-apps/plugin-dialog'
 import { check } from '@tauri-apps/plugin-updater'
 import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo } from './types'
@@ -206,9 +207,10 @@ export const platformAdapter: PlatformAdapter = {
   async checkForUpdate(): Promise<UpdateInfo | null> {
     const update = await check()
     if (!update) return null
+    const currentVersion = update.currentVersion || await getVersion()
     return {
       version: update.version,
-      currentVersion: update.currentVersion,
+      currentVersion,
       date: update.date ?? undefined,
       body: update.body ?? undefined,
     }
