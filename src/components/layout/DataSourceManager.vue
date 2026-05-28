@@ -42,7 +42,7 @@
     <!-- 更新 -->
     <n-divider style="margin: 12px 0 8px" />
     <div class="tm-section">
-      <div class="tm-header">更新</div>
+      <div class="tm-header">版本更新</div>
       <div class="tm-row">
         <button class="check-update-btn" :disabled="updaterStore.status === 'checking'" @click="updaterStore.checkForUpdate()">
           {{ updaterStore.status === 'checking' ? '检查中...' : '检查更新' }}
