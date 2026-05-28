@@ -4,6 +4,17 @@
     "date": "2026-05-28",
     "commits": [
       {
+        "hash": "d9d7941",
+        "subject": "feat: 版本更新栏增加代理地址设置，更新时通过代理访问 GitHub",
+        "date": "2026-05-28"
+      }
+    ]
+  },
+  {
+    "version": "0.7.9",
+    "date": "2026-05-28",
+    "commits": [
+      {
         "hash": "96f896d",
         "subject": "fix: latest.json URL 文件名空格替换为点号，匹配 GitHub Release 实际文件名",
         "date": "2026-05-28"
