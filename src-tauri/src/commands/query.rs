@@ -266,13 +266,16 @@ pub fn compute_precompute(
 
     let mut precomputed = precompute_costs(&agg.daily_trend, &agg.provider_model_tokens, pricing, tz_offset);
 
-    let (tier_costs, ctx_model_costs, ctx_model_breakdown) = build_context_tier_and_model_costs(&tier_buckets, pricing);
+    let (tier_costs, ctx_model_costs, ctx_model_breakdown, ctx_day_cost_map) = build_context_tier_and_model_costs(&tier_buckets, pricing);
     precomputed.model_context_tier_costs = tier_costs;
 
     let mut compare_buckets_map: HashMap<String, Vec<CompareBucket>> = HashMap::new();
     for bucket in &tier_buckets {
+        let actual_tier = pricing
+            .get_matched_tier_threshold(&bucket.model, bucket.representative_epoch, bucket.context_tier.max(0))
+            .unwrap_or(0);
         let cb = CompareBucket {
-            threshold: bucket.context_tier.max(0),
+            threshold: actual_tier,
             representative_epoch: bucket.representative_epoch,
             input_tokens: bucket.input_tokens,
             output_tokens: bucket.output_tokens,
@@ -289,6 +292,7 @@ pub fn compute_precompute(
     if !ctx_model_costs.is_empty() {
         precomputed.model_costs = ctx_model_costs;
         precomputed.model_cost_breakdown = ctx_model_breakdown;
+        precomputed.day_cost_map = ctx_day_cost_map;
 
         precomputed.provider_costs.clear();
         let mut model_total_tokens: HashMap<String, i64> = HashMap::new();

@@ -24,6 +24,7 @@
         :time-rules="card.timeRules"
         :cloud-time-rules="card.cloudTimeRules"
         :context-tier-costs="card.contextTierCosts"
+        :compare-buckets="card.compareBuckets"
         @compare="onCompare"
         @set-pricing="onSetPricing"
       />
@@ -66,6 +67,7 @@ interface ModelCardData {
   timeRules: TimePricingRule[]
   cloudTimeRules: CloudPricingTimeRule[]
   contextTierCosts: Array<{ threshold: number; cost: number; tokens: number }>
+  compareBuckets: CompareBucket[]
 }
 
 const modelCards = computed<ModelCardData[]>(() => {
@@ -98,6 +100,7 @@ const modelCards = computed<ModelCardData[]>(() => {
     const timeRules = pricing?.timeRules || []
     const cloudTimeRules = pricing?.cloudTimeRules || []
     const contextTierCosts = modelTierCosts[mb.model] || []
+    const compareBuckets = pre?.modelCompareBuckets?.[mb.model] || []
 
     return {
       modelData: mb,
@@ -107,7 +110,8 @@ const modelCards = computed<ModelCardData[]>(() => {
       hasTimePricing,
       timeRules,
       cloudTimeRules,
-      contextTierCosts
+      contextTierCosts,
+      compareBuckets
     }
   })
 })

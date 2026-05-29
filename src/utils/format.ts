@@ -9,7 +9,7 @@ export function formatNum(n: number): string {
 
 // 定价单价格式化：2-4 位小数，去尾零，保底 2 位
 export function formatRate(v: number): string {
-  let s = v.toFixed(4)
+  let s = v.toFixed(3)
   const dot = s.indexOf('.')
   if (dot < 0) return s
   s = s.replace(/0+$/, '')

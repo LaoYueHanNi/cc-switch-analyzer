@@ -37,11 +37,6 @@
         <span class="stat-item">命中率 {{ formatPercent(cacheHitRate) }}</span>
       </div>
 
-      <!-- 上下文档位占比 -->
-      <div v-if="tierLabel" class="stats-row">
-        <span class="stat-item">{{ tierLabel }}</span>
-      </div>
-
       <!-- 费用分解网格 -->
       <PricingGrid
         :input-tokens="modelData?.inputTokens"
@@ -57,18 +52,29 @@
         :cache-read-rate="getRateStr('cacheReadCostPerMillion')"
         :cache-creation-rate="getRateStr('cacheCreationCostPerMillion')"
       />
+
+      <!-- 计费明细入口 -->
+      <div v-if="showBreakdownBtn" class="breakdown-btn" @click="showBreakdownDialog = true">计费明细</div>
+      <PricingBreakdownDialog
+        v-model:show="showBreakdownDialog"
+        :model-name="modelId"
+        :compare-buckets="compareBuckets"
+        :pricing="pricing"
+      />
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { NButton, NIcon } from 'naive-ui'
 import { TimeOutline } from '@vicons/ionicons5'
 import { formatNum, formatRate, formatCost, formatPercent, epochToDateStr } from '@/utils/format'
 import PricingGrid from '@/components/common/PricingGrid.vue'
+import PricingBreakdownDialog from './PricingBreakdownDialog.vue'
 import type { ModelBreakdown } from '@/types/database'
 import type { PricingData, TimePricingRule, CloudPricingTimeRule } from '@/types/pricing'
+import type { CompareBucket } from '@/types/common'
 
 const props = defineProps<{
   modelData: ModelBreakdown
@@ -79,6 +85,7 @@ const props = defineProps<{
   timeRules: TimePricingRule[]
   cloudTimeRules?: CloudPricingTimeRule[]
   contextTierCosts?: Array<{ threshold: number; cost: number; tokens: number }>
+  compareBuckets?: CompareBucket[]
 }>()
 
 defineEmits<{
@@ -102,18 +109,6 @@ const cacheHitRate = computed(() => {
   const input = props.modelData.inputTokens
   const cacheRead = props.modelData.cacheRead
   return (input + cacheRead) > 0 ? cacheRead / (input + cacheRead) : 0
-})
-
-const tierLabel = computed(() => {
-  const tiers = props.contextTierCosts
-  if (!tiers || !tiers.some(t => t.threshold > 0)) return ''
-  const total = tiers.reduce((s, t) => s + (t.tokens || 0), 0)
-  if (total <= 0) return ''
-  return tiers.map(t => {
-    const pct = Math.round((t.tokens || 0) / total * 100)
-    const name = t.threshold === 0 ? '基础' : `≥${Math.round(t.threshold / 1000)}K`
-    return `${name} ${pct}%`
-  }).join(' ')
 })
 
 const allDisplayTimeRules = computed(() => [
@@ -152,14 +147,42 @@ const timeBadgeTitle = computed(() => {
 
 type RateField = 'inputCostPerMillion' | 'outputCostPerMillion' | 'cacheReadCostPerMillion' | 'cacheCreationCostPerMillion'
 
+function getEffectiveRate(field: RateField): number {
+  const bd = props.costBreakdown
+  const mb = props.modelData
+  const M = 1_000_000
+  const fieldMap: Record<RateField, [number, number]> = {
+    inputCostPerMillion: [bd[0], mb.inputTokens],
+    outputCostPerMillion: [bd[1], mb.outputTokens],
+    cacheReadCostPerMillion: [bd[2], mb.cacheRead],
+    cacheCreationCostPerMillion: [bd[3], mb.cacheCreation],
+  }
+  const [cost, tokens] = fieldMap[field]
+  return tokens > 0 ? cost * M / tokens : 0
+}
+
 function getRateStr(field: RateField): string {
   if (activeTimeRules.value.length > 0) {
     const rules = activeTimeRules.value
     if (rules.length === 1) return formatRate(rules[0][field]) + '/M'
     return rules.map(r => (r.label ? r.label + ':' : '') + formatRate(r[field]) + '/M').join(' ')
   }
+  const rate = getEffectiveRate(field)
+  if (rate > 0) return formatRate(rate) + '/M'
   return formatRate((props.pricing?.[field] as number) || 0) + '/M'
 }
+
+const showBreakdownDialog = ref(false)
+const showBreakdownBtn = computed(() => {
+  if (!props.compareBuckets?.length || !props.pricing) return false
+  // 实际命中了多个档位（至少两个 threshold 不同）
+  const usedTiers = new Set(props.compareBuckets.map(b => b.threshold))
+  if (usedTiers.size > 1) return true
+  // 实际命中了时间定价（有 bucket 的 epoch 落在时间规则范围内）
+  const allRules = [...props.timeRules, ...(props.cloudTimeRules || [])]
+  if (allRules.length > 0 && props.compareBuckets.some(b => allRules.some(r => b.representativeEpoch >= r.startTime && b.representativeEpoch <= r.endTime))) return true
+  return false
+})
 
 </script>
 
@@ -276,4 +299,12 @@ function getRateStr(field: RateField): string {
   margin-left: auto;
   white-space: nowrap;
 }
+
+.breakdown-btn {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--color-blue);
+  cursor: pointer;
+}
+.breakdown-btn:hover { opacity: 0.7; }
 </style>

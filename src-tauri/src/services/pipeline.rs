@@ -424,10 +424,6 @@ pub fn aggregate_model_context_tier_buckets(
             .copied()
             .unwrap_or(0);
 
-        if tier == 0 {
-            continue; // 低于最低阈值，跳过
-        }
-
         let day = to_day(r.created_at, tz_offset);
         let key = (r.model.clone(), day, tier);
 

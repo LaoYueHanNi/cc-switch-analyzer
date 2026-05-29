@@ -147,9 +147,38 @@ const pricingMap = computed(() => {
   return map
 })
 
+// 从预计算结果推算每个模型的加权费率（基于 tier-aware 分解）
+const blendedRates = computed(() => {
+  const pre = queryStore.precomputed
+  if (!pre?.modelCostBreakdown) return new Map<string, { input: number; output: number; cacheRead: number; cacheCreation: number }>()
+  const rates = new Map<string, { input: number; output: number; cacheRead: number; cacheCreation: number }>()
+  for (const mb of queryStore.modelBreakdown) {
+    const bd = pre.modelCostBreakdown[mb.model]
+    if (!bd) continue
+    const M = 1_000_000
+    rates.set(mb.model, {
+      input: mb.inputTokens > 0 ? bd[0] * M / mb.inputTokens : (pricingMap.value.get(mb.model)?.inputCostPerMillion || 0),
+      output: mb.outputTokens > 0 ? bd[1] * M / mb.outputTokens : (pricingMap.value.get(mb.model)?.outputCostPerMillion || 0),
+      cacheRead: mb.cacheRead > 0 ? bd[2] * M / mb.cacheRead : (pricingMap.value.get(mb.model)?.cacheReadCostPerMillion || 0),
+      cacheCreation: mb.cacheCreation > 0 ? bd[3] * M / mb.cacheCreation : (pricingMap.value.get(mb.model)?.cacheCreationCostPerMillion || 0),
+    })
+  }
+  return rates
+})
+
 function getCostForRow(row: DailyTrendRow): number {
   const pricing = pricingMap.value.get(row.model)
   if (!pricing) return 0
+  const blended = blendedRates.value.get(row.model)
+  if (blended) {
+    const M = 1_000_000
+    return (
+      row.inputTokens * blended.input / M +
+      row.outputTokens * blended.output / M +
+      row.cacheRead * blended.cacheRead / M +
+      row.cacheCreation * blended.cacheCreation / M
+    )
+  }
   const M = 1_000_000
   return (
     row.inputTokens * (pricing.inputCostPerMillion || 0) / M +

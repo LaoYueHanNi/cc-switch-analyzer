@@ -303,15 +303,16 @@ pub fn aggregate_combined_breakdown(combined: &[CombinedBreakdownRow]) -> Combin
     }
 }
 
-/// 从 tier buckets 一次性计算 tier costs + 模型总费用（含四维分解）
+/// 从 tier buckets 一次性计算 tier costs + 模型总费用（含四维分解）+ 每日费用
 /// 等价于逐条请求调用 get_pricing_at_with_context 后求和
 pub fn build_context_tier_and_model_costs(
     tier_buckets: &[crate::models::ModelContextTierBucket],
     ps: &PricingEngine,
-) -> (HashMap<String, Vec<ContextTierCost>>, HashMap<String, f64>, HashMap<String, Vec<f64>>) {
+) -> (HashMap<String, Vec<ContextTierCost>>, HashMap<String, f64>, HashMap<String, Vec<f64>>, HashMap<String, f64>) {
     let mut tier_costs_map: HashMap<String, Vec<ContextTierCost>> = HashMap::new();
     let mut model_costs: HashMap<String, f64> = HashMap::new();
     let mut model_breakdown: HashMap<String, Vec<f64>> = HashMap::new();
+    let mut day_cost_map: HashMap<String, f64> = HashMap::new();
 
     for bucket in tier_buckets {
         let pricing_context = bucket.context_tier.max(0);
@@ -331,6 +332,9 @@ pub fn build_context_tier_and_model_costs(
         // 累加四维分解
         let e = model_breakdown.entry(bucket.model.clone()).or_insert_with(|| vec![0.0, 0.0, 0.0, 0.0]);
         e[0] += bd[0]; e[1] += bd[1]; e[2] += bd[2]; e[3] += bd[3];
+
+        // 累加每日费用
+        *day_cost_map.entry(bucket.day.clone()).or_insert(0.0) += cost;
 
         // 累加 tier costs
         let tier_key = ps
@@ -355,5 +359,5 @@ pub fn build_context_tier_and_model_costs(
         tiers.sort_by_key(|t| t.threshold);
     }
 
-    (tier_costs_map, model_costs, model_breakdown)
+    (tier_costs_map, model_costs, model_breakdown, day_cost_map)
 }
