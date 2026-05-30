@@ -32,13 +32,18 @@ function makeSeries(
   visible: boolean
 ): echarts.SeriesOption {
   const color = getColor(colorVar)
+  const pointCount = data.filter(v => v != null && v > 0).length
+  const baseSize = pointCount <= 7 ? 6 : pointCount <= 31 ? 4 : 3
+
   return {
     name,
     type: 'line',
     data: visible ? data : data.map(() => null),
     yAxisIndex,
     smooth: true,
-    showSymbol: false,
+    showSymbol: true,
+    symbol: 'circle',
+    symbolSize: (value: number) => value > 0 ? baseSize : 0,
     connectNulls: false,
     lineStyle: { color, width: visible ? 2 : 0 },
     itemStyle: { color },
@@ -48,7 +53,17 @@ function makeSeries(
         { offset: 1, color: hexToRgba(color, 0.02) }
       ])
     } : undefined,
-    emphasis: { focus: 'series' },
+    emphasis: {
+      focus: 'series',
+      scale: true,
+      symbolSize: baseSize * 2,
+      itemStyle: {
+        borderWidth: 2,
+        borderColor: '#fff',
+        shadowBlur: 6,
+        shadowColor: 'rgba(0,0,0,0.2)'
+      }
+    },
     z: yAxisIndex === 0 ? 2 : 3
   }
 }
@@ -160,5 +175,7 @@ function handleResize(): void { chart?.resize() }
 .trend-chart {
   width: 100%;
   height: 100%;
+  /* 抵消 body zoom: 1.1，修复 ECharts tooltip 坐标偏移 */
+  zoom: calc(1 / 1.1);
 }
 </style>
