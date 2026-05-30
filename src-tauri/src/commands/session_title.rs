@@ -63,7 +63,35 @@ pub fn get_session_titles(
         }
     }
 
-    // 3. JSONL 兜底
+    // 3. Codex JSONL 兜底（先按 session_id 匹配，再按时间戳匹配）
+    let remaining_for_codex: Vec<String> = uncached.iter()
+        .filter(|id| !resolved.contains_key(*id))
+        .cloned()
+        .collect();
+    if !remaining_for_codex.is_empty() {
+        let codex_resolved = {
+            let data_sources = state.data_sources.read().map_err(|e| e.to_string())?;
+            crate::services::codex_sessions::resolve_codex_titles(
+                &remaining_for_codex,
+                |ids| {
+                    let mut map: HashMap<String, Vec<i64>> = HashMap::new();
+                    for entry in data_sources.iter() {
+                        if let Ok(timestamps) = entry.source.get_session_timestamps(ids) {
+                            for (sid, times) in timestamps {
+                                map.entry(sid).or_default().extend(times);
+                            }
+                        }
+                    }
+                    map
+                },
+            )
+        };
+        for (id, (title, project)) in codex_resolved {
+            resolved.insert(id, (title, project, "codex".to_string()));
+        }
+    }
+
+    // 4. Claude JSONL 兜底
     let jsonl_provider = ClaudeJsonlTitleProvider;
     let remaining_for_jsonl: Vec<String> = uncached.iter()
         .filter(|id| !resolved.contains_key(*id))

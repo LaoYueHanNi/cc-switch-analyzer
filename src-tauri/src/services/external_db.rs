@@ -523,7 +523,9 @@ impl ExternalDbService {
         let db = self.db()?;
         let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
         let sql = format!(
-            "SELECT session_id, MAX(input_tokens + cache_read_tokens) AS max_ctx
+            "SELECT session_id,
+                    MAX(CASE WHEN app_type = 'codex' THEN input_tokens
+                             ELSE input_tokens + cache_read_tokens END) AS max_ctx
              FROM proxy_request_logs
              WHERE session_id IN ({})
                AND input_tokens + cache_read_tokens > 0
@@ -657,7 +659,8 @@ impl ExternalDbService {
                 l.input_tokens,
                 l.output_tokens,
                 l.cache_read_tokens,
-                l.cache_creation_tokens
+                l.cache_creation_tokens,
+                l.app_type
              FROM proxy_request_logs l
              {}
                AND l.session_id IN ({})
@@ -669,13 +672,17 @@ impl ExternalDbService {
         let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
         let rows = stmt
             .query_map(refs.as_slice(), |row| {
+                let app_type: String = row.get::<_, Option<String>>(7)?.unwrap_or_default();
+                let raw_input: i64 = row.get::<_, Option<i64>>(3)?.unwrap_or(0);
+                let cache_read: i64 = row.get::<_, Option<i64>>(5)?.unwrap_or(0);
+                let input_tokens = if app_type == "codex" { raw_input.saturating_sub(cache_read) } else { raw_input };
                 Ok(SessionRequestToken {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     created_at: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
-                    input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    input_tokens,
                     output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
-                    cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    cache_read,
                     cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                 })
             })
@@ -702,11 +709,12 @@ impl ExternalDbService {
                 SUM(l.input_tokens) AS input_tokens,
                 SUM(l.output_tokens) AS output_tokens,
                 SUM(l.cache_read_tokens) AS cache_read,
-                SUM(l.cache_creation_tokens) AS cache_creation
+                SUM(l.cache_creation_tokens) AS cache_creation,
+                l.app_type
              FROM proxy_request_logs l
              {}
                AND l.session_id IN ({})
-             GROUP BY l.session_id, l.model",
+             GROUP BY l.session_id, l.model, l.app_type",
             where_sql, placeholders.join(",")
         );
 
@@ -714,12 +722,16 @@ impl ExternalDbService {
         let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
         let rows = stmt
             .query_map(refs.as_slice(), |row| {
+                let app_type: String = row.get::<_, Option<String>>(6)?.unwrap_or_default();
+                let raw_input: i64 = row.get::<_, Option<i64>>(2)?.unwrap_or(0);
+                let cache_read: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
+                let input_tokens = if app_type == "codex" { raw_input.saturating_sub(cache_read) } else { raw_input };
                 Ok(SessionModelToken {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    input_tokens: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    input_tokens,
                     output_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                    cache_read: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    cache_read,
                     cache_creation: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
                 })
             })
@@ -853,7 +865,7 @@ impl ExternalDbService {
                 SELECT session_id, model, provider_id, created_at,
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
-                       latency_ms
+                       latency_ms, app_type
                 FROM proxy_request_logs
                 WHERE created_at > ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
@@ -862,7 +874,7 @@ impl ExternalDbService {
                 SELECT session_id, model, provider_id, created_at,
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
-                       latency_ms
+                       latency_ms, app_type
                 FROM proxy_request_logs
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
                 ORDER BY created_at DESC
@@ -872,14 +884,18 @@ impl ExternalDbService {
         let mut stmt = db.prepare(sql).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
         let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(params_refs.as_slice(), |row| {
+            let app_type: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
+            let raw_input: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
+            let cache_read: i64 = row.get::<_, Option<i64>>(6)?.unwrap_or(0);
+            let input_tokens = if app_type == "codex" { raw_input.saturating_sub(cache_read) } else { raw_input };
             Ok((
                 row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                 row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                input_tokens,
                 row.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                cache_read,
                 row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
             ))
@@ -899,7 +915,7 @@ impl ExternalDbService {
                 SELECT session_id, model, provider_id, created_at,
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
-                       latency_ms
+                       latency_ms, app_type
                 FROM proxy_request_logs
                 WHERE created_at > ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
@@ -908,7 +924,7 @@ impl ExternalDbService {
                 SELECT session_id, model, provider_id, created_at,
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
-                       latency_ms
+                       latency_ms, app_type
                 FROM proxy_request_logs
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
                 ORDER BY created_at DESC
@@ -918,14 +934,18 @@ impl ExternalDbService {
         let mut stmt = db.prepare(sql).map_err(|e| format!("stream_records 准备失败: {}", e))?;
         let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let mut rows = stmt.query_map(params_refs.as_slice(), |row| {
+            let app_type: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
+            let raw_input: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
+            let cache_read: i64 = row.get::<_, Option<i64>>(6)?.unwrap_or(0);
+            let input_tokens = if app_type == "codex" { raw_input.saturating_sub(cache_read) } else { raw_input };
             Ok((
                 row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                 row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                input_tokens,
                 row.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                cache_read,
                 row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
             ))
@@ -945,7 +965,7 @@ impl ExternalDbService {
             "SELECT session_id, model, provider_id, created_at,
                     input_tokens, output_tokens,
                     cache_read_tokens, cache_creation_tokens,
-                    latency_ms
+                    latency_ms, app_type
              FROM proxy_request_logs {}
              ORDER BY created_at",
             where_sql
@@ -955,17 +975,23 @@ impl ExternalDbService {
         let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
         let rows = stmt.query_map(refs.as_slice(), |row| {
             let provider_id: String = row.get::<_, Option<String>>(2)?.unwrap_or_default();
+            let app_type: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
+            let is_codex = app_type == "codex";
+            let raw_input: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
+            let cache_read: i64 = row.get::<_, Option<i64>>(6)?.unwrap_or(0);
+            // Codex (OpenAI API) 的 input_tokens 已含 cache_read，需转换为独立口径
+            let input_tokens = if is_codex { raw_input.saturating_sub(cache_read) } else { raw_input };
             Ok(RawRecord {
                 session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 provider_id: provider_id.clone(),
                 created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                input_tokens,
                 output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                cache_read: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                cache_read,
                 cache_creation: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 latency: row.get::<_, Option<i64>>(8)?.unwrap_or(0),
-                is_codex: provider_id.contains("codex"),
+                is_codex,
             })
         }).map_err(|e| format!("查询过滤记录失败: {}", e))?;
 

@@ -172,6 +172,8 @@ export interface PlatformAdapter {
   openClaudeTerminalWithProvider(projectDir: string, providerId: string, dbPath: string): Promise<void>
   resumeClaudeSessionWithProvider(sessionId: string, providerId: string, dbPath: string, projectDir?: string): Promise<void>
   resumeOpenCodeSession(sessionId: string, projectDir?: string): Promise<void>
+  openCodexTerminal(projectDir: string): Promise<void>
+  resumeCodexSession(sessionId: string, projectDir?: string): Promise<void>
   // 更新
   checkForUpdate(proxy?: string): Promise<UpdateInfo | null>
   downloadAndInstall(onProgress?: (downloaded: number) => void, proxy?: string): Promise<void>

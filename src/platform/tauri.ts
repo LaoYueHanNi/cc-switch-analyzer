@@ -210,6 +210,12 @@ export const platformAdapter: PlatformAdapter = {
   async resumeOpenCodeSession(sessionId: string, projectDir?: string): Promise<void> {
     return invoke<void>('resume_opencode_session', { sessionId, projectDir: projectDir || null })
   },
+  async openCodexTerminal(projectDir: string): Promise<void> {
+    return invoke<void>('open_codex_terminal', { projectDir })
+  },
+  async resumeCodexSession(sessionId: string, projectDir?: string): Promise<void> {
+    return invoke<void>('resume_codex_session', { sessionId, projectDir: projectDir || null })
+  },
   async checkForUpdate(proxy?: string): Promise<UpdateInfo | null> {
     const opts = proxy ? { proxy } : undefined
     const update = await check(opts)

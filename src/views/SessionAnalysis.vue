@@ -30,6 +30,7 @@
           @terminal="onOpenTerminal"
           @contextTerminal="onContextTerminal"
           @openCodeTerminal="onOpenCodeTerminal"
+          @codexTerminal="onOpenCodexTerminal"
         />
       </div>
 
@@ -69,8 +70,9 @@
               :model-breakdown="s.modelBreakdown"
             />
             <div class="wrap-actions">
-              <span v-if="s.sourceType !== 'opencode'" class="action-terminal" @click="onResume(s.sessionId, s.projectDir)" @contextmenu.prevent="onContextTerminalForSession(s.sessionId, s.projectDir, $event)" title="恢复 Claude 会话（右键选择供应商配置）"><span v-html="claudeSvg"></span></span>
-              <span v-else class="action-terminal action-opencode" @click="onResumeOpenCode(s.sessionId, s.projectDir)" title="恢复 OpenCode 会话"><span v-html="opencodeSvg"></span></span>
+              <span v-if="s.sourceType === 'codex'" class="action-terminal action-codex" @click="onResumeCodex(s.sessionId, s.projectDir)" title="恢复 Codex 会话"><span v-html="codexSvg"></span></span>
+              <span v-else-if="s.sourceType === 'opencode'" class="action-terminal action-opencode" @click="onResumeOpenCode(s.sessionId, s.projectDir)" title="恢复 OpenCode 会话"><span v-html="opencodeSvg"></span></span>
+              <span v-else class="action-terminal" @click="onResume(s.sessionId, s.projectDir)" @contextmenu.prevent="onContextTerminalForSession(s.sessionId, s.projectDir, $event)" title="恢复 Claude 会话（右键选择供应商配置）"><span v-html="claudeSvg"></span></span>
               <!-- TODO: 会话删除功能暂未开放，待 UI 确认后恢复 -->
               <!-- <span v-if="s.sourcePath" class="action-delete" @click="confirmDelete(s)" title="删除会话">删除</span> -->
             </div>
@@ -115,6 +117,7 @@ import ProjectCard from '@/components/session/ProjectCard.vue'
 import SessionCard from '@/components/session/SessionCard.vue'
 import claudeSvg from '@/assets/claude.svg?raw'
 import opencodeSvg from '@/assets/opencode.svg?raw'
+import codexSvg from '@/assets/codex.svg?raw'
 import type { ProjectGroupStats, ProjectSessionDetail } from '@/platform/types'
 
 const dbStore = useDatabaseStore()
@@ -201,6 +204,11 @@ async function onResumeOpenCode(sessionId: string, projectDir?: string) {
   catch (err: any) { console.error('[SessionAnalysis] 恢复 OpenCode 失败:', err.message || err) }
 }
 
+async function onResumeCodex(sessionId: string, projectDir?: string) {
+  try { await platformAdapter.resumeCodexSession(sessionId, projectDir) }
+  catch (err: any) { console.error('[SessionAnalysis] 恢复 Codex 失败:', err.message || err) }
+}
+
 async function onOpenTerminal(projectDir: string) {
   try { await platformAdapter.openClaudeTerminal(projectDir) }
   catch (err: any) { console.error('[SessionAnalysis] 打开终端失败:', err.message || err) }
@@ -209,6 +217,11 @@ async function onOpenTerminal(projectDir: string) {
 async function onOpenCodeTerminal(projectDir: string) {
   try { await platformAdapter.openOpenCodeTerminal(projectDir) }
   catch (err: any) { console.error('[SessionAnalysis] 打开 OpenCode 终端失败:', err.message || err) }
+}
+
+async function onOpenCodexTerminal(projectDir: string) {
+  try { await platformAdapter.openCodexTerminal(projectDir) }
+  catch (err: any) { console.error('[SessionAnalysis] 打开 Codex 终端失败:', err.message || err) }
 }
 
 async function loadProviderItems(): Promise<{ id: string; name: string }[]> {

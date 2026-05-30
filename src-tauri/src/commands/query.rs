@@ -547,9 +547,12 @@ pub fn query_session_project_groups(
 
     if all_sessions.is_empty() { return Ok(vec![]); }
 
+    // 1.5 Codex session 合并：CC-Switch 给每个请求分配独立 UUID，
+    // 通过时间戳匹配到 Codex JSONL 的真实 session_id，合并同一会话的请求
+    let codex_mapping = crate::services::codex_sessions::build_codex_session_mapping(&records);
     let all_ids: Vec<String> = all_sessions.iter().map(|s| s.session_id.clone()).collect();
 
-    // 2. 解析项目目录
+    // 2. 解析项目目录（用原始 session_id 查）
     let (project_map, _) = {
         let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
         resolve_session_projects(&all_ids, &app_db, &sources)?
@@ -564,7 +567,7 @@ pub fn query_session_project_groups(
             .collect()
     };
 
-    // 3. 计算基础费用（不做模型分解）
+    // 3. 计算基础费用（用原始 session_id 查数据库）
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
     let all_request_tokens: Vec<SessionRequestToken> = {
         let mut tokens = Vec::new();
@@ -577,20 +580,21 @@ pub fn query_session_project_groups(
     };
     let session_costs = compute_session_costs(&all_request_tokens, &pricing);
 
-    // 4. 按 projectDir 分组聚合（保留 session_ids + source_types）
+    // 3.5 构建合并后的会话列表（按 codex_session_id 合并，保留原始 session_id 的 cost/project 映射）
+    let merged_sessions = merge_codex_sessions(&all_sessions, &codex_mapping, &project_map, &source_type_map, &session_costs);
+
+    // 4. 按 projectDir 分组聚合
     let mut groups: HashMap<String, (i64, f64, i64, i64, i64, Vec<String>, std::collections::HashSet<String>)> = HashMap::new();
-    for s in &all_sessions {
-        let dir = project_map.get(&s.session_id).map(|s| s.as_str()).unwrap_or("");
-        let cost = session_costs.get(&s.session_id).copied().unwrap_or(0.0);
-        let tokens = s.input_tokens + s.output_tokens + s.cache_read + s.cache_creation;
-        let entry = groups.entry(dir.to_string()).or_default();
+    for s in &merged_sessions {
+        let dir = &s.project_dir;
+        let entry = groups.entry(dir.clone()).or_default();
         entry.0 += 1;
-        entry.1 += cost;
-        entry.2 += tokens;
+        entry.1 += s.total_cost;
+        entry.2 += s.total_tokens;
         entry.3 = entry.3.min(s.first_at);
         entry.4 = entry.4.max(s.last_at);
         entry.5.push(s.session_id.clone());
-        if let Some(st) = source_type_map.get(&s.session_id) {
+        for st in &s.source_types {
             entry.6.insert(st.clone());
         }
     }
@@ -636,10 +640,25 @@ pub fn query_project_session_details(
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
 
-    // 1. 从 sessions 表拿标题和目录（不查 JSONL）
+    // 0. 构建 Codex session 映射（合并 ID → 原始 ID 列表）
+    let records = fetch_deduped_records(&sources, &params)?;
+    let codex_fwd: HashMap<String, String> = crate::services::codex_sessions::build_codex_session_mapping(&records);
+    let codex_rev = build_reverse_mapping(&codex_fwd);
+
+    // 展开 Codex 合并 session_id 为原始 session_id
+    let expanded_ids: Vec<String> = session_ids.iter().flat_map(|sid| {
+        if let Some(originals) = codex_rev.get(sid) {
+            originals.iter().cloned().collect()
+        } else {
+            vec![sid.clone()]
+        }
+    }).collect();
+    let expanded_set: std::collections::HashSet<String> = expanded_ids.iter().cloned().collect();
+
+    // 1. 从 sessions 表拿标题和目录（用展开后的 ID 查）
     let (title_map, project_map, source_type_map) = {
         let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-        let cached = app_db.get_sessions(&session_ids)?;
+        let cached = app_db.get_sessions(&expanded_ids)?;
         let mut titles = HashMap::new();
         let mut projects = HashMap::new();
         let mut source_types = HashMap::new();
@@ -651,19 +670,17 @@ pub fn query_project_session_details(
         (titles, projects, source_types)
     };
 
-    // 2. 中心去重管道获取 session_breakdown
-    let records = fetch_deduped_records(&sources, &params)?;
-    let id_set: std::collections::HashSet<String> = session_ids.iter().cloned().collect();
+    // 2. 过滤 session_breakdown（用展开后的 ID）
     let all_sessions: Vec<SessionBreakdown> = aggregate_session_breakdown(&records)
         .into_iter()
-        .filter(|s| id_set.contains(&s.session_id))
+        .filter(|s| expanded_set.contains(&s.session_id))
         .collect();
 
     if all_sessions.is_empty() { return Ok(vec![]); }
 
     let filtered_ids: Vec<String> = all_sessions.iter().map(|s| s.session_id.clone()).collect();
 
-    // 3. 加载完整数据
+    // 3. 加载完整数据（用原始 ID 查数据库）
     let (all_request_tokens, all_model_tokens, max_context_widths, timestamps_map) = {
         let all_req_raw: Vec<SessionRequestToken> = std::thread::scope(|s| {
             let handles: Vec<_> = sources.iter().map(|entry| {
@@ -678,7 +695,7 @@ pub fn query_project_session_details(
         let all_req = dedup_request_tokens(all_req_raw);
         let all_mdl: Vec<SessionModelToken> = aggregate_session_model_tokens(&records)
             .into_iter()
-            .filter(|t| id_set.contains(&t.session_id))
+            .filter(|t| expanded_set.contains(&t.session_id))
             .collect();
 
         let mut max_ctx: HashMap<String, i64> = HashMap::new();
@@ -698,7 +715,7 @@ pub fn query_project_session_details(
     let session_costs = compute_session_costs(&all_request_tokens, &pricing);
     let session_model_costs = compute_session_model_costs(&all_request_tokens, &all_model_tokens, &pricing);
 
-    // 5. 批量构建 source_path（一次遍历目录匹配所有 ClaudeCode session）
+    // 4. 批量构建 source_path
     let source_path_map: HashMap<String, String> = {
         let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
         let all_cached = app_db.get_sessions(&filtered_ids)?;
@@ -709,63 +726,254 @@ pub fn query_project_session_details(
         find_jsonl_batch(&claude_ids)
     };
 
-    // 6. 组装结果
-    let details: Vec<ProjectSessionDetail> = all_sessions.into_iter().map(|s| {
-        let cost = session_costs.get(&s.session_id).copied().unwrap_or(0.0);
-        let cache_hit_rate = if (s.input_tokens + s.cache_read) > 0 {
-            s.cache_read as f64 / (s.input_tokens + s.cache_read) as f64
-        } else { 0.0 };
-
-        let model_breakdown: Vec<SessionModelCostEntry> = session_model_costs
-            .get(&s.session_id)
-            .map(|mc| {
-                mc.iter().map(|(model, data)| {
-                    let mut tier_vec: Vec<ContextTierCost> = data
-                        .tier_costs.iter()
-                        .filter(|(_, c)| **c > 0.0)
-                        .map(|(threshold, cost)| ContextTierCost {
-                            threshold: *threshold,
-                            cost: *cost,
-                            tokens: data.tier_tokens.get(threshold).copied().unwrap_or(0),
-                        })
-                        .collect();
-                    tier_vec.sort_by_key(|t| t.threshold);
-                    SessionModelCostEntry {
-                        session_id: s.session_id.clone(),
-                        model: model.clone(),
-                        cost: data.cost,
-                        input_tokens: data.input_tokens,
-                        output_tokens: data.output_tokens,
-                        cache_read_tokens: data.cache_read,
-                        cache_creation_tokens: data.cache_creation,
-                        input_cost: data.breakdown[0],
-                        output_cost: data.breakdown[1],
-                        cache_read_cost: data.breakdown[2],
-                        cache_creation_cost: data.breakdown[3],
-                        context_tier_costs: tier_vec,
-                    }
-                }).collect()
-            })
-            .unwrap_or_default();
-
-        ProjectSessionDetail {
-            session_id: s.session_id.clone(),
-            request_count: s.requests,
-            total_tokens: s.input_tokens + s.output_tokens + s.cache_read + s.cache_creation,
-            total_cost: cost,
-            start_time: s.first_at,
-            end_time: s.last_at,
-            duration_sec: s.last_at - s.first_at,
-            max_context_width: max_context_widths.get(&s.session_id).copied().unwrap_or(0),
-            cache_hit_rate,
-            timestamps: timestamps_map.get(&s.session_id).cloned().unwrap_or_default(),
-            model_breakdown,
-            title: title_map.get(&s.session_id).cloned(),
-            project_dir: project_map.get(&s.session_id).cloned(),
-            source_path: source_path_map.get(&s.session_id).cloned(),
-            source_type: source_type_map.get(&s.session_id).cloned(),
-        }
-    }).collect();
+    // 5. 组装结果：Codex session 合并聚合
+    let details = build_session_details(
+        &all_sessions, &session_ids, &codex_fwd, &codex_rev,
+        &session_costs, &session_model_costs, &max_context_widths, &timestamps_map,
+        &title_map, &project_map, &source_type_map, &source_path_map,
+    );
 
     Ok(details)
+}
+
+// ========== Codex session 合并 ==========
+
+struct MergedSession {
+    session_id: String,
+    project_dir: String,
+    total_cost: f64,
+    total_tokens: i64,
+    first_at: i64,
+    last_at: i64,
+    source_types: Vec<String>,
+}
+
+/// 合并 Codex per-request session 为真正的 Codex 会话。
+/// `codex_mapping`: old_session_id → codex_jsonl_session_id
+/// 非 Codex session 原样保留。
+fn merge_codex_sessions(
+    sessions: &[SessionBreakdown],
+    codex_mapping: &HashMap<String, String>,
+    project_map: &HashMap<String, String>,
+    source_type_map: &HashMap<String, String>,
+    session_costs: &HashMap<String, f64>,
+) -> Vec<MergedSession> {
+    use std::collections::hash_map::Entry;
+
+    // group_key → (requests, tokens, cost, first_at, last_at, project_dir, source_types)
+    struct Acc {
+        requests: i64,
+        total_tokens: i64,
+        total_cost: f64,
+        first_at: i64,
+        last_at: i64,
+        project_dir: String,
+        source_types: std::collections::HashSet<String>,
+    }
+
+    let mut merged: HashMap<String, Acc> = HashMap::new();
+    for s in sessions {
+        let (key, is_codex) = match codex_mapping.get(&s.session_id) {
+            Some(codex_sid) => (codex_sid.clone(), true),
+            None => (s.session_id.clone(), false),
+        };
+        let tokens = s.input_tokens + s.output_tokens + s.cache_read + s.cache_creation;
+        let cost = session_costs.get(&s.session_id).copied().unwrap_or(0.0);
+        let project = project_map.get(&s.session_id).cloned().unwrap_or_default();
+
+        match merged.entry(key) {
+            Entry::Occupied(mut e) => {
+                let acc = e.get_mut();
+                acc.requests += s.requests;
+                acc.total_tokens += tokens;
+                acc.total_cost += cost;
+                acc.first_at = acc.first_at.min(s.first_at);
+                acc.last_at = acc.last_at.max(s.last_at);
+                if acc.project_dir.is_empty() && !project.is_empty() {
+                    acc.project_dir = project;
+                }
+                if let Some(st) = source_type_map.get(&s.session_id) {
+                    acc.source_types.insert(st.clone());
+                }
+            }
+            Entry::Vacant(e) => {
+                let mut source_types = std::collections::HashSet::new();
+                if let Some(st) = source_type_map.get(&s.session_id) {
+                    source_types.insert(st.clone());
+                }
+                if is_codex && !source_types.contains("codex") {
+                    source_types.insert("codex".to_string());
+                }
+                e.insert(Acc {
+                    requests: s.requests,
+                    total_tokens: tokens,
+                    total_cost: cost,
+                    first_at: s.first_at,
+                    last_at: s.last_at,
+                    project_dir: project,
+                    source_types,
+                });
+            }
+        }
+    }
+
+    merged.into_iter().map(|(sid, acc)| MergedSession {
+        session_id: sid,
+        project_dir: acc.project_dir,
+        total_cost: acc.total_cost,
+        total_tokens: acc.total_tokens,
+        first_at: acc.first_at,
+        last_at: acc.last_at,
+        source_types: acc.source_types.into_iter().collect(),
+    }).collect()
+}
+
+/// 构建反向映射：codex_jsonl_session_id → [原始 CC-Switch session_id 列表]
+fn build_reverse_mapping(fwd: &HashMap<String, String>) -> HashMap<String, Vec<String>> {
+    let mut rev: HashMap<String, Vec<String>> = HashMap::new();
+    for (old, new) in fwd {
+        rev.entry(new.clone()).or_default().push(old.clone());
+    }
+    rev
+}
+
+/// 组装二级会话详情，包含 Codex session 的合并聚合。
+fn build_session_details(
+    all_sessions: &[SessionBreakdown],
+    requested_ids: &[String],
+    codex_fwd: &HashMap<String, String>,
+    codex_rev: &HashMap<String, Vec<String>>,
+    session_costs: &HashMap<String, f64>,
+    session_model_costs: &HashMap<String, HashMap<String, crate::services::precompute::SessionModelCostData>>,
+    max_context_widths: &HashMap<String, i64>,
+    timestamps_map: &HashMap<String, Vec<i64>>,
+    title_map: &HashMap<String, String>,
+    project_map: &HashMap<String, String>,
+    source_type_map: &HashMap<String, String>,
+    source_path_map: &HashMap<String, String>,
+) -> Vec<ProjectSessionDetail> {
+    let session_map: HashMap<&String, &SessionBreakdown> = all_sessions.iter()
+        .map(|s| (&s.session_id, s)).collect();
+
+    let codex_target_set: std::collections::HashSet<&String> = codex_fwd.values().collect();
+
+    // 对每个请求的 session_id，找出其对应的原始 session_id 列表
+    let mut result = Vec::new();
+    for req_id in requested_ids {
+        let original_ids = codex_rev.get(req_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(std::slice::from_ref(req_id));
+        let is_codex_merged = original_ids.len() > 1 || codex_target_set.contains(req_id);
+
+        // 聚合所有原始 session 的数据
+        let mut total_requests = 0i64;
+        let mut total_input = 0i64;
+        let mut total_output = 0i64;
+        let mut total_cache_read = 0i64;
+        let mut total_cache_creation = 0i64;
+        let mut total_cost = 0.0;
+        let mut first_at = i64::MAX;
+        let mut last_at = 0i64;
+        let mut max_ctx = 0i64;
+        let mut all_timestamps: Vec<i64> = Vec::new();
+        let mut model_cost_agg: HashMap<String, crate::services::precompute::SessionModelCostData> = HashMap::new();
+        let mut best_title: Option<String> = None;
+        let mut best_project: Option<String> = None;
+        let mut best_source_type: Option<String> = None;
+
+        for orig_id in original_ids {
+            if let Some(s) = session_map.get(orig_id) {
+                total_requests += s.requests;
+                total_input += s.input_tokens;
+                total_output += s.output_tokens;
+                total_cache_read += s.cache_read;
+                total_cache_creation += s.cache_creation;
+                first_at = first_at.min(s.first_at);
+                last_at = last_at.max(s.last_at);
+            }
+            total_cost += session_costs.get(orig_id).copied().unwrap_or(0.0);
+            max_ctx = max_ctx.max(max_context_widths.get(orig_id).copied().unwrap_or(0));
+            if let Some(ts) = timestamps_map.get(orig_id) { all_timestamps.extend(ts); }
+
+            // 聚合模型费用
+            if let Some(mc) = session_model_costs.get(orig_id) {
+                for (model, data) in mc {
+                    let acc = model_cost_agg.entry(model.clone()).or_insert_with(|| crate::services::precompute::SessionModelCostData {
+                        cost: 0.0, input_tokens: 0, output_tokens: 0, cache_read: 0, cache_creation: 0,
+                        breakdown: vec![0.0; 4], tier_costs: HashMap::new(), tier_tokens: HashMap::new(),
+                    });
+                    acc.cost += data.cost;
+                    acc.input_tokens += data.input_tokens;
+                    acc.output_tokens += data.output_tokens;
+                    acc.cache_read += data.cache_read;
+                    acc.cache_creation += data.cache_creation;
+                    for (i, b) in data.breakdown.iter().enumerate() { if i < 4 { acc.breakdown[i] += b; } }
+                    for (t, c) in &data.tier_costs { *acc.tier_costs.entry(*t).or_insert(0.0) += c; }
+                    for (t, n) in &data.tier_tokens { *acc.tier_tokens.entry(*t).or_insert(0) += n; }
+                }
+            }
+
+            if best_title.is_none() { best_title = title_map.get(orig_id).cloned(); }
+            if best_project.is_none() { best_project = project_map.get(orig_id).cloned(); }
+            if best_source_type.is_none() { best_source_type = source_type_map.get(orig_id).cloned(); }
+        }
+
+        if is_codex_merged {
+            best_source_type = Some("codex".to_string());
+        }
+
+        let cache_hit_rate = if (total_input + total_cache_read) > 0 {
+            total_cache_read as f64 / (total_input + total_cache_read) as f64
+        } else { 0.0 };
+
+        let model_breakdown: Vec<SessionModelCostEntry> = model_cost_agg.iter().map(|(model, data)| {
+            let mut tier_vec: Vec<ContextTierCost> = data.tier_costs.iter()
+                .filter(|(_, c)| **c > 0.0)
+                .map(|(threshold, cost)| ContextTierCost {
+                    threshold: *threshold,
+                    cost: *cost,
+                    tokens: data.tier_tokens.get(threshold).copied().unwrap_or(0),
+                })
+                .collect();
+            tier_vec.sort_by_key(|t| t.threshold);
+            SessionModelCostEntry {
+                session_id: req_id.clone(),
+                model: model.clone(),
+                cost: data.cost,
+                input_tokens: data.input_tokens,
+                output_tokens: data.output_tokens,
+                cache_read_tokens: data.cache_read,
+                cache_creation_tokens: data.cache_creation,
+                input_cost: data.breakdown[0],
+                output_cost: data.breakdown[1],
+                cache_read_cost: data.breakdown[2],
+                cache_creation_cost: data.breakdown[3],
+                context_tier_costs: tier_vec,
+            }
+        }).collect();
+
+        if first_at == i64::MAX { first_at = 0; }
+        if total_requests == 0 { continue; }
+
+        result.push(ProjectSessionDetail {
+            session_id: req_id.clone(),
+            request_count: total_requests,
+            total_tokens: total_input + total_output + total_cache_read + total_cache_creation,
+            total_cost,
+            start_time: first_at,
+            end_time: last_at,
+            duration_sec: if last_at > first_at { last_at - first_at } else { 0 },
+            max_context_width: max_ctx,
+            cache_hit_rate,
+            timestamps: all_timestamps,
+            model_breakdown,
+            title: best_title,
+            project_dir: best_project,
+            source_path: original_ids.iter()
+                .find_map(|id| source_path_map.get(id).cloned())
+                .or_else(|| source_path_map.get(req_id).cloned()),
+            source_type: best_source_type,
+        });
+    }
+    result
 }

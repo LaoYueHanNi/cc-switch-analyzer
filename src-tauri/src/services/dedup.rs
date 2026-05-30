@@ -3,17 +3,13 @@ use std::collections::HashSet;
 use crate::models::RawRecord;
 
 /// 对 RawRecord 做 RequestFingerprint 去重，先到先保留。
-/// codex 记录使用归一化指纹（不含 model，input 减去 cache_read）。
+/// codex 记录使用归一化指纹（不含 model，input 在 DB 读取时已减去 cache_read）。
 pub fn dedup_records(records: Vec<RawRecord>) -> Vec<RawRecord> {
     let mut seen = HashSet::new();
     records.into_iter().filter(|r| {
         let fp = if r.is_codex {
-            let normalized_input = if r.provider_id == "ai-proxy" {
-                r.input_tokens
-            } else {
-                r.input_tokens.saturating_sub(r.cache_read)
-            };
-            RequestFingerprint::new_codex(&r.session_id, normalized_input, r.output_tokens)
+            // input_tokens 已在 ExternalDb 中归一化（raw - cache_read），直接使用
+            RequestFingerprint::new_codex(&r.session_id, r.input_tokens, r.output_tokens)
         } else {
             RequestFingerprint::new(&r.session_id, &r.model, r.input_tokens, r.output_tokens)
         };
@@ -346,10 +342,10 @@ mod tests {
 
     #[test]
     fn codex_cross_source_dedup() {
-        // CCS: input=27505 (含 cache_read=26624), model=gpt-5.4-mini
-        // AI Proxy: input=881 (不含 cache_read), model=deepseek-v4-flash
-        // 归一化后 CCS input: 27505-26624=881，两边指纹应相同
-        let ccs = raw_record("s1", "gpt-5.4-mini", "_codex_session", 27505, 16857, 26624, true);
+        // CCS: DB 读取时 input 已归一化为 raw-cache_read=27505-26624=881
+        // AI Proxy: input=881（不含 cache_read）
+        // 两边指纹应相同
+        let ccs = raw_record("s1", "gpt-5.4-mini", "_codex_session", 881, 16857, 26624, true);
         let aiproxy = raw_record("s1", "deepseek-v4-flash", "ai-proxy", 881, 16857, 26624, true);
 
         let result = dedup_records(vec![aiproxy, ccs]);
@@ -391,7 +387,8 @@ mod tests {
     #[test]
     fn codex_ai_proxy_priority() {
         // AI Proxy 排在前面应被优先保留（由调用方排序保证）
-        let ccs = raw_record("s1", "gpt-5.4-mini", "_codex_session", 1000, 500, 900, true);
+        // CCS: DB 读取时 input 已归一化为 1000-900=100
+        let ccs = raw_record("s1", "gpt-5.4-mini", "_codex_session", 100, 500, 900, true);
         let aiproxy = raw_record("s1", "deepseek-v4-flash", "ai-proxy", 100, 500, 900, true);
 
         let result = dedup_records(vec![aiproxy.clone(), ccs]);
@@ -403,12 +400,10 @@ mod tests {
 
     #[test]
     fn codex_fingerprint_equality() {
-        // CCS input=1000 cache_read=900 → 归一化 100
-        // AI Proxy input=100 → 归一化 100
+        // 两边 input_tokens 已在 DB 读取时归一化，直接比较
         let fp_ccs = {
-            let r = raw_record("s1", "gpt-5.3-codex", "_codex_session", 1000, 200, 900, true);
-            let normalized = r.input_tokens.saturating_sub(r.cache_read);
-            RequestFingerprint::new_codex(&r.session_id, normalized, r.output_tokens)
+            let r = raw_record("s1", "gpt-5.3-codex", "_codex_session", 100, 200, 900, true);
+            RequestFingerprint::new_codex(&r.session_id, r.input_tokens, r.output_tokens)
         };
         let fp_aiproxy = {
             let r = raw_record("s1", "deepseek-v4-flash", "ai-proxy", 100, 200, 900, true);

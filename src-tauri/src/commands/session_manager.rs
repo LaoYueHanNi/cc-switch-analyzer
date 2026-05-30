@@ -265,3 +265,63 @@ pub fn delete_claude_session(session_id: String) -> Result<bool, String> {
     fs::remove_file(path).map_err(|e| format!("删除会话文件失败: {e}"))?;
     Ok(true)
 }
+
+fn validate_session_id(id: &str) -> Result<(), String> {
+    if id.is_empty() || id.len() > 256 {
+        return Err("无效的 session_id".to_string());
+    }
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err("无效的 session_id".to_string());
+    }
+    Ok(())
+}
+
+/// 打开 Codex 终端
+#[tauri::command]
+pub fn open_codex_terminal(project_dir: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("wt")
+            .args(["-w", "0", "-d", &project_dir, "powershell", "-NoExit", "-Command", "codex"])
+            .spawn()
+            .map_err(|e| format!("启动终端失败: {}", e))?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = project_dir;
+        return Err("当前仅支持 Windows".to_string());
+    }
+
+    Ok(())
+}
+
+/// 恢复 Codex 会话
+#[tauri::command]
+pub fn resume_codex_session(session_id: String, project_dir: Option<String>) -> Result<(), String> {
+    validate_session_id(&session_id)?;
+
+    #[cfg(target_os = "windows")]
+    {
+        let codex_cmd = format!("codex resume {}", session_id);
+        let mut cmd = std::process::Command::new("wt");
+        cmd.arg("-w").arg("0");
+        if let Some(dir) = &project_dir {
+            if !dir.is_empty() {
+                cmd.arg("-d").arg(dir);
+            }
+        }
+        cmd.args(["powershell", "-NoExit", "-Command", &codex_cmd])
+            .spawn()
+            .map_err(|e| format!("启动终端失败: {}", e))?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = session_id;
+        let _ = project_dir;
+        return Err("当前仅支持 Windows".to_string());
+    }
+
+    Ok(())
+}

@@ -1,6 +1,7 @@
 pub mod app_db;
 pub mod ai_proxy_db;
 pub mod cloud_pricing;
+pub mod codex_sessions;
 pub mod data_source;
 pub mod dedup;
 pub mod external_db;

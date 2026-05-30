@@ -876,7 +876,8 @@ impl AiProxyDbService {
                        output_tokens,
                        cached_read_tokens,
                        cached_write_tokens,
-                       duration_ms
+                       duration_ms,
+                       request_type
                 FROM token_stats
                 WHERE {ts_expr} > ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cached_read_tokens > 0 OR cached_write_tokens > 0)
@@ -890,7 +891,8 @@ impl AiProxyDbService {
                        output_tokens,
                        cached_read_tokens,
                        cached_write_tokens,
-                       duration_ms
+                       duration_ms,
+                       request_type
                 FROM token_stats
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cached_read_tokens > 0 OR cached_write_tokens > 0)
                 ORDER BY request_ts DESC
@@ -900,14 +902,19 @@ impl AiProxyDbService {
         let mut stmt = db.prepare(&sql).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
         let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(params_refs.as_slice(), |row| {
+            let request_type: Option<String> = row.get(9).ok().flatten();
+            let is_codex = request_type.as_deref() == Some("responses");
+            let raw_input: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
+            let cache_read: i64 = row.get::<_, Option<i64>>(6)?.unwrap_or(0);
+            let input_tokens = if is_codex { raw_input.saturating_sub(cache_read) } else { raw_input };
             Ok((
                 row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                 row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                input_tokens,
                 row.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                cache_read,
                 row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
             ))
@@ -933,7 +940,8 @@ impl AiProxyDbService {
                        output_tokens,
                        cached_read_tokens,
                        cached_write_tokens,
-                       duration_ms
+                       duration_ms,
+                       request_type
                 FROM token_stats
                 WHERE {ts_expr} > ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cached_read_tokens > 0 OR cached_write_tokens > 0)
@@ -947,7 +955,8 @@ impl AiProxyDbService {
                        output_tokens,
                        cached_read_tokens,
                        cached_write_tokens,
-                       duration_ms
+                       duration_ms,
+                       request_type
                 FROM token_stats
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cached_read_tokens > 0 OR cached_write_tokens > 0)
                 ORDER BY request_ts DESC
@@ -957,14 +966,19 @@ impl AiProxyDbService {
         let mut stmt = db.prepare(&sql).map_err(|e| format!("stream_records 准备失败: {}", e))?;
         let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let mut rows = stmt.query_map(params_refs.as_slice(), |row| {
+            let request_type: Option<String> = row.get(9).ok().flatten();
+            let is_codex = request_type.as_deref() == Some("responses");
+            let raw_input: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
+            let cache_read: i64 = row.get::<_, Option<i64>>(6)?.unwrap_or(0);
+            let input_tokens = if is_codex { raw_input.saturating_sub(cache_read) } else { raw_input };
             Ok((
                 row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                 row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                input_tokens,
                 row.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                cache_read,
                 row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
             ))
@@ -1001,17 +1015,21 @@ impl AiProxyDbService {
         let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
         let rows = stmt.query_map(refs.as_slice(), |row| {
             let request_type: Option<String> = row.get(9).ok().flatten();
+            let is_codex = request_type.as_deref() == Some("responses");
+            let raw_input: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
+            let cache_read: i64 = row.get::<_, Option<i64>>(6)?.unwrap_or(0);
+            let input_tokens = if is_codex { raw_input.saturating_sub(cache_read) } else { raw_input };
             Ok(RawRecord {
                 session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                 created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                input_tokens,
                 output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                cache_read: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                cache_read,
                 cache_creation: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 latency: row.get::<_, Option<i64>>(8)?.unwrap_or(0),
-                is_codex: request_type.as_deref() == Some("responses"),
+                is_codex,
             })
         }).map_err(|e| format!("查询过滤记录失败: {}", e))?;
 

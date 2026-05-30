@@ -202,7 +202,32 @@ pub fn resolve_session_projects(
         }
     }
 
-    // 3. JSONL 兜底 (Claude Code)
+    // 3. Codex JSONL 兜底（先按 session_id 匹配，再按时间戳匹配）
+    let remaining_for_codex: Vec<String> = uncached.iter()
+        .filter(|id| !resolved.contains_key(*id))
+        .cloned()
+        .collect();
+    if !remaining_for_codex.is_empty() {
+        let codex_resolved = crate::services::codex_sessions::resolve_codex_titles(
+            &remaining_for_codex,
+            |ids| {
+                let mut map: HashMap<String, Vec<i64>> = HashMap::new();
+                for entry in data_sources.iter() {
+                    if let Ok(timestamps) = entry.source.get_session_timestamps(ids) {
+                        for (sid, times) in timestamps {
+                            map.entry(sid).or_default().extend(times);
+                        }
+                    }
+                }
+                map
+            },
+        );
+        for (id, (title, project)) in codex_resolved {
+            resolved.insert(id, (title, project, "codex".to_string()));
+        }
+    }
+
+    // 4. Claude JSONL 兜底
     let remaining_for_jsonl: Vec<String> = uncached.iter()
         .filter(|id| !resolved.contains_key(*id))
         .cloned()
@@ -215,7 +240,7 @@ pub fn resolve_session_projects(
         }
     }
 
-    // 4. 合并结果 + 写入 sessions 表（包括未找到的，标记 not_found 避免重复扫描）
+    // 5. 合并结果 + 写入 sessions 表（包括未找到的，标记 not_found 避免重复扫描）
     for id in &uncached {
         if let Some((title, project, source)) = resolved.remove(id) {
             if !title.is_empty() { title_map.insert(id.clone(), title.clone()); }
