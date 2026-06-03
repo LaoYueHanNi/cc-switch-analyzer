@@ -26,7 +26,9 @@ jobs:
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           if ! gh release view "$TAG" > /dev/null 2>&1; then
             NOTES=$(git log -1 --format=%b HEAD)
-            gh release create "$TAG" --title "$TAG" --notes "$NOTES" --verify-tag
+            # 注意:不要加 --verify-tag(我们的 tag 是 lightweight,没有 GPG 签名,
+            # --verify-tag 会失败并 fallback 到 draft,导致 updater 看不到 release)
+            gh release create "$TAG" --title "$TAG" --notes "$NOTES"
           fi
 
   build-windows:
