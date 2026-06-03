@@ -1,5 +1,21 @@
 [
   {
+    "version": "Unreleased",
+    "date": "2026-06-03",
+    "commits": [
+      {
+        "hash": "2e1b7c8",
+        "subject": "feat: 任务卡片新增一键打开全部会话,按 4-pane/tab 布局规则分屏恢复",
+        "date": "2026-06-03"
+      },
+      {
+        "hash": "005bc85",
+        "subject": "chore: 重新生成 0.7.14 changelog",
+        "date": "2026-06-03"
+      }
+    ]
+  },
+  {
     "version": "0.7.14",
     "date": "2026-06-03",
     "commits": [
