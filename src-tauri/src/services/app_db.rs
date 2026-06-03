@@ -68,6 +68,10 @@ impl AppDbService {
         if version < 7 {
             self.migrate_v7()?;
         }
+        if version < 8 {
+            self.backup_before_migration(7)?;
+            self.migrate_v8()?;
+        }
 
         Ok(())
     }
@@ -291,6 +295,227 @@ impl AppDbService {
             );"
         ).map_err(|e| format!("迁移 v7 (sessions 表) 失败: {}", e))?;
         self.set_schema_version(7)?;
+        Ok(())
+    }
+
+    fn migrate_v8(&mut self) -> Result<(), String> {
+        self.db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'todo'
+                    CHECK (status IN ('todo','in_progress','done','archived')),
+                created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS task_sessions (
+                task_id INTEGER NOT NULL,
+                session_id TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
+                project_dir TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                added_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                PRIMARY KEY (task_id, session_id, source),
+                FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_task_sessions_task ON task_sessions(task_id);"
+        ).map_err(|e| format!("迁移 v8 (tasks/task_sessions 表) 失败: {}", e))?;
+        self.set_schema_version(8)?;
+        Ok(())
+    }
+
+    // ========== 任务 CRUD ==========
+
+    pub fn list_tasks(&self) -> Result<Vec<Task>, String> {
+        let mut stmt = self
+            .db
+            .prepare(
+                "SELECT id, title, description, status, created_at, updated_at
+                 FROM tasks ORDER BY updated_at DESC, id DESC",
+            )
+            .map_err(|e| format!("查询任务列表失败: {}", e))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(Task {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    description: row.get(2)?,
+                    status: row.get(3)?,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
+                })
+            })
+            .map_err(|e| format!("查询任务列表失败: {}", e))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| format!("读取任务失败: {}", e))?);
+        }
+        Ok(out)
+    }
+
+    pub fn get_task(&self, id: i64) -> Result<Option<Task>, String> {
+        let mut stmt = self
+            .db
+            .prepare(
+                "SELECT id, title, description, status, created_at, updated_at
+                 FROM tasks WHERE id = ?",
+            )
+            .map_err(|e| format!("查询任务失败: {}", e))?;
+        let mut rows = stmt
+            .query_map([id], |row| {
+                Ok(Task {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    description: row.get(2)?,
+                    status: row.get(3)?,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
+                })
+            })
+            .map_err(|e| format!("查询任务失败: {}", e))?;
+        if let Some(r) = rows.next() {
+            Ok(Some(r.map_err(|e| format!("读取任务失败: {}", e))?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn create_task(
+        &self,
+        title: &str,
+        description: &str,
+        status: &str,
+    ) -> Result<i64, String> {
+        if title.trim().is_empty() {
+            return Err("任务标题不能为空".to_string());
+        }
+        if !matches!(status, "todo" | "in_progress" | "done" | "archived") {
+            return Err(format!("非法任务状态: {}", status));
+        }
+        self.db
+            .execute(
+                "INSERT INTO tasks (title, description, status) VALUES (?, ?, ?)",
+                params![title, description, status],
+            )
+            .map_err(|e| format!("创建任务失败: {}", e))?;
+        Ok(self.db.last_insert_rowid())
+    }
+
+    pub fn update_task(
+        &self,
+        id: i64,
+        title: &str,
+        description: &str,
+        status: &str,
+    ) -> Result<(), String> {
+        if title.trim().is_empty() {
+            return Err("任务标题不能为空".to_string());
+        }
+        if !matches!(status, "todo" | "in_progress" | "done" | "archived") {
+            return Err(format!("非法任务状态: {}", status));
+        }
+        let affected = self
+            .db
+            .execute(
+                "UPDATE tasks
+                 SET title = ?, description = ?, status = ?,
+                     updated_at = strftime('%s','now')
+                 WHERE id = ?",
+                params![title, description, status, id],
+            )
+            .map_err(|e| format!("更新任务失败: {}", e))?;
+        if affected == 0 {
+            return Err(format!("任务 {} 不存在", id));
+        }
+        Ok(())
+    }
+
+    pub fn delete_task(&self, id: i64) -> Result<(), String> {
+        let affected = self
+            .db
+            .execute("DELETE FROM tasks WHERE id = ?", params![id])
+            .map_err(|e| format!("删除任务失败: {}", e))?;
+        if affected == 0 {
+            return Err(format!("任务 {} 不存在", id));
+        }
+        // ON DELETE CASCADE 会自动清掉 task_sessions
+        Ok(())
+    }
+
+    pub fn list_task_sessions(&self, task_id: i64) -> Result<Vec<TaskSession>, String> {
+        let mut stmt = self
+            .db
+            .prepare(
+                "SELECT task_id, session_id, source, project_dir, title, added_at
+                 FROM task_sessions
+                 WHERE task_id = ?
+                 ORDER BY added_at DESC, session_id ASC",
+            )
+            .map_err(|e| format!("查询任务会话失败: {}", e))?;
+        let rows = stmt
+            .query_map([task_id], |row| {
+                Ok(TaskSession {
+                    task_id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    source: row.get(2)?,
+                    project_dir: row.get(3)?,
+                    title: row.get(4)?,
+                    added_at: row.get(5)?,
+                })
+            })
+            .map_err(|e| format!("查询任务会话失败: {}", e))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| format!("读取任务会话失败: {}", e))?);
+        }
+        Ok(out)
+    }
+
+    pub fn add_task_sessions(
+        &self,
+        task_id: i64,
+        sessions: &[TaskSessionInput],
+    ) -> Result<(), String> {
+        if sessions.is_empty() {
+            return Ok(());
+        }
+        // 校验 task 存在
+        self.get_task(task_id)?
+            .ok_or_else(|| format!("任务 {} 不存在", task_id))?;
+        let tx = self
+            .db
+            .unchecked_transaction()
+            .map_err(|e| format!("开启事务失败: {}", e))?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT OR REPLACE INTO task_sessions
+                        (task_id, session_id, source, project_dir, title, added_at)
+                     VALUES (?, ?, ?, ?, ?, strftime('%s','now'))",
+                )
+                .map_err(|e| format!("准备插入任务会话失败: {}", e))?;
+            for s in sessions {
+                stmt.execute(params![
+                    task_id,
+                    s.session_id,
+                    s.source,
+                    s.project_dir,
+                    s.title
+                ])
+                .map_err(|e| format!("插入任务会话失败: {}", e))?;
+            }
+        }
+        // 顺带刷新任务的 updated_at
+        tx.execute(
+            "UPDATE tasks SET updated_at = strftime('%s','now') WHERE id = ?",
+            params![task_id],
+        )
+        .map_err(|e| format!("刷新任务时间失败: {}", e))?;
+        tx.commit()
+            .map_err(|e| format!("提交任务会话失败: {}", e))?;
         Ok(())
     }
 
@@ -1113,9 +1338,28 @@ impl AppDbService {
                 project_dir TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 source TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'todo'
+                    CHECK (status IN ('todo','in_progress','done','archived')),
+                created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            );
+            CREATE TABLE IF NOT EXISTS task_sessions (
+                task_id INTEGER NOT NULL,
+                session_id TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
+                project_dir TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                added_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                PRIMARY KEY (task_id, session_id, source),
+                FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
             );"
         ).map_err(|e| format!("初始化内存表失败: {}", e))?;
-        self.set_setting("schema_version", "7")?;
+        self.set_setting("schema_version", "8")?;
         Ok(())
     }
 }
@@ -1141,7 +1385,7 @@ mod tests {
     #[test]
     fn test_schema_version() {
         let db = create_db();
-        assert_eq!(db.get_setting("schema_version").unwrap(), "7");
+        assert_eq!(db.get_setting("schema_version").unwrap(), "8");
     }
 
     #[test]
@@ -1280,5 +1524,63 @@ mod tests {
         };
         db.save_cloud_pricing(&data).unwrap();
         assert_eq!(db.get_setting("cloud_pricing_version").unwrap(), "5");
+    }
+
+    #[test]
+    fn test_task_crud_and_sessions() {
+        let db = create_db();
+
+        // 创建
+        let id = db.create_task("重构 Auth", "用 JWT 替换旧 session", "todo").unwrap();
+        assert!(id > 0);
+
+        // 列出
+        let tasks = db.list_tasks().unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "重构 Auth");
+        assert_eq!(tasks[0].status, "todo");
+
+        // 更新
+        db.update_task(id, "重构 Auth 模块", "改用 JWT", "in_progress").unwrap();
+        let t = db.get_task(id).unwrap().unwrap();
+        assert_eq!(t.title, "重构 Auth 模块");
+        assert_eq!(t.status, "in_progress");
+
+        // 添加会话
+        db.add_task_sessions(
+            id,
+            &[
+                TaskSessionInput {
+                    session_id: "ses-1".into(),
+                    source: "claudecode".into(),
+                    project_dir: "D:/proj".into(),
+                    title: "title-1".into(),
+                },
+                TaskSessionInput {
+                    session_id: "ses-2".into(),
+                    source: "opencode".into(),
+                    project_dir: "D:/proj".into(),
+                    title: "title-2".into(),
+                },
+            ],
+        )
+        .unwrap();
+        let sessions = db.list_task_sessions(id).unwrap();
+        assert_eq!(sessions.len(), 2);
+
+        // 删除 task,session 跟随 CASCADE 清理
+        db.delete_task(id).unwrap();
+        assert!(db.get_task(id).unwrap().is_none());
+        let sessions = db.list_task_sessions(id).unwrap();
+        assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn test_create_task_validates_input() {
+        let db = create_db();
+        // 空标题应被拒绝
+        assert!(db.create_task("   ", "x", "todo").is_err());
+        // 非法 status 应被拒绝
+        assert!(db.create_task("t", "x", "weird").is_err());
     }
 }

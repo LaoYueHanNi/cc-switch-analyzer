@@ -6,6 +6,7 @@ import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
 import type { PricingData } from '@/types/pricing'
+import type { TaskWithStats, TaskSessionInput } from '@/types/task'
 
 interface TauriFilterParams {
   fromEpoch?: number
@@ -215,6 +216,36 @@ export const platformAdapter: PlatformAdapter = {
   },
   async resumeCodexSession(sessionId: string, projectDir?: string): Promise<void> {
     return invoke<void>('resume_codex_session', { sessionId, projectDir: projectDir || null })
+  },
+  // 任务管理
+  async listTasks(): Promise<TaskWithStats[]> {
+    return invoke<TaskWithStats[]>('list_tasks')
+  },
+  async getTaskDetail(taskId: number): Promise<TaskDetail> {
+    return invoke<TaskDetail>('get_task_detail', { taskId })
+  },
+  async createTask(title: string, description: string, status: string): Promise<number> {
+    return invoke<number>('create_task', { title, description, status })
+  },
+  async updateTask(taskId: number, title: string, description: string, status: string): Promise<void> {
+    return invoke<void>('update_task', { taskId, title, description, status })
+  },
+  async deleteTask(taskId: number): Promise<void> {
+    return invoke<void>('delete_task', { taskId })
+  },
+  async addSessionsToTask(taskId: number, sessions: TaskSessionInput[]): Promise<void> {
+    return invoke<void>('add_sessions_to_task', { taskId, sessions })
+  },
+  async getTaskSessionDetail(taskId: number, sessionId: string): Promise<ProjectSessionDetail> {
+    return invoke<ProjectSessionDetail>('get_task_session_detail', { taskId, sessionId })
+  },
+  async openTaskAgent(agentSource: string, projectDir: string, providerId?: string, dbPath?: string): Promise<void> {
+    return invoke<void>('open_task_agent', {
+      agentSource,
+      projectDir,
+      providerId: providerId || null,
+      dbPath: dbPath || null
+    })
   },
   async checkForUpdate(proxy?: string): Promise<UpdateInfo | null> {
     const opts = proxy ? { proxy } : undefined

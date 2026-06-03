@@ -3,6 +3,7 @@ pub mod pricing;
 pub mod query;
 pub mod session_manager;
 pub mod session_title;
+pub mod task;
 #[cfg(target_os = "windows")]
 pub mod traffic_monitor;
 

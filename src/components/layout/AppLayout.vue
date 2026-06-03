@@ -84,7 +84,7 @@ import { NSpin, NButton, NIcon } from 'naive-ui'
 import {
   FolderOpenOutline, ServerOutline,
   GridOutline, BusinessOutline, TrendingUpOutline, ChatbubblesOutline,
-  PulseOutline, CalculatorOutline,
+  PulseOutline, CalculatorOutline, ClipboardOutline,
   MoonOutline, SunnyOutline, RefreshOutline
 } from '@vicons/ionicons5'
 import { useDatabaseStore } from '@/stores/database'
@@ -115,7 +115,8 @@ const navItems: { name: string; label: string; icon: Component }[] = [
   { name: 'trend', label: '趋势', icon: TrendingUpOutline },
   { name: 'session', label: '会话', icon: ChatbubblesOutline },
   { name: 'realtime', label: '实时', icon: PulseOutline },
-  { name: 'pricing', label: '定价', icon: CalculatorOutline }
+  { name: 'pricing', label: '定价', icon: CalculatorOutline },
+  { name: 'task', label: '任务', icon: ClipboardOutline }
 ]
 
 const activeTab = computed(() => {

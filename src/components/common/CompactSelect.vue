@@ -10,7 +10,7 @@
   <Teleport to="body">
     <div v-if="open" class="compact-select-overlay" @click="open = false" @contextmenu.prevent="open = false" />
     <div v-if="open" class="compact-select-panel" :style="panelStyle">
-      <div class="compact-select-search">
+      <div v-if="searchable" class="compact-select-search">
         <input
           ref="searchRef"
           v-model="search"
@@ -41,9 +41,11 @@ const props = withDefaults(defineProps<{
   options: { label: string; value: string }[]
   placeholder?: string
   clearable?: boolean
+  searchable?: boolean
 }>(), {
   placeholder: '请选择',
   clearable: false,
+  searchable: true,
 })
 
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
@@ -83,11 +85,13 @@ function positionPanel() {
   const max_y = window.innerHeight / zoom - 8
   let x = rect.left / zoom
   let y = (rect.bottom + 2) / zoom
-  const pw = 160
+  // panel 宽度与 trigger 对齐,至少 80px(保证搜索框可用)
+  const tw = rect.width / zoom
+  const pw = Math.max(tw, 80)
   const ph = Math.min(filteredOptions.value.length * 22 + 28, 220)
   if (x + pw > max_x) x = Math.max(8, max_x - pw)
   if (y + ph > max_y) y = Math.max(8, rect.top / zoom - ph - 2)
-  panelStyle.value = { left: x + 'px', top: y + 'px' }
+  panelStyle.value = { left: x + 'px', top: y + 'px', width: pw + 'px' }
 }
 
 function onSelect(val: string) {
@@ -107,11 +111,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
 
 <style>
 .compact-select-overlay {
-  position: fixed; inset: 0; z-index: 9998;
+  position: fixed; inset: 0; z-index: 10001;
 }
 .compact-select-panel {
-  position: fixed; z-index: 9999;
-  min-width: 120px; max-width: 220px;
+  position: fixed; z-index: 10002;
+  min-width: 80px;
   background: var(--bg-card);
   border: 1px solid var(--border-main);
   border-radius: 4px;

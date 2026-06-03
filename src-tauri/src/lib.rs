@@ -223,6 +223,15 @@ pub fn run() {
             // 用户别名
             commands::pricing::add_user_alias,
             commands::pricing::remove_user_alias,
+            // 任务管理
+            commands::task::list_tasks,
+            commands::task::get_task_detail,
+            commands::task::create_task,
+            commands::task::update_task,
+            commands::task::delete_task,
+            commands::task::add_sessions_to_task,
+            commands::task::get_task_session_detail,
+            commands::task::open_task_agent,
             // TrafficMonitor 插件服务
             commands::traffic_monitor::get_http_service_status,
             commands::traffic_monitor::toggle_http_service,

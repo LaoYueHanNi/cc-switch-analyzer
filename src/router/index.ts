@@ -36,6 +36,16 @@ const router = createRouter({
       path: '/pricing',
       name: 'pricing',
       component: () => import('@/views/PricingCalculator.vue')
+    },
+    {
+      path: '/task',
+      name: 'task',
+      component: () => import('@/views/Task.vue')
+    },
+    {
+      path: '/task/:id',
+      name: 'task-detail',
+      component: () => import('@/views/TaskDetail.vue')
     }
   ]
 })

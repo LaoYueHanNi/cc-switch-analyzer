@@ -510,3 +510,59 @@ pub struct ProjectSessionDetail {
     pub source_path: Option<String>,
     pub source_type: Option<String>,
 }
+
+// ========== 任务(Task) ==========
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Task {
+    pub id: i64,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskSession {
+    pub task_id: i64,
+    pub session_id: String,
+    pub source: String,
+    pub project_dir: String,
+    pub title: String,
+    pub added_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskSessionInput {
+    pub session_id: String,
+    pub source: String,
+    #[serde(default)]
+    pub project_dir: String,
+    #[serde(default)]
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskWithStats {
+    #[serde(flatten)]
+    pub task: Task,
+    pub session_count: i64,
+    pub total_tokens: i64,
+    pub total_cost: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskDetail {
+    #[serde(flatten)]
+    pub task: Task,
+    pub session_count: i64,
+    pub total_tokens: i64,
+    pub total_cost: f64,
+    pub sessions: Vec<TaskSession>,
+}

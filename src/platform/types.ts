@@ -1,6 +1,7 @@
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost, SessionModelCostEntry } from '@/types/common'
 import type { PricingData } from '@/types/pricing'
+import type { Task, TaskSession, TaskSessionInput, TaskWithStats, TaskDetail } from '@/types/task'
 
 export interface ProjectGroupStats {
   projectDir: string
@@ -174,6 +175,15 @@ export interface PlatformAdapter {
   resumeOpenCodeSession(sessionId: string, projectDir?: string): Promise<void>
   openCodexTerminal(projectDir: string): Promise<void>
   resumeCodexSession(sessionId: string, projectDir?: string): Promise<void>
+  // 任务管理
+  listTasks(): Promise<TaskWithStats[]>
+  getTaskDetail(taskId: number): Promise<TaskDetail>
+  createTask(title: string, description: string, status: string): Promise<number>
+  updateTask(taskId: number, title: string, description: string, status: string): Promise<void>
+  deleteTask(taskId: number): Promise<void>
+  addSessionsToTask(taskId: number, sessions: TaskSessionInput[]): Promise<void>
+  getTaskSessionDetail(taskId: number, sessionId: string): Promise<ProjectSessionDetail>
+  openTaskAgent(agentSource: string, projectDir: string, providerId?: string, dbPath?: string): Promise<void>
   // 更新
   checkForUpdate(proxy?: string): Promise<UpdateInfo | null>
   downloadAndInstall(onProgress?: (downloaded: number) => void, proxy?: string): Promise<void>
