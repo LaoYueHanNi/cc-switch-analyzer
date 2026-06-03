@@ -1,6 +1,49 @@
 [
   {
-    "version": "Unreleased",
+    "version": "0.7.14",
+    "date": "2026-06-03",
+    "commits": [
+      {
+        "hash": "e1cd073",
+        "subject": "feat: 新增任务 Tab,支持跨目录跨 agent 聚合多个会话",
+        "date": "2026-06-03"
+      }
+    ]
+  },
+  {
+    "version": "0.7.13",
+    "date": "2026-05-30",
+    "commits": [
+      {
+        "hash": "f017d7f",
+        "subject": "feat: 趋势图数据点标记与 tooltip 坐标修复",
+        "date": "2026-05-30"
+      },
+      {
+        "hash": "424bf27",
+        "subject": "feat: 新增 Codex 会话支持与 OpenAI API token 归一化",
+        "date": "2026-05-30"
+      }
+    ]
+  },
+  {
+    "version": "0.7.12",
+    "date": "2026-05-29",
+    "commits": [
+      {
+        "hash": "05f707d",
+        "subject": "fix: 修正费用计算与计费明细展示",
+        "date": "2026-05-29"
+      },
+      {
+        "hash": "59b1fab",
+        "subject": "docs: 补充 README 功能特性，按分类整理会话管理、定价系统、实时监控等功能点",
+        "date": "2026-05-28"
+      }
+    ]
+  },
+  {
+    "version": "0.7.11",
     "date": "2026-05-28",
     "commits": [
       {
