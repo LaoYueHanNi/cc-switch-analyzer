@@ -554,6 +554,7 @@ pub struct TaskWithStats {
     pub session_count: i64,
     pub total_tokens: i64,
     pub total_cost: f64,
+    pub sessions: Vec<TaskSession>,
 }
 
 #[derive(Debug, Clone, Serialize)]

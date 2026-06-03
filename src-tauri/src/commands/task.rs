@@ -4,6 +4,9 @@ use tauri::State;
 
 use crate::AppState;
 use crate::models::*;
+use crate::services::multi_terminal::{
+    agent_kind_from_source, build_pane_command, build_wt_args, PaneSpec,
+};
 
 /// 列出所有任务（含聚合统计：会话数 / Token / 费用）
 #[tauri::command]
@@ -56,6 +59,7 @@ pub fn list_tasks(state: State<AppState>) -> Result<Vec<TaskWithStats>, String> 
             session_count: sessions.len() as i64,
             total_tokens,
             total_cost,
+            sessions,
         });
     }
     Ok(out)
@@ -197,6 +201,84 @@ pub fn open_task_agent(
         }
         other => Err(format!("不支持的 agent 类型: {}", other)),
     }
+}
+
+/// 一键恢复任务下所有会话:按 4-pane/tab 布局规则,在 Windows Terminal
+/// 里恢复所有已绑定的 session。
+///
+/// 返回 `(spawned, total)`:
+/// - `spawned` 成功 spawn 的 pane 数
+/// - `total` 任务下原始 session 数(去重前;若>0 但 spawned=0 表示全部被去重或过滤)
+#[tauri::command]
+pub fn open_task_sessions(
+    task_id: i64,
+    state: State<AppState>,
+) -> Result<OpenTaskSessionsResult, String> {
+    // 1. 拉 task_sessions
+    let raw_sessions = {
+        let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+        app_db.list_task_sessions(task_id)?
+    };
+    let total = raw_sessions.len();
+
+    // 2. 去重 + 过滤 + 转 PaneSpec
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut specs: Vec<PaneSpec> = Vec::with_capacity(raw_sessions.len());
+    for s in raw_sessions {
+        if s.session_id.is_empty() {
+            continue;
+        }
+        let key = (s.session_id.clone(), s.source.clone());
+        if !seen.insert(key) {
+            continue;
+        }
+        let agent = match agent_kind_from_source(&s.source) {
+            Some(a) => a,
+            // 未知 source 跳过(不报错,避免脏数据阻塞整个 task)
+            None => continue,
+        };
+        let project_dir = if s.project_dir.is_empty() {
+            None
+        } else {
+            Some(s.project_dir)
+        };
+        specs.push(PaneSpec {
+            agent,
+            session_id: Some(s.session_id),
+            project_dir,
+        });
+    }
+
+    if specs.is_empty() {
+        return Ok(OpenTaskSessionsResult { spawned: 0, total });
+    }
+
+    // 3. 拼参数 + spawn(仅 Windows)
+    #[cfg(target_os = "windows")]
+    {
+        let args = build_wt_args(&specs, build_pane_command);
+        std::process::Command::new("wt")
+            .args(&args)
+            .spawn()
+            .map_err(|e| format!("启动终端失败: {}", e))?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        return Err("当前仅支持 Windows".to_string());
+    }
+
+    Ok(OpenTaskSessionsResult {
+        spawned: specs.len(),
+        total,
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenTaskSessionsResult {
+    pub spawned: usize,
+    pub total: usize,
 }
 
 // ========== 内部辅助 ==========

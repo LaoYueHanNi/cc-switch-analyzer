@@ -3,6 +3,11 @@ import type { PrecomputeQueryResult, SessionWithCost, SessionModelCostEntry } fr
 import type { PricingData } from '@/types/pricing'
 import type { Task, TaskSession, TaskSessionInput, TaskWithStats, TaskDetail } from '@/types/task'
 
+export interface OpenTaskSessionsResult {
+  spawned: number
+  total: number
+}
+
 export interface ProjectGroupStats {
   projectDir: string
   displayName: string
@@ -184,6 +189,7 @@ export interface PlatformAdapter {
   addSessionsToTask(taskId: number, sessions: TaskSessionInput[]): Promise<void>
   getTaskSessionDetail(taskId: number, sessionId: string): Promise<ProjectSessionDetail>
   openTaskAgent(agentSource: string, projectDir: string, providerId?: string, dbPath?: string): Promise<void>
+  openTaskSessions(taskId: number): Promise<OpenTaskSessionsResult>
   // 更新
   checkForUpdate(proxy?: string): Promise<UpdateInfo | null>
   downloadAndInstall(onProgress?: (downloaded: number) => void, proxy?: string): Promise<void>

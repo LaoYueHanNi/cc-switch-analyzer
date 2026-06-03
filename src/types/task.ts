@@ -45,6 +45,7 @@ export interface TaskWithStats {
   sessionCount: number
   totalTokens: number
   totalCost: number
+  sessions: TaskSession[]
 }
 
 export interface TaskDetail {

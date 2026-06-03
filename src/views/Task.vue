@@ -32,6 +32,7 @@
         @delete="onDelete(t)"
         @launch-agent="onLaunchAgent"
         @context-launch-agent="onContextLaunchAgent"
+        @open-all-sessions="onOpenAllSessions(t)"
       />
     </div>
 
@@ -215,6 +216,25 @@ async function onContextLaunchAgent(
 async function onProviderItemSelect(providerId: string) {
   providerDropdown.show = false
   await pickFolderAndLaunch('claude', providerId)
+}
+
+async function onOpenAllSessions(t: TaskWithStats) {
+  if (t.sessionCount === 0) {
+    message.info('该任务下没有绑定会话')
+    return
+  }
+  try {
+    const result = await platformAdapter.openTaskSessions(t.id)
+    if (result.spawned === 0) {
+      message.warning(`已发起 ${result.total} 个会话,但全部被跳过(可能 sessionId 为空或 agent 类型不支持)`)
+    } else if (result.spawned < result.total) {
+      message.success(`已在新终端打开 ${result.spawned}/${result.total} 个 pane`)
+    } else {
+      message.success(`已在新终端打开全部 ${result.spawned} 个会话`)
+    }
+  } catch (e: any) {
+    message.error('打开终端失败: ' + (e?.message || e))
+  }
 }
 
 async function pickFolderAndLaunch(

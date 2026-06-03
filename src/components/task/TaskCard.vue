@@ -32,21 +32,29 @@
     </div>
 
     <div class="footer" @click.stop="">
-      <div class="agent-launcher">
+      <div class="action-group">
         <button
-          class="agent-btn"
-          @click.stop="$emit('launchAgent', 'claude')"
-          @contextmenu.prevent="$emit('contextLaunchAgent', 'claude', $event)"
-          title="新建 Claude Code（右键选择供应商配置）"
-        >
-          <span v-html="claudeSvg"></span>
-        </button>
-        <button class="agent-btn" @click.stop="$emit('launchAgent', 'opencode')" title="新建 OpenCode 会话">
-          <span v-html="opencodeSvg"></span>
-        </button>
-        <button class="agent-btn" @click.stop="$emit('launchAgent', 'codex')" title="新建 Codex 会话">
-          <span v-html="codexSvg"></span>
-        </button>
+          class="open-all-btn"
+          :disabled="sessionCount === 0"
+          :title="sessionCount === 0 ? '暂无会话' : `一键打开全部 ${sessionCount} 个会话`"
+          @click.stop="$emit('openAllSessions')"
+        >▶ 一键打开</button>
+        <div class="agent-launcher">
+          <button
+            class="agent-btn"
+            @click.stop="$emit('launchAgent', 'claude')"
+            @contextmenu.prevent="$emit('contextLaunchAgent', 'claude', $event)"
+            title="新建 Claude Code（右键选择供应商配置）"
+          >
+            <span v-html="claudeSvg"></span>
+          </button>
+          <button class="agent-btn" @click.stop="$emit('launchAgent', 'opencode')" title="新建 OpenCode 会话">
+            <span v-html="opencodeSvg"></span>
+          </button>
+          <button class="agent-btn" @click.stop="$emit('launchAgent', 'codex')" title="新建 Codex 会话">
+            <span v-html="codexSvg"></span>
+          </button>
+        </div>
       </div>
       <div class="card-actions">
         <button class="action-btn" @click.stop="$emit('edit')" title="编辑">✎</button>
@@ -82,6 +90,7 @@ defineEmits<{
   delete: []
   launchAgent: [agent: 'claude' | 'opencode' | 'codex']
   contextLaunchAgent: [agent: 'claude' | 'opencode' | 'codex', event: MouseEvent]
+  openAllSessions: []
 }>()
 
 const statusInfo = computed(() => {
@@ -214,6 +223,12 @@ function formatRelativeTime(ts: number): string {
   border-top: 1px solid var(--border-light);
 }
 
+.action-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .agent-launcher {
   display: flex;
   gap: 4px;
@@ -258,5 +273,29 @@ function formatRelativeTime(ts: number): string {
 }
 .action-btn.danger:hover {
   color: var(--color-cost);
+}
+
+.open-all-btn {
+  font-size: 10px;
+  padding: 0 8px;
+  height: 18px;
+  line-height: 1;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  transition: all 0.15s;
+}
+.open-all-btn:hover:not(:disabled) {
+  border-color: var(--color-blue);
+  color: var(--color-blue);
+}
+.open-all-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 </style>

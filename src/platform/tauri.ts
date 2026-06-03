@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { getVersion } from '@tauri-apps/api/app'
 import { open } from '@tauri-apps/plugin-dialog'
 import { check } from '@tauri-apps/plugin-updater'
-import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo } from './types'
+import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult } from './types'
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
 import type { PricingData } from '@/types/pricing'
@@ -246,6 +246,9 @@ export const platformAdapter: PlatformAdapter = {
       providerId: providerId || null,
       dbPath: dbPath || null
     })
+  },
+  async openTaskSessions(taskId: number): Promise<OpenTaskSessionsResult> {
+    return invoke<OpenTaskSessionsResult>('open_task_sessions', { taskId })
   },
   async checkForUpdate(proxy?: string): Promise<UpdateInfo | null> {
     const opts = proxy ? { proxy } : undefined

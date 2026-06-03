@@ -232,6 +232,7 @@ pub fn run() {
             commands::task::add_sessions_to_task,
             commands::task::get_task_session_detail,
             commands::task::open_task_agent,
+            commands::task::open_task_sessions,
             // TrafficMonitor 插件服务
             commands::traffic_monitor::get_http_service_status,
             commands::traffic_monitor::toggle_http_service,

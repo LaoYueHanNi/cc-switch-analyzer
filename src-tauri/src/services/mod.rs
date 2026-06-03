@@ -7,6 +7,7 @@ pub mod dedup;
 pub mod external_db;
 #[cfg(target_os = "windows")]
 pub mod http_server;
+pub mod multi_terminal;
 pub mod opencode_db;
 pub mod pipeline;
 pub mod precompute;
