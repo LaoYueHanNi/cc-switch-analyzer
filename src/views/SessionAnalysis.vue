@@ -57,7 +57,7 @@
             <SessionCard
               :session-id="s.sessionId"
               :title="s.title"
-              :project="s.projectDir"
+              :project="''"
               :total-cost="s.totalCost"
               :total-tokens="s.totalTokens"
               :request-count="s.requestCount"

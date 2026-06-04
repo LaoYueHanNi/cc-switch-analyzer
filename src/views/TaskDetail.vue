@@ -50,7 +50,7 @@
           <SessionCard
             :session-id="s.sessionId"
             :title="s.title || sessionFromList(s.sessionId)?.title"
-            :project="s.projectDir || sessionFromList(s.sessionId)?.projectDir"
+            :project="basenameDir(s.projectDir || sessionFromList(s.sessionId)?.projectDir)"
             :total-cost="s.totalCost"
             :total-tokens="s.totalTokens"
             :request-count="s.requestCount"
@@ -176,6 +176,14 @@ function shortId(id: string): string {
   if (id.startsWith('ses_')) return id.slice(0, 8)
   const parts = id.split('-')
   return parts[0] || id.slice(0, 8)
+}
+
+function basenameDir(p?: string): string {
+  if (!p) return ''
+  // 与后端 std::path::Path::file_name() 行为一致:取最后一段(同时处理 / 和 \)
+  const trimmed = p.replace(/[\\/]+$/, '')
+  const i = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  return i >= 0 ? trimmed.slice(i + 1) : trimmed
 }
 
 function formatTime(ts: number): string {
