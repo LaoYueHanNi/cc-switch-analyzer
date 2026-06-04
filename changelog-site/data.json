@@ -1,6 +1,27 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-06-04",
+    "commits": [
+      {
+        "hash": "b4d291f",
+        "subject": "feat: 趋势图新增按模型对比模式",
+        "date": "2026-06-04"
+      },
+      {
+        "hash": "3a5157d",
+        "subject": "feat: 会话/任务二级页只展示精简目录",
+        "date": "2026-06-04"
+      },
+      {
+        "hash": "e02c581",
+        "subject": "ci: build.yml 去掉 gh release create 的 --verify-tag",
+        "date": "2026-06-03"
+      }
+    ]
+  },
+  {
+    "version": "0.7.15",
     "date": "2026-06-03",
     "commits": [
       {
