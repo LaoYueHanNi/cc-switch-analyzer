@@ -145,6 +145,7 @@ const summaryStats = computed(() => {
   let cacheCreationCost = 0
   let inputTokens = 0
   let cacheReadTokens = 0
+  let cacheCreationTokens = 0
   for (const group of visibleGroups.value) {
     for (const r of group.rows) {
       cost += r.totalCost
@@ -155,6 +156,7 @@ const summaryStats = computed(() => {
       cacheCreationCost += r.cacheCreationCost
       inputTokens += r.inputTokens
       cacheReadTokens += r.cacheReadTokens
+      cacheCreationTokens += r.cacheCreationTokens
     }
   }
   return {
@@ -164,7 +166,7 @@ const summaryStats = computed(() => {
     totalOutputCost: outputCost,
     totalCacheReadCost: cacheReadCost,
     totalCacheCreationCost: cacheCreationCost,
-    cacheHitRate: (inputTokens + cacheReadTokens) > 0 ? cacheReadTokens / (inputTokens + cacheReadTokens) : 0
+    cacheHitRate: (inputTokens + cacheReadTokens + cacheCreationTokens) > 0 ? cacheReadTokens / (inputTokens + cacheReadTokens + cacheCreationTokens) : 0
   }
 })
 

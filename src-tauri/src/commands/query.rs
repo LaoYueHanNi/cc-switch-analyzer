@@ -468,8 +468,8 @@ pub fn query_sessions_with_cost(
             let model_costs = session_model_costs.get(&s.session_id);
             let timestamps = timestamps_map.get(&s.session_id).cloned().unwrap_or_default();
             let duration_sec = s.last_at - s.first_at;
-            let cache_hit_rate = if (s.input_tokens + s.cache_read) > 0 {
-                s.cache_read as f64 / (s.input_tokens + s.cache_read) as f64
+            let cache_hit_rate = if (s.input_tokens + s.cache_read + s.cache_creation) > 0 {
+                s.cache_read as f64 / (s.input_tokens + s.cache_read + s.cache_creation) as f64
             } else {
                 0.0
             };
@@ -922,8 +922,8 @@ fn build_session_details(
             best_source_type = Some("codex".to_string());
         }
 
-        let cache_hit_rate = if (total_input + total_cache_read) > 0 {
-            total_cache_read as f64 / (total_input + total_cache_read) as f64
+        let cache_hit_rate = if (total_input + total_cache_read + total_cache_creation) > 0 {
+            total_cache_read as f64 / (total_input + total_cache_read + total_cache_creation) as f64
         } else { 0.0 };
 
         let model_breakdown: Vec<SessionModelCostEntry> = model_cost_agg.iter().map(|(model, data)| {

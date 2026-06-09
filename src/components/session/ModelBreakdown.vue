@@ -60,8 +60,8 @@ function rows(item: {
   ]
 }
 
-function cacheHitRate(item: { inputTokens: number; cacheRead: number }): string | null {
-  const total = item.inputTokens + item.cacheRead
+function cacheHitRate(item: { inputTokens: number; cacheRead: number; cacheCreation: number }): string | null {
+  const total = item.inputTokens + item.cacheRead + item.cacheCreation
   if (total <= 0) return null
   return formatPercent(item.cacheRead / total)
 }

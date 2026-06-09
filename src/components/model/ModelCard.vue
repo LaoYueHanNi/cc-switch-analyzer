@@ -108,7 +108,8 @@ const costPerRequest = computed(() =>
 const cacheHitRate = computed(() => {
   const input = props.modelData.inputTokens
   const cacheRead = props.modelData.cacheRead
-  return (input + cacheRead) > 0 ? cacheRead / (input + cacheRead) : 0
+  const cacheCreation = props.modelData.cacheCreation
+  return (input + cacheRead + cacheCreation) > 0 ? cacheRead / (input + cacheRead + cacheCreation) : 0
 })
 
 const allDisplayTimeRules = computed(() => [

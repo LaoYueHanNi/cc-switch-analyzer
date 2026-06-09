@@ -58,7 +58,7 @@ const items = computed(() => {
         break
       case 'cacheHitRate':
         if (s) {
-          const total = (s.totalInput || 0) + (s.totalCacheRead || 0)
+          const total = (s.totalInput || 0) + (s.totalCacheRead || 0) + (s.totalCacheCreation || 0)
           rawValue = total > 0 ? (s.totalCacheRead || 0) / total * 100 : 0
         }
         break

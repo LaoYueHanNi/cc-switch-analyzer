@@ -973,7 +973,7 @@ export function formatDuration(seconds: number): string {
 1. **ModelCard.vue**
    - 模型名称（粗体）+ 总费用（红色大号可点击）+ 总 Token（青色大号）
    - 单次请求费用 = 总费用 / 请求数
-   - 缓存命中率 = cacheRead / (input + cacheRead)
+   - 缓存命中率 = cacheRead / (input + cacheRead + cacheWrite)
    - 平均缓存时长（可点击，弹出窗口）
    - 费用分解网格（复用 PricingGrid）
    - 无定价时显示"暂无定价数据"+"设置定价"按钮（跳转定价 Tab）

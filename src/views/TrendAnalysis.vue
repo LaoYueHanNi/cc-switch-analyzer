@@ -480,9 +480,8 @@ const modelTipRows = computed(() => {
       cacheW += r.cacheCreation
     }
     const total = input + output + cacheR + cacheW
-    // 缓存命中率 = cacheRead / (input + cacheR)
-    // (与 RealtimeToken.vue summaryStats 中的命中率定义保持一致:分母不含 cacheW)
-    const hit = (input + cacheR) > 0 ? cacheR / (input + cacheR) : 0
+    // 缓存命中率 = cacheRead / (input + cacheRead + cacheWrite)
+    const hit = (input + cacheR + cacheW) > 0 ? cacheR / (input + cacheR + cacheW) : 0
     return {
       rank: i + 1,
       model: m,
