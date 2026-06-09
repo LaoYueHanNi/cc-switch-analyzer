@@ -1,15 +1,31 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-06-09",
+    "commits": [
+      {
+        "hash": "439b818",
+        "subject": "fix: 去重指纹加入 cacheCreation，避免缓存状态不同的请求被误判为重复",
+        "date": "2026-06-09"
+      },
+      {
+        "hash": "48f0dbf",
+        "subject": "fix: 修正缓存命中率公式，分母增加 cacheWrite",
+        "date": "2026-06-09"
+      }
+    ]
+  },
+  {
+    "version": "0.7.16",
     "date": "2026-06-04",
     "commits": [
       {
-        "hash": "b4d291f",
+        "hash": "daff88d",
         "subject": "feat: 趋势图新增按模型对比模式",
         "date": "2026-06-04"
       },
       {
-        "hash": "3a5157d",
+        "hash": "bc1f3bb",
         "subject": "feat: 会话/任务二级页只展示精简目录",
         "date": "2026-06-04"
       },
