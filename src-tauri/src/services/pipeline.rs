@@ -55,7 +55,7 @@ pub fn run_streaming_dedup(
     let mut seen = HashSet::new();
     let mut result = Vec::new();
     for record in rx {
-        let fp = RequestFingerprint::new(&record.0, &record.1, record.4, record.5);
+        let fp = RequestFingerprint::new(&record.0, &record.1, record.4, record.5, record.7);
         if seen.insert(fp) {
             result.push(record);
         }

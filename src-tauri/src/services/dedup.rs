@@ -9,9 +9,9 @@ pub fn dedup_records(records: Vec<RawRecord>) -> Vec<RawRecord> {
     records.into_iter().filter(|r| {
         let fp = if r.is_codex {
             // input_tokens 已在 ExternalDb 中归一化（raw - cache_read），直接使用
-            RequestFingerprint::new_codex(&r.session_id, r.input_tokens, r.output_tokens)
+            RequestFingerprint::new_codex(&r.session_id, r.input_tokens, r.output_tokens, r.cache_creation)
         } else {
-            RequestFingerprint::new(&r.session_id, &r.model, r.input_tokens, r.output_tokens)
+            RequestFingerprint::new(&r.session_id, &r.model, r.input_tokens, r.output_tokens, r.cache_creation)
         };
         seen.insert(fp)
     }).collect()
@@ -47,7 +47,7 @@ impl RequestCache {
     pub fn merge(&mut self, new_records: Vec<crate::models::SessionRequestToken>) -> usize {
         let mut added = 0;
         for record in new_records {
-            let fp = RequestFingerprint::new(&record.session_id, &record.model, record.input_tokens, record.output_tokens);
+            let fp = RequestFingerprint::new(&record.session_id, &record.model, record.input_tokens, record.output_tokens, record.cache_creation);
             if self.seen.insert(fp) {
                 self.records.push(record);
                 added += 1;
@@ -57,7 +57,7 @@ impl RequestCache {
         if self.records.len() > self.max_size {
             self.records.sort_by(|a, b| b.created_at.cmp(&a.created_at));
             for r in &self.records[self.max_size..] {
-                self.seen.remove(&RequestFingerprint::new(&r.session_id, &r.model, r.input_tokens, r.output_tokens));
+                self.seen.remove(&RequestFingerprint::new(&r.session_id, &r.model, r.input_tokens, r.output_tokens, r.cache_creation));
             }
             self.records.truncate(self.max_size);
         }
@@ -71,36 +71,41 @@ impl RequestCache {
 }
 
 /// 请求指纹 — 用于跨数据源去重
-/// codex: session_id + output_tokens（model 不参与，input 归一化）
-/// 非codex: session_id + model + input_tokens + output_tokens
+/// codex: session_id + output_tokens + cache_creation_tokens（model 不参与，input 归一化）
+/// 非codex: session_id + model + input_tokens + output_tokens + cache_creation_tokens
+/// cache_creation_tokens 参与指纹：相同 input/output 但缓存状态不同的记录视为不同请求，
+/// 避免缓存命中（高 cache_read）和缓存重建（高 cache_creation）的情况被误判为重复。
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct RequestFingerprint {
     session_id: String,
     model: String,
     input_tokens: i64,
     output_tokens: i64,
+    cache_creation_tokens: i64,
     is_codex: bool,
 }
 
 impl RequestFingerprint {
     /// 非codex 指纹（is_codex = false）
-    pub fn new(session_id: &str, model: &str, input_tokens: i64, output_tokens: i64) -> Self {
+    pub fn new(session_id: &str, model: &str, input_tokens: i64, output_tokens: i64, cache_creation_tokens: i64) -> Self {
         Self {
             session_id: session_id.to_string(),
             model: model.to_string(),
             input_tokens,
             output_tokens,
+            cache_creation_tokens,
             is_codex: false,
         }
     }
 
     /// codex 指纹：不用 model，input 已归一化（不含 cache_read）
-    pub fn new_codex(session_id: &str, normalized_input: i64, output_tokens: i64) -> Self {
+    pub fn new_codex(session_id: &str, normalized_input: i64, output_tokens: i64, cache_creation_tokens: i64) -> Self {
         Self {
             session_id: session_id.to_string(),
             model: String::new(),
             input_tokens: normalized_input,
             output_tokens,
+            cache_creation_tokens,
             is_codex: true,
         }
     }
@@ -113,7 +118,7 @@ pub fn dedup_request_tokens(items: Vec<crate::models::SessionRequestToken>) -> V
     items
         .into_iter()
         .filter(|item| {
-            let fp = RequestFingerprint::new(&item.session_id, &item.model, item.input_tokens, item.output_tokens);
+            let fp = RequestFingerprint::new(&item.session_id, &item.model, item.input_tokens, item.output_tokens, item.cache_creation);
             seen.insert(fp)
         })
         .collect()
@@ -139,22 +144,22 @@ mod tests {
 
     #[test]
     fn fingerprint_equality() {
-        let a = RequestFingerprint::new("s1", "m1", 100, 200);
-        let b = RequestFingerprint::new("s1", "m1", 100, 200);
+        let a = RequestFingerprint::new("s1", "m1", 100, 200, 0);
+        let b = RequestFingerprint::new("s1", "m1", 100, 200, 0);
         assert_eq!(a, b);
     }
 
     #[test]
     fn fingerprint_inequality_different_session() {
-        let a = RequestFingerprint::new("s1", "m1", 100, 200);
-        let b = RequestFingerprint::new("s2", "m1", 100, 200);
+        let a = RequestFingerprint::new("s1", "m1", 100, 200, 0);
+        let b = RequestFingerprint::new("s2", "m1", 100, 200, 0);
         assert_ne!(a, b);
     }
 
     #[test]
     fn fingerprint_inequality_different_tokens() {
-        let a = RequestFingerprint::new("s1", "m1", 100, 200);
-        let b = RequestFingerprint::new("s1", "m1", 100, 300);
+        let a = RequestFingerprint::new("s1", "m1", 100, 200, 0);
+        let b = RequestFingerprint::new("s1", "m1", 100, 300, 0);
         assert_ne!(a, b);
     }
 
@@ -162,8 +167,8 @@ mod tests {
     fn fingerprint_does_not_include_timestamp() {
         // 指纹仅由 session_id + model + input/output tokens 组成，
         // 不含 created_at（不同源时间语义不同，差值可达数分钟）
-        let a = RequestFingerprint::new("s1", "m1", 100, 200);
-        let b = RequestFingerprint::new("s1", "m1", 100, 200);
+        let a = RequestFingerprint::new("s1", "m1", 100, 200, 0);
+        let b = RequestFingerprint::new("s1", "m1", 100, 200, 0);
         assert_eq!(a, b);
     }
 
@@ -403,11 +408,11 @@ mod tests {
         // 两边 input_tokens 已在 DB 读取时归一化，直接比较
         let fp_ccs = {
             let r = raw_record("s1", "gpt-5.3-codex", "_codex_session", 100, 200, 900, true);
-            RequestFingerprint::new_codex(&r.session_id, r.input_tokens, r.output_tokens)
+            RequestFingerprint::new_codex(&r.session_id, r.input_tokens, r.output_tokens, r.cache_creation)
         };
         let fp_aiproxy = {
             let r = raw_record("s1", "deepseek-v4-flash", "ai-proxy", 100, 200, 900, true);
-            RequestFingerprint::new_codex(&r.session_id, r.input_tokens, r.output_tokens)
+            RequestFingerprint::new_codex(&r.session_id, r.input_tokens, r.output_tokens, r.cache_creation)
         };
         assert_eq!(fp_ccs, fp_aiproxy);
     }
