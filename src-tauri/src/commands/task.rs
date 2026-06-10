@@ -4,9 +4,13 @@ use tauri::State;
 
 use crate::AppState;
 use crate::models::*;
+
+#[cfg(target_os = "windows")]
 use crate::services::multi_terminal::{
     agent_kind_from_source, build_pane_command, build_wt_args, PaneSpec,
 };
+#[cfg(not(target_os = "windows"))]
+use crate::services::multi_terminal::{agent_kind_from_source, build_pane_command, PaneSpec};
 
 /// 列出所有任务（含聚合统计：会话数 / Token / 费用）
 #[tauri::command]
@@ -253,7 +257,7 @@ pub fn open_task_sessions(
         return Ok(OpenTaskSessionsResult { spawned: 0, total });
     }
 
-    // 3. 拼参数 + spawn(仅 Windows)
+    // 3. 拼参数 + spawn
     #[cfg(target_os = "windows")]
     {
         let args = build_wt_args(&specs, build_pane_command);
@@ -263,9 +267,36 @@ pub fn open_task_sessions(
             .map_err(|e| format!("启动终端失败: {}", e))?;
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        return Err("当前仅支持 Windows".to_string());
+        // macOS Terminal.app 不支持分屏，每个 pane 开一个新窗口
+        for spec in &specs {
+            let cmd = build_pane_command(spec);
+            let dir = spec.project_dir.as_deref().unwrap_or("");
+            let apple_cmd = if dir.is_empty() {
+                cmd.replace('\\', "\\\\").replace('"', "\\\"")
+            } else {
+                let esc_dir = dir.replace('\\', "\\\\").replace('"', "\\\"");
+                let esc_cmd = cmd.replace('\\', "\\\\").replace('"', "\\\"");
+                format!("cd \"{}\" && {}", esc_dir, esc_cmd)
+            };
+            let script = format!(
+                "tell application \"Terminal\"\n\
+                 activate\n\
+                 do script \"{}\"\n\
+                 end tell",
+                apple_cmd
+            );
+            std::process::Command::new("osascript")
+                .args(["-e", &script])
+                .spawn()
+                .map_err(|e| format!("启动终端失败: {}", e))?;
+        }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        return Err("当前仅支持 Windows / macOS".to_string());
     }
 
     Ok(OpenTaskSessionsResult {

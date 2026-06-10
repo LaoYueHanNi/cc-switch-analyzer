@@ -5,6 +5,38 @@ use std::path::Path;
 
 use crate::services::session_title::{claude_projects_dir, find_jsonl_path};
 
+// ========== macOS 终端辅助函数 ==========
+
+/// 转义 AppleScript 双引号字符串中的特殊字符（\ 和 "）
+#[cfg(target_os = "macos")]
+fn escape_applescript(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// macOS: 在 Terminal.app 中打开新窗口，在指定目录执行命令
+#[cfg(target_os = "macos")]
+fn macos_open_terminal(command: &str, dir: &str) -> Result<(), String> {
+    let apple_cmd = if dir.is_empty() {
+        escape_applescript(command)
+    } else {
+        let escaped_dir = escape_applescript(dir);
+        let escaped_cmd = escape_applescript(command);
+        format!("cd \"{}\" && {}", escaped_dir, escaped_cmd)
+    };
+    let script = format!(
+        "tell application \"Terminal\"\n\
+         activate\n\
+         do script \"{}\"\n\
+         end tell",
+        apple_cmd
+    );
+    std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .spawn()
+        .map_err(|e| format!("启动终端失败: {}", e))?;
+    Ok(())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CcSwitchProvider {
@@ -95,10 +127,15 @@ pub fn open_claude_terminal(project_dir: String) -> Result<(), String> {
             .map_err(|e| format!("启动终端失败: {}", e))?;
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        macos_open_terminal("claude", &project_dir)?;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = project_dir;
-        return Err("当前仅支持 Windows".to_string());
+        return Err("当前仅支持 Windows / macOS".to_string());
     }
 
     Ok(())
@@ -115,10 +152,15 @@ pub fn open_opencode_terminal(project_dir: String) -> Result<(), String> {
             .map_err(|e| format!("启动终端失败: {}", e))?;
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        macos_open_terminal("opencode", &project_dir)?;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = project_dir;
-        return Err("当前仅支持 Windows".to_string());
+        return Err("当前仅支持 Windows / macOS".to_string());
     }
 
     Ok(())
@@ -142,10 +184,16 @@ pub fn open_claude_terminal_with_provider(
             .map_err(|e| format!("启动终端失败: {}", e))?;
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        let claude_cmd = format!("claude --settings \"{}\"", settings_file);
+        macos_open_terminal(&claude_cmd, &project_dir)?;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = project_dir;
-        return Err("当前仅支持 Windows".to_string());
+        return Err("当前仅支持 Windows / macOS".to_string());
     }
 
     Ok(())
@@ -176,11 +224,18 @@ pub fn resume_claude_session_with_provider(
             .map_err(|e| format!("启动终端失败: {}", e))?;
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        let claude_cmd = format!("claude --resume {} --settings \"{}\"", session_id, settings_file);
+        let dir = project_dir.as_deref().unwrap_or("");
+        macos_open_terminal(&claude_cmd, dir)?;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = session_id;
         let _ = project_dir;
-        return Err("当前仅支持 Windows".to_string());
+        return Err("当前仅支持 Windows / macOS".to_string());
     }
 
     Ok(())
@@ -203,11 +258,18 @@ pub fn resume_claude_session(session_id: String, project_dir: Option<String>) ->
             .map_err(|e| format!("启动终端失败: {}", e))?;
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        let claude_cmd = format!("claude --resume {}", session_id);
+        let dir = project_dir.as_deref().unwrap_or("");
+        macos_open_terminal(&claude_cmd, dir)?;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = session_id;
         let _ = project_dir;
-        return Err("当前仅支持 Windows".to_string());
+        return Err("当前仅支持 Windows / macOS".to_string());
     }
 
     Ok(())
@@ -231,11 +293,18 @@ pub fn resume_opencode_session(session_id: String, project_dir: Option<String>) 
             .map_err(|e| format!("启动终端失败: {}", e))?;
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        let opencode_cmd = format!("opencode -s {}", session_id);
+        let dir = project_dir.as_deref().unwrap_or("");
+        macos_open_terminal(&opencode_cmd, dir)?;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = session_id;
         let _ = project_dir;
-        return Err("当前仅支持 Windows".to_string());
+        return Err("当前仅支持 Windows / macOS".to_string());
     }
 
     Ok(())
@@ -287,10 +356,15 @@ pub fn open_codex_terminal(project_dir: String) -> Result<(), String> {
             .map_err(|e| format!("启动终端失败: {}", e))?;
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        macos_open_terminal("codex", &project_dir)?;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = project_dir;
-        return Err("当前仅支持 Windows".to_string());
+        return Err("当前仅支持 Windows / macOS".to_string());
     }
 
     Ok(())
@@ -316,11 +390,18 @@ pub fn resume_codex_session(session_id: String, project_dir: Option<String>) -> 
             .map_err(|e| format!("启动终端失败: {}", e))?;
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        let codex_cmd = format!("codex resume {}", session_id);
+        let dir = project_dir.as_deref().unwrap_or("");
+        macos_open_terminal(&codex_cmd, dir)?;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = session_id;
         let _ = project_dir;
-        return Err("当前仅支持 Windows".to_string());
+        return Err("当前仅支持 Windows / macOS".to_string());
     }
 
     Ok(())

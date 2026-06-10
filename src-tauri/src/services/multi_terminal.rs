@@ -58,6 +58,7 @@ pub fn agent_kind_from_source(source: &str) -> Option<AgentKind> {
 ///   `["powershell", "-NoExit", "-Command", "<cmd>"]`
 ///
 /// 若 `project_dir` 非空,在前面插入 `["-d", "<dir>"]`。
+#[cfg(any(target_os = "windows", test))]
 fn pane_args(spec: &PaneSpec, cmd: &str) -> Vec<String> {
     let mut out = Vec::with_capacity(7);
     if let Some(dir) = &spec.project_dir {
@@ -85,6 +86,7 @@ fn pane_args(spec: &PaneSpec, cmd: &str) -> Vec<String> {
 /// - 后续 tab 在 `; new-tab` 之后直接跟命令,**不要再加 `nt`**(否则 `wt`
 ///   会在新 tab 里又起一个 pane,而新 pane 没有 `-d` 之类的配置,
 ///   会落在 `wt` 进程的默认工作目录,即用户 home)
+#[cfg(any(target_os = "windows", test))]
 fn tab_args(
     tab_panes: &[PaneSpec],
     build_cmd: &dyn Fn(&PaneSpec) -> String,
@@ -138,6 +140,7 @@ fn tab_args(
 ///
 /// 自动按 4 一组切 tab,余数 <4 单独开 tab。
 /// n=0 时返回空(防御性)。
+#[cfg(any(target_os = "windows", test))]
 pub fn build_wt_args<F>(panes: &[PaneSpec], build_cmd: F) -> Vec<String>
 where
     F: Fn(&PaneSpec) -> String,
