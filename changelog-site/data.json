@@ -1,6 +1,17 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-06-10",
+    "commits": [
+      {
+        "hash": "700c296",
+        "subject": "feat: 打开终端功能支持 macOS（Terminal.app）",
+        "date": "2026-06-10"
+      }
+    ]
+  },
+  {
+    "version": "0.7.17",
     "date": "2026-06-09",
     "commits": [
       {
