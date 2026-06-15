@@ -98,7 +98,14 @@ pub fn query_hourly_trend(params: FilterParams, state: State<AppState>) -> Resul
     require_sources!(sources);
     let records = fetch_deduped_records(&sources, &params)?;
     let tz_offset = params.tz_offset.unwrap_or(0);
-    Ok(aggregate_hourly_trend(&records, tz_offset))
+    let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
+    let mut rows = aggregate_hourly_trend(&records, tz_offset);
+    for row in &mut rows {
+        if let Some(canonical) = pricing.resolve_model_id(&row.model) {
+            row.model = canonical;
+        }
+    }
+    Ok(rows)
 }
 
 #[tauri::command]
