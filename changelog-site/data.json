@@ -1,6 +1,17 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-06-15",
+    "commits": [
+      {
+        "hash": "58735f8",
+        "subject": "fix(trend): 修复小时趋势图模型别名未解析导致单日视图不展示",
+        "date": "2026-06-15"
+      }
+    ]
+  },
+  {
+    "version": "0.7.18",
     "date": "2026-06-10",
     "commits": [
       {
