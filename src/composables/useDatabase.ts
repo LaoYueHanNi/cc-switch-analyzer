@@ -22,7 +22,7 @@ export function useDatabase() {
       await loadPricing()
       dbStore.setSources(sources)
 
-      platformAdapter.fetchCloudPricing().catch(() => {})
+      platformAdapter.fetchCloudPricing().then(() => loadPricing()).catch(() => {})
       return true
     } catch (err: any) {
       console.error('[useDatabase] 自动加载异常:', err)
@@ -46,7 +46,7 @@ export function useDatabase() {
       await loadPricing()
       dbStore.setSources(sources)
 
-      platformAdapter.fetchCloudPricing().catch(() => {})
+      platformAdapter.fetchCloudPricing().then(() => loadPricing()).catch(() => {})
       return true
     } catch (err: any) {
       console.error('[useDatabase] 异常:', err)
@@ -63,7 +63,7 @@ export function useDatabase() {
       await loadPricing()
       dbStore.setSources(sources)
 
-      platformAdapter.fetchCloudPricing().catch(() => {})
+      platformAdapter.fetchCloudPricing().then(() => loadPricing()).catch(() => {})
       return true
     } catch (err: any) {
       console.error('[useDatabase] 添加数据源失败:', err)
