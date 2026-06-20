@@ -28,3 +28,9 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 dirs = "5"
 chrono = "0.4"
 ureq = "3"
+
+# 生产构建优化（仅影响 cargo build --release，dev 不受影响）
+[profile.release]
+lto = true          # 链接时优化：减小体积、提升运行性能（代价：release 编译变慢）
+codegen-units = 1   # 单编译单元：更好的全局优化
+strip = true        # 去除符号表：显著减小 binary 体积

@@ -4,7 +4,7 @@
 
 **CC-Switch Analyzer** — CC-Switch 和 OpenCode 代理使用数据的桌面分析工具。
 
-- **版本**: 0.6.7
+- **版本**: 0.7.20
 - **架构**: Tauri v2（Rust 后端 + Vue 3 前端）
 - **仓库**: https://github.com/LaoYueHanNi/cc-switch-analyzer
 
