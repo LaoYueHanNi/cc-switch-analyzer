@@ -361,3 +361,135 @@ pub fn build_context_tier_and_model_costs(
 
     (tier_costs_map, model_costs, model_breakdown, day_cost_map)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::app_db::AppDbService;
+
+    /// 构造带云端定价的引擎：claude-sonnet-4 单价 21/105/2.1/26.25（每百万 token）
+    fn make_engine() -> PricingEngine {
+        let app_db = AppDbService::new_in_memory().unwrap();
+        app_db.save_cloud_pricing(&CloudPricingData {
+            version: 1,
+            updated_at: 1700000000,
+            currency: "RMB".to_string(),
+            models: vec![CloudPricingModel {
+                model_id: "claude-sonnet-4".to_string(),
+                input_cost_per_million: 21.0,
+                output_cost_per_million: 105.0,
+                cache_read_cost_per_million: 2.1,
+                cache_creation_cost_per_million: 26.25,
+                context_tiers: vec![],
+                time_rules: vec![],
+                aliases: vec![],
+                no_cache_support: false,
+            }],
+        }).unwrap();
+        let mut engine = PricingEngine::new();
+        engine.refresh(&app_db).unwrap();
+        engine
+    }
+
+    fn trend(day: &str, model: &str, requests: i64, input: i64, output: i64, cache_read: i64, cache_creation: i64) -> DailyTrendRow {
+        DailyTrendRow {
+            day: day.to_string(),
+            model: model.to_string(),
+            requests,
+            input_tokens: input,
+            output_tokens: output,
+            cache_read,
+            cache_creation,
+            avg_latency: 0.0,
+        }
+    }
+
+    // 空引擎：所有模型未定价，但仍应累加 token 与分组
+    #[test]
+    fn precompute_costs_unpriced_collects_models() {
+        let ps = PricingEngine::new();
+        let daily = vec![
+            trend("2024-01-01", "unknown-a", 2, 100, 200, 50, 30),
+            trend("2024-01-01", "unknown-b", 1, 10, 20, 5, 3),
+        ];
+        let r = precompute_costs(&daily, &[], &ps, 0);
+        // 未定价模型收集（排序）
+        assert_eq!(r.unpriced_models, vec!["unknown-a".to_string(), "unknown-b".to_string()]);
+        // 费用全为 0
+        assert!(r.model_costs.values().all(|&c| c == 0.0));
+        assert!(r.day_cost_map.values().all(|&c| c == 0.0));
+        // token 统计照常累加
+        assert_eq!(r.day_requests_map.get("2024-01-01"), Some(&3));
+        assert_eq!(r.day_input_tokens.get("2024-01-01"), Some(&110));
+        assert_eq!(r.day_output_tokens.get("2024-01-01"), Some(&220));
+        // daily_by_model 分组
+        assert_eq!(r.daily_by_model.len(), 2);
+        assert_eq!(r.daily_by_model.get("unknown-a").unwrap().len(), 1);
+    }
+
+    // 有定价：验证 model_costs / day_cost_map / 四维分解
+    #[test]
+    fn precompute_costs_priced_calculates_cost() {
+        let ps = make_engine();
+        let daily = vec![trend("2024-01-01", "claude-sonnet-4", 1, 1_000_000, 0, 0, 0)];
+        let r = precompute_costs(&daily, &[], &ps, 0);
+        // 仅 input 1M → 21.0
+        let cost = *r.model_costs.get("claude-sonnet-4").unwrap();
+        assert!((cost - 21.0).abs() < 1e-6);
+        let day_cost = *r.day_cost_map.get("2024-01-01").unwrap();
+        assert!((day_cost - 21.0).abs() < 1e-6);
+        // breakdown[0] = input 费用，其余为 0
+        let bd = r.model_cost_breakdown.get("claude-sonnet-4").unwrap();
+        assert_eq!(bd.len(), 4);
+        assert!((bd[0] - 21.0).abs() < 1e-6);
+        assert!((bd[1]).abs() < 1e-9);
+    }
+
+    // 多维度费用累加（input/output/cache_read/cache_creation）
+    #[test]
+    fn precompute_costs_all_dimensions() {
+        let ps = make_engine();
+        let daily = vec![trend("2024-01-01", "claude-sonnet-4", 1, 1_000_000, 500_000, 200_000, 100_000)];
+        let r = precompute_costs(&daily, &[], &ps, 0);
+        let expected = (1_000_000.0 * 21.0 + 500_000.0 * 105.0 + 200_000.0 * 2.1 + 100_000.0 * 26.25) / 1_000_000.0;
+        let cost = *r.model_costs.get("claude-sonnet-4").unwrap();
+        assert!((cost - expected).abs() < 1e-6);
+    }
+
+    // provider_costs 按 token 比例分摊模型费用
+    #[test]
+    fn precompute_costs_provider_allocation_by_token_ratio() {
+        let ps = make_engine();
+        let daily = vec![trend("2024-01-01", "claude-sonnet-4", 2, 1_000_000, 0, 0, 0)];
+        // 两个 provider 各贡献 1M token，模型总费用 21.0 → 各分 10.5
+        let pmt = vec![
+            ProviderModelToken { provider_id: "p1".into(), model: "claude-sonnet-4".into(), input_tokens: 1_000_000, output_tokens: 0, cache_read: 0, cache_creation: 0 },
+            ProviderModelToken { provider_id: "p2".into(), model: "claude-sonnet-4".into(), input_tokens: 1_000_000, output_tokens: 0, cache_read: 0, cache_creation: 0 },
+        ];
+        let r = precompute_costs(&daily, &pmt, &ps, 0);
+        assert!((r.provider_costs.get("p1").unwrap() - 10.5).abs() < 1e-6);
+        assert!((r.provider_costs.get("p2").unwrap() - 10.5).abs() < 1e-6);
+    }
+
+    // aggregate_combined_breakdown：从 CombinedBreakdownRow 一次性聚合三组结果
+    #[test]
+    fn aggregate_combined_breakdown_aggregates_and_avg_latency() {
+        let combined = vec![
+            CombinedBreakdownRow { day: "2024-01-01".into(), provider_id: "p".into(), model: "A".into(), requests: 2, input_tokens: 100, output_tokens: 200, cache_read: 50, cache_creation: 30, latency_sum: 300.0 },
+            CombinedBreakdownRow { day: "2024-01-02".into(), provider_id: "p".into(), model: "A".into(), requests: 1, input_tokens: 10, output_tokens: 20, cache_read: 5, cache_creation: 3, latency_sum: 100.0 },
+        ];
+        let agg = aggregate_combined_breakdown(&combined);
+        // model_breakdown：A 合并 requests=3
+        assert_eq!(agg.model_breakdown.len(), 1);
+        assert_eq!(agg.model_breakdown[0].model, "A");
+        assert_eq!(agg.model_breakdown[0].requests, 3);
+        assert_eq!(agg.model_breakdown[0].input_tokens, 110);
+        // daily_trend：两行，avg_latency = latency_sum / requests
+        assert_eq!(agg.daily_trend.len(), 2);
+        let d1 = agg.daily_trend.iter().find(|d| d.day == "2024-01-01").unwrap();
+        assert!((d1.avg_latency - 150.0).abs() < 1e-9); // 300 / 2
+        // provider_model_tokens：(p, A) 累加
+        assert_eq!(agg.provider_model_tokens.len(), 1);
+        assert_eq!(agg.provider_model_tokens[0].input_tokens, 110);
+    }
+}

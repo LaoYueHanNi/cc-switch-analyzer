@@ -461,3 +461,247 @@ pub fn aggregate_model_context_tier_buckets(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DAY1: i64 = 1704067200; // 2024-01-01 00:00:00 UTC
+
+    fn rec(session_id: &str, model: &str, provider_id: &str, created_at: i64, input: i64, output: i64, cache_read: i64, cache_creation: i64, latency: i64) -> RawRecord {
+        RawRecord {
+            session_id: session_id.to_string(),
+            model: model.to_string(),
+            provider_id: provider_id.to_string(),
+            created_at,
+            input_tokens: input,
+            output_tokens: output,
+            cache_read,
+            cache_creation,
+            latency,
+            is_codex: false,
+        }
+    }
+
+    // ===== to_day / to_hour 时区转换 =====
+
+    #[test]
+    fn to_day_utc() {
+        assert_eq!(to_day(0, 0), "1970-01-01");
+        assert_eq!(to_day(DAY1, 0), "2024-01-01");
+    }
+
+    #[test]
+    fn to_day_with_timezone_offset() {
+        // 2023-12-31 23:00 UTC，东八区为 2024-01-01 07:00 → 跨日
+        assert_eq!(to_day(DAY1 - 3600, 8), "2024-01-01");
+        // 2024-01-01 02:00 UTC，西三区为 2023-12-31 23:00 → 跨日
+        assert_eq!(to_day(DAY1 + 2 * 3600, -3), "2023-12-31");
+    }
+
+    #[test]
+    fn to_hour_with_timezone_offset() {
+        assert_eq!(to_hour(0, 0), "00:00");
+        assert_eq!(to_hour(0, 8), "08:00");
+        assert_eq!(to_hour(3600, 0), "01:00");
+    }
+
+    // ===== aggregate_summary =====
+
+    #[test]
+    fn aggregate_summary_empty() {
+        let s = aggregate_summary(&[]);
+        assert_eq!(s.total_requests, 0);
+        assert_eq!(s.avg_latency, 0.0);
+    }
+
+    #[test]
+    fn aggregate_summary_sums_and_avg() {
+        let records = vec![
+            rec("s", "m", "p", 0, 100, 200, 50, 30, 100),
+            rec("s", "m", "p", 0, 300, 400, 60, 40, 200),
+        ];
+        let s = aggregate_summary(&records);
+        assert_eq!(s.total_requests, 2);
+        assert_eq!(s.success_count, 2);
+        assert_eq!(s.total_input, 400);
+        assert_eq!(s.total_output, 600);
+        assert_eq!(s.total_cache_read, 110);
+        assert_eq!(s.total_cache_creation, 70);
+        assert!((s.avg_latency - 150.0).abs() < 1e-9);
+    }
+
+    // ===== aggregate_model_breakdown =====
+
+    #[test]
+    fn aggregate_model_breakdown_groups_and_sorts_desc() {
+        let records = vec![
+            rec("s", "A", "p", 0, 10, 0, 0, 0, 0),
+            rec("s", "A", "p", 0, 20, 0, 0, 0, 0),
+            rec("s", "B", "p", 0, 5, 0, 0, 0, 0),
+        ];
+        let v = aggregate_model_breakdown(&records);
+        assert_eq!(v.len(), 2);
+        // requests 降序：A(2) 在前
+        assert_eq!(v[0].model, "A");
+        assert_eq!(v[0].requests, 2);
+        assert_eq!(v[0].input_tokens, 30);
+        assert_eq!(v[1].model, "B");
+        assert_eq!(v[1].requests, 1);
+    }
+
+    // ===== aggregate_provider_breakdown =====
+
+    #[test]
+    fn aggregate_provider_breakdown_maps_name_and_rate() {
+        let records = vec![
+            rec("s", "m", "p1", 0, 0, 0, 0, 0, 100),
+            rec("s", "m", "p1", 0, 0, 0, 0, 0, 300),
+            rec("s", "m", "p2", 0, 0, 0, 0, 0, 200),
+        ];
+        let mut names = HashMap::new();
+        names.insert("p1".to_string(), "Provider One".to_string());
+        let v = aggregate_provider_breakdown(&records, &names);
+        assert_eq!(v.len(), 2);
+        // p1(2) 在前，名字映射成功
+        assert_eq!(v[0].provider_id, "p1");
+        assert_eq!(v[0].provider_name, "Provider One");
+        assert_eq!(v[0].requests, 2);
+        assert!((v[0].avg_latency - 200.0).abs() < 1e-9);
+        assert!((v[0].success_rate - 100.0).abs() < 1e-9);
+        // p2 无映射 → 回退 id
+        assert_eq!(v[1].provider_id, "p2");
+        assert_eq!(v[1].provider_name, "p2");
+    }
+
+    // ===== aggregate_provider_model_tokens =====
+
+    #[test]
+    fn aggregate_provider_model_tokens_groups_pair() {
+        let records = vec![
+            rec("s", "A", "p1", 0, 100, 10, 5, 1, 0),
+            rec("s", "A", "p1", 0, 200, 20, 5, 1, 0),
+            rec("s", "A", "p2", 0, 50, 0, 0, 0, 0),
+        ];
+        let v = aggregate_provider_model_tokens(&records);
+        assert_eq!(v.len(), 2);
+        let p1 = v.iter().find(|x| x.provider_id == "p1").unwrap();
+        assert_eq!(p1.input_tokens, 300);
+        assert_eq!(p1.output_tokens, 30);
+        assert_eq!(p1.cache_read, 10);
+    }
+
+    // ===== aggregate_daily_trend / hourly =====
+
+    #[test]
+    fn aggregate_daily_trend_groups_by_day_model() {
+        let records = vec![
+            rec("s", "A", "p", DAY1, 100, 0, 0, 0, 100),
+            rec("s", "A", "p", DAY1, 200, 0, 0, 0, 200),
+            rec("s", "A", "p", DAY1 + 86400, 50, 0, 0, 0, 300),
+        ];
+        let v = aggregate_daily_trend(&records, 0);
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].day, "2024-01-01");
+        assert_eq!(v[0].requests, 2);
+        assert!((v[0].avg_latency - 150.0).abs() < 1e-9);
+        assert_eq!(v[1].day, "2024-01-02");
+    }
+
+    #[test]
+    fn aggregate_hourly_trend_groups_by_hour() {
+        let records = vec![
+            rec("s", "A", "p", DAY1, 10, 0, 0, 0, 0),        // 00:00
+            rec("s", "A", "p", DAY1 + 3600, 20, 0, 0, 0, 0), // 01:00
+        ];
+        let v = aggregate_hourly_trend(&records, 0);
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].day, "00:00");
+        assert_eq!(v[1].day, "01:00");
+    }
+
+    // ===== aggregate_combined_records =====
+
+    #[test]
+    fn aggregate_combined_records_groups_and_sorts() {
+        let records = vec![
+            rec("s", "A", "p2", DAY1, 100, 0, 0, 0, 50),
+            rec("s", "A", "p2", DAY1, 200, 0, 0, 0, 70),
+            rec("s", "B", "p1", DAY1, 50, 0, 0, 0, 0),
+        ];
+        let v = aggregate_combined_records(&records, 0);
+        assert_eq!(v.len(), 2);
+        // 排序 (day, provider_id, model) 升序 → p1/B 在前
+        assert_eq!(v[0].provider_id, "p1");
+        assert_eq!(v[0].model, "B");
+        assert_eq!(v[1].provider_id, "p2");
+        assert_eq!(v[1].model, "A");
+        assert_eq!(v[1].requests, 2);
+        assert!((v[1].latency_sum - 120.0).abs() < 1e-9);
+    }
+
+    // ===== aggregate_session_breakdown =====
+
+    #[test]
+    fn aggregate_session_breakdown_skips_empty_and_tracks_bounds() {
+        let records = vec![
+            rec("s1", "A", "p", 300, 0, 0, 0, 0, 0),
+            rec("s1", "A", "p", 100, 0, 0, 0, 0, 0),
+            rec("", "A", "p", 500, 0, 0, 0, 0, 0), // 空 session，跳过
+            rec("s2", "A", "p", 200, 0, 0, 0, 0, 0),
+        ];
+        let v = aggregate_session_breakdown(&records);
+        assert_eq!(v.len(), 2);
+        // requests 降序：s1(2) 在前
+        assert_eq!(v[0].session_id, "s1");
+        assert_eq!(v[0].requests, 2);
+        assert_eq!(v[0].first_at, 100);
+        assert_eq!(v[0].last_at, 300);
+        assert_eq!(v[0].max_context_width, 0);
+        assert_eq!(v[1].session_id, "s2");
+    }
+
+    // ===== aggregate_session_model_tokens =====
+
+    #[test]
+    fn aggregate_session_model_tokens_top_sessions() {
+        // s1: 3 次, s2: 1 次（均在 top 500）
+        let mut records = vec![];
+        for _ in 0..3 {
+            records.push(rec("s1", "A", "p", 0, 100, 10, 5, 1, 0));
+        }
+        records.push(rec("s2", "A", "p", 0, 50, 0, 0, 0, 0));
+        let v = aggregate_session_model_tokens(&records);
+        assert_eq!(v.len(), 2);
+        let s1 = v.iter().find(|x| x.session_id == "s1").unwrap();
+        assert_eq!(s1.input_tokens, 300);
+        assert_eq!(s1.cache_read, 15);
+    }
+
+    // ===== aggregate_model_context_tier_buckets =====
+
+    #[test]
+    fn aggregate_model_context_tier_buckets_matches_and_merges() {
+        // thresholds [10000, 50000]
+        let records = vec![
+            rec("s", "A", "p", 1000, 5000, 0, 0, 0, 0),  // ctx=5000 → tier 0
+            rec("s", "A", "p", 2000, 12000, 0, 0, 0, 0), // ctx=12000 → tier 10000
+            rec("s", "A", "p", 3000, 60000, 0, 0, 0, 0), // ctx=60000 → tier 50000
+            rec("s", "A", "p", 1500, 60000, 0, 0, 0, 0), // ctx=60000 → tier 50000，合并
+        ];
+        let v = aggregate_model_context_tier_buckets(&records, 0, &[10000, 50000]);
+        assert_eq!(v.len(), 3); // tier: 0, 10000, 50000
+        let t50k = v.iter().find(|x| x.context_tier == 50000).unwrap();
+        assert_eq!(t50k.input_tokens, 120000); // 60000+60000
+        // representative_epoch 取最小：min(3000,1500)=1500
+        assert_eq!(t50k.representative_epoch, 1500);
+        let t0 = v.iter().find(|x| x.context_tier == 0).unwrap();
+        assert_eq!(t0.input_tokens, 5000);
+    }
+
+    #[test]
+    fn aggregate_model_context_tier_buckets_empty_thresholds() {
+        let records = vec![rec("s", "A", "p", 0, 1000, 0, 0, 0, 0)];
+        assert!(aggregate_model_context_tier_buckets(&records, 0, &[]).is_empty());
+    }
+}
