@@ -4,6 +4,17 @@
     "date": "2026-07-07",
     "commits": [
       {
+        "hash": "8096556",
+        "subject": "chore(cursor): Cursor 自动同步间隔由 5 分钟改为 24 小时",
+        "date": "2026-07-07"
+      }
+    ]
+  },
+  {
+    "version": "0.7.22",
+    "date": "2026-07-07",
+    "commits": [
+      {
         "hash": "de373fc",
         "subject": "feat: 接入 Cursor 数据源，支持 API 同步与用量统计",
         "date": "2026-07-07"
