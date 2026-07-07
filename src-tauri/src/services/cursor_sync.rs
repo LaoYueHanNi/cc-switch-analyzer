@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::utils;
 
 const CURSOR_HTTP_TIMEOUT: Duration = Duration::from_secs(8);
-pub const CURSOR_AUTO_SYNC_FRESHNESS: Duration = Duration::from_secs(5 * 60);
+/// 自动同步缓存有效期：24 小时内不重复请求 Cursor API（手动同步不受限）
+pub const CURSOR_AUTO_SYNC_FRESHNESS: Duration = Duration::from_secs(24 * 60 * 60);
 
 const USAGE_CSV_ENDPOINT: &str =
     "https://cursor.com/api/dashboard/export-usage-events-csv?strategy=tokens";
