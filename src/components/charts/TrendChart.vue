@@ -3,7 +3,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, watchEffect } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import * as echarts from 'echarts'
 import { useThemeStore } from '@/stores/theme'
 import { formatNum, formatCost } from '@/utils/format'
@@ -227,6 +227,12 @@ function renderChart(): void {
   }, true)
 }
 
+// 局部更新：仅 hover 压暗态变化时，只刷新受影响 series 的透明度，不重建坐标轴/网格
+function updateDimming(): void {
+  if (!chart || props.mode !== 'byModel') return
+  chart.setOption({ series: props.modelSeries.map(s => makeModelSeries(s)) }, false)
+}
+
 let resizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
@@ -240,7 +246,25 @@ onMounted(() => {
   })
   if (chartRef.value) resizeObserver.observe(chartRef.value)
 })
-watchEffect(renderChart)
+
+// 需要全量重建坐标轴/系列的依赖：精确列出，避免 dimmedModels 等局部变化触发整图重绘
+watch(
+  [
+    () => props.dates,
+    () => props.totalCostData,
+    () => props.totalTokenData,
+    () => props.inputData,
+    () => props.outputData,
+    () => props.cacheReadData,
+    () => props.cacheCreationData,
+    () => props.visibleSeries,
+    () => props.mode,
+    () => props.modelSeries
+  ],
+  renderChart,
+  { deep: true, immediate: true }
+)
+watch(() => props.dimmedModels, updateDimming, { deep: true })
 watch(() => themeStore.isDark, renderChart)
 
 onUnmounted(() => {

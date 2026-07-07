@@ -15,6 +15,7 @@ export const useQueryStore = defineStore('query', () => {
   const unpricedModels = ref<string[]>([])
   const loading = ref(false)
   let lastParamsKey = ''
+  let requestSeq = 0  // 自增请求 ID，用于丢弃过期响应
 
   interface QueryResults {
     summary: SummaryData | null
@@ -39,9 +40,12 @@ export const useQueryStore = defineStore('query', () => {
     const key = JSON.stringify(params)
     if (!force && key === lastParamsKey && summary.value) return
     lastParamsKey = key
+    const requestId = ++requestSeq
+    const isStale = () => requestId !== requestSeq
     loading.value = true
     try {
       const preResult = await platformAdapter.queryPrecompute(params)
+      if (isStale()) return
       setResults(preResult)
     } catch {
       try {
@@ -50,6 +54,7 @@ export const useQueryStore = defineStore('query', () => {
           platformAdapter.queryByModel(params),
           platformAdapter.queryByProvider(params)
         ])
+        if (isStale()) return
         setResults({
           summary: result,
           modelBreakdown: modelResult,
@@ -57,14 +62,16 @@ export const useQueryStore = defineStore('query', () => {
           precomputed: null
         })
       } catch (err) {
+        if (isStale()) return
         console.error('查询失败:', err)
       }
     } finally {
-      loading.value = false
+      if (!isStale()) loading.value = false
     }
   }
 
   function reset(): void {
+    requestSeq++  // 使所有进行中的请求失效
     summary.value = null
     totalCost.value = 0
     modelBreakdown.value = []

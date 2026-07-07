@@ -66,7 +66,7 @@
           </div>
           <div class="session-info">
             <div class="session-title-row">
-              <span class="session-id">{{ shortId(s.sessionId) }}</span>
+              <span class="session-id">{{ shortSessionId(s.sessionId) }}</span>
               <span v-if="s.title" class="session-title" :title="s.title">{{ s.title }}</span>
             </div>
             <div class="session-meta">
@@ -104,7 +104,7 @@ import { platformAdapter } from '@/platform'
 import { useDatabaseStore } from '@/stores/database'
 import { useFilterStore } from '@/stores/filter'
 import { useTaskStore } from '@/stores/task'
-import { formatNum, formatCost, formatDuration } from '@/utils/format'
+import { formatNum, formatCost, formatDuration, shortSessionId } from '@/utils/format'
 import type { ProjectGroupStats, ProjectSessionDetail } from '@/platform/types'
 import type { TaskSessionInput } from '@/types/task'
 import claudeSvg from '@/assets/claude.svg?raw'
@@ -197,12 +197,6 @@ function onToggle(sid: string) {
   } else {
     selectedIds.value = [...selectedIds.value, sid]
   }
-}
-
-function shortId(id: string): string {
-  if (id.startsWith('ses_')) return id.slice(0, 8)
-  const parts = id.split('-')
-  return parts[0] || id.slice(0, 8)
 }
 
 function onSubmit() {

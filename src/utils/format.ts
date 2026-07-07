@@ -9,7 +9,7 @@ export function formatNum(n: number): string {
 
 // 定价单价格式化：2-4 位小数，去尾零，保底 2 位
 export function formatRate(v: number): string {
-  let s = v.toFixed(3)
+  let s = v.toFixed(4)
   const dot = s.indexOf('.')
   if (dot < 0) return s
   s = s.replace(/0+$/, '')
@@ -55,4 +55,11 @@ export function epochToDateTimeStr(epoch: number): string {
 // 百分比格式化
 export function formatPercent(rate: number): string {
   return (rate * 100).toFixed(1) + '%'
+}
+
+// 会话/任务 ID 短显示：ses_ 前缀取前 8 位，UUID 取第一段
+export function shortSessionId(id: string): string {
+  if (id.startsWith('ses_')) return id.slice(0, 8)
+  const parts = id.split('-')
+  return parts[0] || id.slice(0, 8)
 }

@@ -81,7 +81,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch, onActivated, onDeactivated } from 'vue'
 import { NSpin } from 'naive-ui'
 import { useQueryStore } from '@/stores/query'
 import { useFilterStore } from '@/stores/filter'
@@ -177,12 +177,32 @@ async function fetchHourly(): Promise<void> {
   }
 }
 
+// 被 KeepAlive 缓存后不在前台时，暂缓请求，避免后台 Tab 持续拉取小时数据
+const isActive = ref(true)
+let pendingHourlyFetch = false
+
+function tryFetchHourly(): void {
+  if (isActive.value) fetchHourly()
+  else pendingHourlyFetch = true
+}
+
 watch(needsHourly, (need) => {
-  if (need) fetchHourly()
+  if (need) tryFetchHourly()
   else hourlyRows.value = []
 }, { immediate: true })
-watch(() => filterStore.filterParams, () => { if (needsHourly.value) fetchHourly() }, { deep: true })
-watch(() => queryStore.queryVersion, () => { if (needsHourly.value) fetchHourly() })
+watch(() => filterStore.filterParams, () => { if (needsHourly.value) tryFetchHourly() }, { deep: true })
+watch(() => queryStore.queryVersion, () => { if (needsHourly.value) tryFetchHourly() })
+
+onActivated(() => {
+  isActive.value = true
+  if (pendingHourlyFetch) {
+    pendingHourlyFetch = false
+    if (needsHourly.value) fetchHourly()
+  }
+})
+onDeactivated(() => {
+  isActive.value = false
+})
 
 // ===== 定价查找表 =====
 const pricingMap = computed(() => {

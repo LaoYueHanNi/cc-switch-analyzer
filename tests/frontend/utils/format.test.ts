@@ -7,7 +7,8 @@ import {
   epochToDateStr,
   epochToTimeStr,
   epochToDateTimeStr,
-  formatPercent
+  formatPercent,
+  shortSessionId
 } from '@/utils/format'
 
 // ---------------------------------------------------------------------------
@@ -195,5 +196,26 @@ describe('epochToDateTimeStr（渲染进程）', () => {
     const result = epochToDateTimeStr(1705276800)
     expect(result).toContain('01/15')
     expect(result).toMatch(/\d{2}:\d{2}/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// shortSessionId — 会话/任务 ID 短显示
+// ---------------------------------------------------------------------------
+describe('shortSessionId（渲染进程）', () => {
+  it('ses_ 前缀 → 取前 8 位', () => {
+    expect(shortSessionId('ses_abcdefghijklmnop')).toBe('ses_abcd')
+  })
+
+  it('UUID → 取第一段（连字符前）', () => {
+    expect(shortSessionId('550e8400-e29b-41d4-a716-446655440000')).toBe('550e8400')
+  })
+
+  it('无连字符且不带 ses_ 前缀 → split 无分隔符，原样返回', () => {
+    expect(shortSessionId('plainidwithoutdash')).toBe('plainidwithoutdash')
+  })
+
+  it('短于 8 位的普通 ID → 原样返回', () => {
+    expect(shortSessionId('abc')).toBe('abc')
   })
 })

@@ -19,6 +19,38 @@ macro_rules! require_sources {
     };
 }
 
+/// 并行线程 join，将 panic 转为日志而非进程崩溃。
+fn join_scoped<T>(handle: std::thread::ScopedJoinHandle<'_, Option<T>>) -> Option<T> {
+    match handle.join() {
+        Ok(v) => v,
+        Err(_) => {
+            log::error!("[QUERY] 并行查询线程 panic");
+            None
+        }
+    }
+}
+
+fn join_scoped_vec<T: Default>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
+    match handle.join() {
+        Ok(v) => v,
+        Err(_) => {
+            log::error!("[QUERY] 并行查询线程 panic");
+            T::default()
+        }
+    }
+}
+
+fn join_scoped_flat<T>(handle: std::thread::ScopedJoinHandle<'_, Option<Vec<T>>>) -> Vec<T> {
+    match handle.join() {
+        Ok(Some(v)) => v,
+        Ok(None) => Vec::new(),
+        Err(_) => {
+            log::error!("[QUERY] 并行查询线程 panic");
+            Vec::new()
+        }
+    }
+}
+
 /// 并行查询辅助函数。调用者需预先 clone 参数。
 /// `query` 接收 `&(entry, &cloned_params)` 元组，对每个数据源执行查询。
 fn parallel_query<P, R, F>(
@@ -45,7 +77,7 @@ where
                 }).ok()
             })
         }).collect();
-        handles.into_iter().filter_map(|h| h.join().unwrap()).collect()
+        handles.into_iter().filter_map(join_scoped).collect()
     })
 }
 
@@ -149,6 +181,9 @@ pub fn query_session_request_tokens(params: FilterParams, state: State<AppState>
                     if let Some(ref model) = params.model_id {
                         if !model.is_empty() && r.model != *model { return false; }
                     }
+                    if let Some(ref provider) = params.provider_id {
+                        if !provider.is_empty() && r.provider_id != *provider { return false; }
+                    }
                     true
                 })
                 .cloned()
@@ -182,7 +217,7 @@ pub fn query_session_timestamps(session_ids: Vec<String>, state: State<AppState>
                     }).ok()
                 })
             }).collect();
-            handles.into_iter().filter_map(|h| h.join().unwrap()).collect()
+            handles.into_iter().filter_map(join_scoped).collect()
         })
     };
     let mut result = HashMap::new();
@@ -379,7 +414,7 @@ pub fn query_sessions_with_cost(
                     }).ok().unwrap_or_default()
                 })
             }).collect();
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
+            handles.into_iter().map(join_scoped_vec).collect()
         });
 
         let mut session_sources: HashMap<String, Vec<String>> = HashMap::new();
@@ -457,7 +492,7 @@ pub fn query_sessions_with_cost(
                     (req, mdl)
                 })
             }).collect();
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
+            handles.into_iter().map(join_scoped_vec).collect()
         });
 
         let all_request_tokens: Vec<SessionRequestToken> = detail_data.iter().filter_map(|r| r.0.clone()).flatten().collect();
@@ -590,17 +625,18 @@ pub fn query_session_project_groups(
             .collect()
     };
 
-    // 3. 计算基础费用（用原始 session_id 查数据库）
+    // 3. 计算基础费用（复用中心管道已去重的请求级 token，避免二次查库）
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
-    let all_request_tokens: Vec<SessionRequestToken> = {
-        let mut tokens = Vec::new();
-        for entry in sources.iter() {
-            if let Ok(t) = entry.source.get_session_request_tokens_for_ids(&params, &all_ids) {
-                tokens.extend(t);
-            }
-        }
-        dedup_request_tokens(tokens)
-    };
+    let all_request_tokens: Vec<SessionRequestToken> = records.iter().map(|r| SessionRequestToken {
+        session_id: r.session_id.clone(),
+        model: r.model.clone(),
+        provider_id: r.provider_id.clone(),
+        created_at: r.created_at,
+        input_tokens: r.input_tokens,
+        output_tokens: r.output_tokens,
+        cache_read: r.cache_read,
+        cache_creation: r.cache_creation,
+    }).collect();
     let session_costs = compute_session_costs(&all_request_tokens, &pricing);
 
     // 3.5 构建合并后的会话列表（按 codex_session_id 合并，保留原始 session_id 的 cost/project 映射）
@@ -714,7 +750,7 @@ pub fn query_project_session_details(
                     entry.source.get_session_request_tokens_for_ids(&p, &ids).ok()
                 })
             }).collect();
-            handles.into_iter().filter_map(|h| h.join().unwrap()).flatten().collect()
+            handles.into_iter().flat_map(join_scoped_flat).collect()
         });
         let all_req = dedup_request_tokens(all_req_raw);
         let all_mdl: Vec<SessionModelToken> = aggregate_session_model_tokens(&records)

@@ -25,7 +25,7 @@
           :last-active-at="group.lastAt"
           :total-cost="group.totalCost"
           :total-tokens="group.totalTokens"
-          :terminal-active="providerDropdown.show && providerDropdown.projectDir === group.projectDir"
+          :terminal-active="activeProjectDir === group.projectDir"
           @click="enterProject(group.projectDir)"
           @terminal="onOpenTerminal"
           @contextTerminal="onContextTerminal"
@@ -82,13 +82,12 @@
     </template>
 
     <!-- 供应商配置选择右键菜单 -->
-    <Teleport to="body">
-      <div v-if="providerDropdown.show" class="provider-ctx-overlay" @click="providerDropdown.show = false" @contextmenu.prevent="providerDropdown.show = false" />
-      <div v-if="providerDropdown.show" ref="ctxMenuRef" class="provider-ctx-menu" :style="{ left: providerDropdown.x + 'px', top: providerDropdown.y + 'px' }">
-        <div class="provider-ctx-header">选择供应商配置</div>
-        <div v-for="item in providerDropdown.items" :key="item.id" class="provider-ctx-item" @click="onProviderItemSelect(item.id)">{{ item.name }}</div>
-      </div>
-    </Teleport>
+    <ProviderContextMenu
+      :menu="providerMenu.menu"
+      :adjust-position="providerMenu.adjustMenuPosition"
+      @select="providerMenu.selectItem"
+      @close="providerMenu.closeMenu"
+    />
 
     <!-- 删除确认 -->
     <div v-if="deleteTarget" class="confirm-overlay" @click.self="deleteTarget = null">
@@ -108,13 +107,16 @@
 
 <script setup lang="ts">
 defineOptions({ name: 'SessionAnalysis' })
-import { ref, reactive, computed, watch, nextTick, onActivated, onDeactivated } from 'vue'
+import { ref, computed, watch, onActivated, onDeactivated } from 'vue'
 import { NSpin } from 'naive-ui'
 import { platformAdapter } from '@/platform'
 import { useDatabaseStore } from '@/stores/database'
 import { useFilterStore } from '@/stores/filter'
+import { useProviderContextMenu } from '@/composables/useProviderContextMenu'
+import { useSessionResume } from '@/composables/useSessionResume'
 import ProjectCard from '@/components/session/ProjectCard.vue'
 import SessionCard from '@/components/session/SessionCard.vue'
+import ProviderContextMenu from '@/components/common/ProviderContextMenu.vue'
 import claudeSvg from '@/assets/claude.svg?raw'
 import opencodeSvg from '@/assets/opencode.svg?raw'
 import codexSvg from '@/assets/codex.svg?raw'
@@ -128,17 +130,13 @@ const ccswitchDbPath = computed(() =>
   dbStore.sources.find(s => s.dbType === 'CC-Switch')?.path
 )
 
-const ctxMenuRef = ref<HTMLElement | null>(null)
+const providerMenu = useProviderContextMenu('SessionAnalysis')
+const { resumeSession } = useSessionResume('SessionAnalysis')
 
-// 供应商配置右键菜单状态
-const providerDropdown = reactive({
-  show: false,
-  x: 0,
-  y: 0,
-  items: [] as { id: string; name: string }[],
-  mode: 'new' as 'new' | 'resume',
-  projectDir: '',
-  sessionId: '',
+// 仅用于一级项目卡片：右键菜单打开时高亮对应卡片的终端按钮
+const activeProjectDir = ref<string | null>(null)
+watch(() => providerMenu.menu.show, (show) => {
+  if (!show) activeProjectDir.value = null
 })
 
 const projectGroups = ref<ProjectGroupStats[]>([])
@@ -195,18 +193,15 @@ function leaveProject() {
 }
 
 async function onResume(sessionId: string, projectDir?: string) {
-  try { await platformAdapter.resumeClaudeSession(sessionId, projectDir) }
-  catch (err: any) { console.error('[SessionAnalysis] 恢复失败:', err.message || err) }
+  await resumeSession('claude', sessionId, projectDir)
 }
 
 async function onResumeOpenCode(sessionId: string, projectDir?: string) {
-  try { await platformAdapter.resumeOpenCodeSession(sessionId, projectDir) }
-  catch (err: any) { console.error('[SessionAnalysis] 恢复 OpenCode 失败:', err.message || err) }
+  await resumeSession('opencode', sessionId, projectDir)
 }
 
 async function onResumeCodex(sessionId: string, projectDir?: string) {
-  try { await platformAdapter.resumeCodexSession(sessionId, projectDir) }
-  catch (err: any) { console.error('[SessionAnalysis] 恢复 Codex 失败:', err.message || err) }
+  await resumeSession('codex', sessionId, projectDir)
 }
 
 async function onOpenTerminal(projectDir: string) {
@@ -224,98 +219,29 @@ async function onOpenCodexTerminal(projectDir: string) {
   catch (err: any) { console.error('[SessionAnalysis] 打开 Codex 终端失败:', err.message || err) }
 }
 
-async function loadProviderItems(): Promise<{ id: string; name: string }[]> {
-  const dbPath = ccswitchDbPath.value
-  if (!dbPath) return []
-  try {
-    const providers = await platformAdapter.getCcswitchProviders(dbPath)
-    return providers.filter(p => p.hasEnv)
-  } catch (err: any) {
-    console.error('[SessionAnalysis] 获取供应商列表失败:', err.message || err)
-    return []
-  }
-}
-
-function clampPosition(x: number, y: number): { x: number; y: number } {
-  const DROPDOWN_W = 180
-  const MARGIN = 8
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  return {
-    x: Math.min(x, vw - DROPDOWN_W - MARGIN),
-    y: Math.min(y, vh - MARGIN),
-  }
-}
-
-function menuPositionFromElement(el: HTMLElement): { x: number; y: number } {
-  const rect = el.getBoundingClientRect()
-  const zoom = parseFloat(getComputedStyle(document.body).zoom) || 1
-  const max_x = window.innerWidth / zoom - 8
-  let x = rect.left / zoom
-  let y = (rect.bottom + 4) / zoom
-  if (x + 130 > max_x) x = Math.max(8, rect.right / zoom - 130)
-  return { x, y }
-}
-
-function adjustMenuPosition() {
-  const menu = ctxMenuRef.value
-  if (!menu) return
-  const zoom = parseFloat(getComputedStyle(document.body).zoom) || 1
-  const max_y = window.innerHeight / zoom - 8
-  const bottom = providerDropdown.y + menu.offsetHeight
-  if (bottom > max_y) {
-    providerDropdown.y = Math.max(8, max_y - menu.offsetHeight)
-  }
-}
-
 async function onContextTerminal(projectDir: string, event: MouseEvent) {
-  if (!ccswitchDbPath.value) return
-  const items = await loadProviderItems()
-  if (items.length === 0) return
-  providerDropdown.items = items
-  providerDropdown.mode = 'new'
-  providerDropdown.projectDir = projectDir
-  providerDropdown.sessionId = ''
-  const el = (event.target as HTMLElement).closest('button, .action-terminal') as HTMLElement
-  nextTick(() => {
-    const pos = el ? menuPositionFromElement(el) : clampPosition(event.clientX, event.clientY)
-    providerDropdown.x = pos.x
-    providerDropdown.y = pos.y
-    providerDropdown.show = true
-    nextTick(adjustMenuPosition)
+  const items = await providerMenu.loadProviderItems(ccswitchDbPath.value)
+  const dbPath = ccswitchDbPath.value
+  const opened = providerMenu.openMenu(event, items, async (providerId) => {
+    try {
+      await platformAdapter.openClaudeTerminalWithProvider(projectDir, providerId, dbPath!)
+    } catch (err: any) {
+      console.error('[SessionAnalysis] 携带配置打开终端失败:', err.message || err)
+    }
   })
+  if (opened) activeProjectDir.value = projectDir
 }
 
 async function onContextTerminalForSession(sessionId: string, projectDir: string | undefined, event: MouseEvent) {
-  if (!ccswitchDbPath.value) return
-  const items = await loadProviderItems()
-  if (items.length === 0) return
-  providerDropdown.items = items
-  providerDropdown.mode = 'resume'
-  providerDropdown.projectDir = projectDir || ''
-  providerDropdown.sessionId = sessionId
-  const el = (event.target as HTMLElement).closest('button, .action-terminal') as HTMLElement
-  nextTick(() => {
-    const pos = el ? menuPositionFromElement(el) : clampPosition(event.clientX, event.clientY)
-    providerDropdown.x = pos.x
-    providerDropdown.y = pos.y
-    providerDropdown.show = true
-    nextTick(adjustMenuPosition)
-  })
-}
-
-async function onProviderItemSelect(providerId: string) {
-  providerDropdown.show = false
-  const dbPath = ccswitchDbPath.value!
-  try {
-    if (providerDropdown.mode === 'new') {
-      await platformAdapter.openClaudeTerminalWithProvider(providerDropdown.projectDir, providerId, dbPath)
-    } else {
-      await platformAdapter.resumeClaudeSessionWithProvider(providerDropdown.sessionId, providerId, dbPath, providerDropdown.projectDir || undefined)
+  const dbPath = ccswitchDbPath.value
+  const items = await providerMenu.loadProviderItems(dbPath)
+  providerMenu.openMenu(event, items, async (providerId) => {
+    try {
+      await platformAdapter.resumeClaudeSessionWithProvider(sessionId, providerId, dbPath!, projectDir)
+    } catch (err: any) {
+      console.error('[SessionAnalysis] 携带配置打开终端失败:', err.message || err)
     }
-  } catch (err: any) {
-    console.error('[SessionAnalysis] 携带配置打开终端失败:', err.message || err)
-  }
+  })
 }
 
 function confirmDelete(s: ProjectSessionDetail) { deleteTarget.value = s }
@@ -462,41 +388,5 @@ onDeactivated(() => { isActive.value = false })
 .confirm-btn.cancel:hover { background: var(--border-main); }
 .confirm-btn.danger { background: var(--color-cost); color: #fff; }
 .confirm-btn.danger:hover { opacity: 0.85; }
-</style>
-
-<style>
-/* 供应商配置右键菜单 */
-.provider-ctx-overlay {
-  position: fixed; inset: 0; z-index: 9999;
-}
-.provider-ctx-menu {
-  position: fixed; z-index: 10000;
-  min-width: 120px; max-width: 220px;
-  max-height: 280px; overflow-y: auto;
-  background: var(--bg-card);
-  border: 1px solid var(--border-main);
-  border-radius: 6px;
-  box-shadow: var(--shadow-card);
-  padding: 3px 0;
-  font-size: 11px;
-}
-.provider-ctx-header {
-  padding: 3px 10px;
-  font-size: 10px;
-  color: var(--text-muted);
-  user-select: none;
-}
-.provider-ctx-item {
-  padding: 4px 10px;
-  color: var(--text-primary);
-  cursor: pointer;
-  border-radius: 3px;
-  margin: 0 3px;
-  transition: background var(--transition-speed);
-}
-.provider-ctx-item:hover {
-  background: var(--bg-hover);
-  color: var(--color-blue);
-}
 </style>
 

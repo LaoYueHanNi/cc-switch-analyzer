@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::RwLock;
 
 use crate::models::*;
 use crate::services::data_source::DataSource;
@@ -15,17 +16,15 @@ const PROVIDER_ID: &str = "cursor";
 
 pub struct CursorCsvService {
     cache_dir: String,
-    records: Vec<RawRecord>,
+    records: RwLock<Vec<RawRecord>>,
     latest_timestamp: Option<i64>,
 }
-
-unsafe impl Sync for CursorCsvService {}
 
 impl CursorCsvService {
     pub fn new() -> Self {
         Self {
             cache_dir: String::new(),
-            records: Vec::new(),
+            records: RwLock::new(Vec::new()),
             latest_timestamp: None,
         }
     }
@@ -36,15 +35,18 @@ impl CursorCsvService {
         if !csv_path.is_file() {
             return Err(format!("Cursor 缓存文件不存在: {}", csv_path.display()));
         }
-        self.records = parse_cursor_csv_file(&csv_path)?;
-        self.latest_timestamp = self.records.iter().map(|r| r.created_at).max();
+        let parsed = parse_cursor_csv_file(&csv_path)?;
+        self.latest_timestamp = parsed.iter().map(|r| r.created_at).max();
+        *self.records.write().map_err(|e| format!("数据锁失败: {}", e))? = parsed;
         self.cache_dir = dir_path.to_string();
         Ok(())
     }
 
     pub fn close(&mut self) {
         self.cache_dir.clear();
-        self.records.clear();
+        if let Ok(mut guard) = self.records.write() {
+            guard.clear();
+        }
         self.latest_timestamp = None;
     }
 
@@ -52,8 +54,19 @@ impl CursorCsvService {
         !self.cache_dir.is_empty()
     }
 
+    fn records_read(&self) -> Result<std::sync::RwLockReadGuard<'_, Vec<RawRecord>>, String> {
+        self.records.read().map_err(|e| format!("数据锁失败: {}", e))
+    }
+
     fn filter_records(&self, params: &FilterParams) -> Vec<RawRecord> {
-        self.records
+        let records = match self.records_read() {
+            Ok(guard) => guard,
+            Err(e) => {
+                log::warn!("[CURSOR] 读取记录失败: {}", e);
+                return Vec::new();
+            }
+        };
+        records
             .iter()
             .filter(|r| record_matches_params(r, params))
             .cloned()
@@ -249,7 +262,7 @@ impl DataSource for CursorCsvService {
     }
 
     fn get_record_count(&self) -> Result<i64, String> {
-        Ok(self.records.len() as i64)
+        Ok(self.records_read()?.len() as i64)
     }
 
     fn get_latest_timestamp(&self) -> Option<i64> {
@@ -264,18 +277,20 @@ impl DataSource for CursorCsvService {
     }
 
     fn get_models(&self) -> Result<Vec<String>, String> {
-        let mut models: HashSet<String> = self.records.iter().map(|r| r.model.clone()).collect();
+        let records = self.records_read()?;
+        let mut models: HashSet<String> = records.iter().map(|r| r.model.clone()).collect();
         let mut v: Vec<String> = models.drain().collect();
         v.sort();
         Ok(v)
     }
 
     fn get_date_range(&self) -> Result<DateRange, String> {
-        if self.records.is_empty() {
+        let records = self.records_read()?;
+        if records.is_empty() {
             return Ok(DateRange { min: 0, max: 0 });
         }
-        let min = self.records.iter().map(|r| r.created_at).min().unwrap_or(0);
-        let max = self.records.iter().map(|r| r.created_at).max().unwrap_or(0);
+        let min = records.iter().map(|r| r.created_at).min().unwrap_or(0);
+        let max = records.iter().map(|r| r.created_at).max().unwrap_or(0);
         Ok(DateRange { min, max })
     }
 
@@ -323,8 +338,9 @@ impl DataSource for CursorCsvService {
 
     fn get_session_max_context_widths(&self, ids: &[String]) -> Result<HashMap<String, i64>, String> {
         let id_set: HashSet<&str> = ids.iter().map(|s| s.as_str()).collect();
+        let records = self.records_read()?;
         let mut map: HashMap<String, i64> = HashMap::new();
-        for r in &self.records {
+        for r in records.iter() {
             if !id_set.contains(r.session_id.as_str()) {
                 continue;
             }
@@ -351,6 +367,7 @@ impl DataSource for CursorCsvService {
             .map(|r| SessionRequestToken {
                 session_id: r.session_id,
                 model: r.model,
+                provider_id: r.provider_id,
                 created_at: r.created_at,
                 input_tokens: r.input_tokens,
                 output_tokens: r.output_tokens,
@@ -373,6 +390,7 @@ impl DataSource for CursorCsvService {
             .map(|r| SessionRequestToken {
                 session_id: r.session_id,
                 model: r.model,
+                provider_id: r.provider_id,
                 created_at: r.created_at,
                 input_tokens: r.input_tokens,
                 output_tokens: r.output_tokens,
@@ -398,8 +416,9 @@ impl DataSource for CursorCsvService {
 
     fn get_session_timestamps(&self, ids: &[String]) -> Result<HashMap<String, Vec<i64>>, String> {
         let id_set: HashSet<&str> = ids.iter().map(|s| s.as_str()).collect();
+        let records = self.records_read()?;
         let mut map: HashMap<String, Vec<i64>> = HashMap::new();
-        for r in &self.records {
+        for r in records.iter() {
             if id_set.contains(r.session_id.as_str()) {
                 map.entry(r.session_id.clone())
                     .or_default()
@@ -427,8 +446,9 @@ impl DataSource for CursorCsvService {
     fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String> {
         let now = utils::now_epoch_seconds();
         let since = now - REALTIME_WINDOW_SEC;
+        let records = self.records_read()?;
         let mut map: HashMap<i64, RealtimeBucket> = HashMap::new();
-        for r in &self.records {
+        for r in records.iter() {
             if r.created_at < since {
                 continue;
             }
@@ -459,8 +479,8 @@ impl DataSource for CursorCsvService {
         &self,
         since: Option<i64>,
     ) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String> {
-        let mut rows: Vec<_> = self
-            .records
+        let records = self.records_read()?;
+        let mut rows: Vec<_> = records
             .iter()
             .filter(|r| since.map(|s| r.created_at > s).unwrap_or(true))
             .map(|r| {

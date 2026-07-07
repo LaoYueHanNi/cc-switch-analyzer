@@ -87,7 +87,13 @@ pub fn fetch_deduped_records(
                 }).ok()
             })
         }).collect();
-        handles.into_iter().filter_map(|h| h.join().unwrap()).collect()
+        handles.into_iter().filter_map(|h| match h.join() {
+            Ok(v) => v,
+            Err(_) => {
+                log::error!("[PIPELINE] 并行查询线程 panic");
+                None
+            }
+        }).collect()
     });
 
     let mut flat: Vec<RawRecord> = all_records.into_iter().flatten().collect();

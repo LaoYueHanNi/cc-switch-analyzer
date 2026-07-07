@@ -6,6 +6,7 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import * as echarts from 'echarts'
 import { epochToTimeStr } from '@/utils/format'
+import { hexToRgba } from '@/utils/color'
 import { useThemeStore } from '@/stores/theme'
 
 const props = defineProps<{
@@ -17,16 +18,11 @@ const props = defineProps<{
 const themeStore = useThemeStore()
 const chartRef = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
-
-function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  return `rgba(${r},${g},${b},${alpha})`
-}
+let observer: IntersectionObserver | null = null
+const isVisible = ref(false)
 
 function renderChart(): void {
-  if (!chartRef.value || props.timestamps.length === 0) return
+  if (!isVisible.value || !chartRef.value || props.timestamps.length === 0) return
 
   if (!chart) {
     chart = echarts.init(chartRef.value)
@@ -85,14 +81,29 @@ function renderChart(): void {
 }
 
 onMounted(() => {
-  renderChart()
   window.addEventListener('resize', handleResize)
+  observer = new IntersectionObserver((entries) => {
+    const visible = entries[0]?.isIntersecting ?? false
+    if (visible && !isVisible.value) {
+      isVisible.value = true
+      renderChart()
+    } else if (!visible && isVisible.value) {
+      isVisible.value = false
+      if (chart) {
+        chart.dispose()
+        chart = null
+      }
+    }
+  })
+  if (chartRef.value) observer.observe(chartRef.value)
 })
 watch(() => props.timestamps, renderChart, { deep: true })
 watch(() => themeStore.isDark, renderChart)
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+  observer?.disconnect()
+  observer = null
   if (chart) {
     chart.dispose()
     chart = null

@@ -66,33 +66,28 @@
     </div>
 
     <!-- Claude Code 供应商右键菜单 -->
-    <Teleport to="body">
-      <div v-if="providerDropdown.show" class="provider-ctx-overlay" @click="providerDropdown.show = false" @contextmenu.prevent="providerDropdown.show = false" />
-      <div v-if="providerDropdown.show" ref="ctxMenuRef" class="provider-ctx-menu" :style="{ left: providerDropdown.x + 'px', top: providerDropdown.y + 'px' }">
-        <div class="provider-ctx-header">选择供应商配置</div>
-        <div
-          v-for="item in providerDropdown.items"
-          :key="item.id"
-          class="provider-ctx-item"
-          @click="onProviderItemSelect(item.id)"
-        >{{ item.name }}</div>
-      </div>
-    </Teleport>
+    <ProviderContextMenu
+      :menu="providerMenu.menu"
+      :adjust-position="providerMenu.adjustMenuPosition"
+      @select="providerMenu.selectItem"
+      @close="providerMenu.closeMenu"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, nextTick, computed } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
-import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { platformAdapter } from '@/platform'
 import { useDatabaseStore } from '@/stores/database'
 import { useTaskStore } from '@/stores/task'
+import { useProviderContextMenu } from '@/composables/useProviderContextMenu'
 import type { TaskStatus, TaskWithStats } from '@/types/task'
 import TaskCard from '@/components/task/TaskCard.vue'
 import TaskCreateDialog from '@/components/task/TaskCreateDialog.vue'
 import SessionPickerDialog from '@/components/task/SessionPickerDialog.vue'
+import ProviderContextMenu from '@/components/common/ProviderContextMenu.vue'
 
 defineOptions({ name: 'Task' })
 
@@ -110,13 +105,7 @@ const editTarget = ref<TaskWithStats | null>(null)
 const deleteTarget = ref<TaskWithStats | null>(null)
 
 // Claude Code 供应商右键菜单
-const ctxMenuRef = ref<HTMLElement | null>(null)
-const providerDropdown = reactive({
-  show: false,
-  x: 0,
-  y: 0,
-  items: [] as { id: string; name: string }[]
-})
+const providerMenu = useProviderContextMenu('Task')
 
 const ccswitchDbPath = computed(() =>
   dbStore.sources.find(s => s.dbType === 'CC-Switch')?.path
@@ -188,34 +177,16 @@ async function onContextLaunchAgent(
     await pickFolderAndLaunch(agent, undefined)
     return
   }
-  if (!ccswitchDbPath.value) return
-  let items: { id: string; name: string }[]
-  try {
-    const providers = await platformAdapter.getCcswitchProviders(ccswitchDbPath.value)
-    items = providers.filter(p => p.hasEnv).map(p => ({ id: p.id, name: p.name }))
-  } catch (e: any) {
-    console.warn('[Task] 加载供应商失败:', e?.message || e)
-    return
-  }
+  const dbPath = ccswitchDbPath.value
+  if (!dbPath) return
+  const items = await providerMenu.loadProviderItems(dbPath)
   if (items.length === 0) {
     message.info('暂无可用供应商配置')
     return
   }
-  providerDropdown.items = items
-  nextTick(() => {
-    const x = event.clientX
-    const y = event.clientY
-    const vw = window.innerWidth
-    const vh = window.innerHeight
-    providerDropdown.x = Math.min(x, vw - 200)
-    providerDropdown.y = Math.min(y, vh - 60)
-    providerDropdown.show = true
+  providerMenu.openMenu(event, items, (providerId) => {
+    pickFolderAndLaunch('claude', providerId)
   })
-}
-
-async function onProviderItemSelect(providerId: string) {
-  providerDropdown.show = false
-  await pickFolderAndLaunch('claude', providerId)
 }
 
 async function onOpenAllSessions(t: TaskWithStats) {
@@ -243,8 +214,7 @@ async function pickFolderAndLaunch(
 ) {
   let dir: string | null = null
   try {
-    const sel = await openDialog({ directory: true, multiple: false, title: `选择工作目录(${agent})` })
-    if (typeof sel === 'string') dir = sel
+    dir = await platformAdapter.pickDirectory(`选择工作目录(${agent})`)
   } catch (e: any) {
     message.error('选择目录失败: ' + (e?.message || e))
     return
@@ -337,40 +307,4 @@ async function pickFolderAndLaunch(
 .confirm-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
 .confirm-msg { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; line-height: 1.5; }
 .confirm-btns { display: flex; justify-content: flex-end; gap: 8px; }
-</style>
-
-<style>
-/* Claude Code 供应商右键菜单(与 SessionAnalysis 保持一致) */
-.provider-ctx-overlay {
-  position: fixed; inset: 0; z-index: 9999;
-}
-.provider-ctx-menu {
-  position: fixed; z-index: 10000;
-  min-width: 120px; max-width: 220px;
-  max-height: 280px; overflow-y: auto;
-  background: var(--bg-card);
-  border: 1px solid var(--border-main);
-  border-radius: 6px;
-  box-shadow: var(--shadow-card);
-  padding: 3px 0;
-  font-size: 11px;
-}
-.provider-ctx-header {
-  padding: 3px 10px;
-  font-size: 10px;
-  color: var(--text-muted);
-  user-select: none;
-}
-.provider-ctx-item {
-  padding: 4px 10px;
-  color: var(--text-primary);
-  cursor: pointer;
-  border-radius: 3px;
-  margin: 0 3px;
-  transition: background 0.15s;
-}
-.provider-ctx-item:hover {
-  background: var(--bg-hover);
-  color: var(--color-blue);
-}
 </style>

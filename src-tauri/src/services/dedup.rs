@@ -132,6 +132,7 @@ mod tests {
         crate::models::SessionRequestToken {
             session_id: session_id.to_string(),
             model: model.to_string(),
+            provider_id: "p1".to_string(),
             created_at,
             input_tokens: input,
             output_tokens: output,

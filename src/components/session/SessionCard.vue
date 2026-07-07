@@ -42,7 +42,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { formatNum, formatCost, formatDuration, formatPercent, epochToDateTimeStr } from '@/utils/format'
+import { formatNum, formatCost, formatDuration, formatPercent, epochToDateTimeStr, shortSessionId } from '@/utils/format'
 import DensityChart from '@/components/charts/DensityChart.vue'
 import ModelBreakdown from '@/components/session/ModelBreakdown.vue'
 
@@ -75,12 +75,7 @@ const props = defineProps<{
   }>
 }>()
 
-const shortId = computed(() => {
-  const id = props.sessionId
-  if (id.startsWith('ses_')) return id.slice(0, 8)
-  const parts = id.split('-')
-  return parts[0] || id.slice(0, 8)
-})
+const shortId = computed(() => shortSessionId(props.sessionId))
 
 const modelBreakdownWithCosts = computed(() =>
   props.modelBreakdown.map(m => ({

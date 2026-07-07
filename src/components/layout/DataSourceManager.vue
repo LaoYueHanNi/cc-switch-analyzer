@@ -103,12 +103,11 @@
 import { computed, ref, onMounted } from 'vue'
 import { NModal, NIcon, NButton, NSwitch, NDivider, NInput } from 'naive-ui'
 import { CloseOutline } from '@vicons/ionicons5'
-import { invoke } from '@tauri-apps/api/core'
-import { getVersion } from '@tauri-apps/api/app'
 import { useDatabaseStore } from '@/stores/database'
 import { useDatabase } from '@/composables/useDatabase'
 import { useUpdaterStore } from '@/stores/updater'
 import { platformAdapter } from '@/platform'
+import type { CursorStatusInfo, DefaultPaths, TmServiceStatus } from '@/platform/types'
 
 defineProps<{ show: boolean }>()
 defineEmits<{ 'update:show': [value: boolean] }>()
@@ -116,20 +115,12 @@ defineEmits<{ 'update:show': [value: boolean] }>()
 const dbStore = useDatabaseStore()
 const updaterStore = useUpdaterStore()
 const currentVersion = ref('')
-getVersion().then(v => currentVersion.value = v).catch(() => {})
+platformAdapter.getAppVersion().then(v => currentVersion.value = v).catch(() => {})
 const { addDatabase, removeDatabase, refreshAfterToggle } = useDatabase()
 
-interface DefaultPaths { ccSwitch: string | null; opencode: string | null; aiProxy: string | null; cursor: string | null }
 const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null, cursor: null })
 
-interface CursorStatus {
-  loggedIn: boolean
-  lastSync: number | null
-  recordCount: number
-  cachePath: string | null
-}
-
-const cursorStatus = ref<CursorStatus>({ loggedIn: false, lastSync: null, recordCount: 0, cachePath: null })
+const cursorStatus = ref<CursorStatusInfo>({ loggedIn: false, lastSync: null, recordCount: 0, cachePath: null })
 const showLoginDialog = ref(false)
 const sessionToken = ref('')
 const loginLoading = ref(false)
@@ -150,7 +141,7 @@ const cursorStatusText = computed(() => {
 
 async function loadCursorStatus(): Promise<void> {
   try {
-    cursorStatus.value = await invoke<CursorStatus>('cursor_status')
+    cursorStatus.value = await platformAdapter.cursorStatus()
   } catch { /* ignore */ }
 }
 
@@ -159,7 +150,7 @@ async function onCursorLogin(): Promise<void> {
   if (!token) return
   loginLoading.value = true
   try {
-    const sources = await invoke<typeof dbStore.sources>('cursor_login', { sessionToken: token })
+    const sources = await platformAdapter.cursorLogin(token)
     dbStore.setSources(sources)
     showLoginDialog.value = false
     sessionToken.value = ''
@@ -175,7 +166,7 @@ async function onCursorLogin(): Promise<void> {
 async function onCursorSync(): Promise<void> {
   cursorSyncing.value = true
   try {
-    await invoke('cursor_sync')
+    await platformAdapter.cursorSync()
     const sources = await platformAdapter.listDatabases()
     dbStore.setSources(sources)
     await loadCursorStatus()
@@ -189,7 +180,7 @@ async function onCursorSync(): Promise<void> {
 
 async function onCursorLogout(): Promise<void> {
   try {
-    const sources = await invoke<typeof dbStore.sources>('cursor_logout', { clearCache: false })
+    const sources = await platformAdapter.cursorLogout(false)
     dbStore.setSources(sources)
     await loadCursorStatus()
     await refreshAfterToggle()
@@ -202,7 +193,7 @@ onMounted(() => {
 
 async function loadDefaultPaths(): Promise<void> {
   try {
-    defaultPaths.value = await invoke<DefaultPaths>('get_default_paths')
+    defaultPaths.value = await platformAdapter.getDefaultPaths()
   } catch { /* ignore */ }
 }
 loadDefaultPaths()
@@ -275,19 +266,13 @@ async function onToggle(slot: { sourceId: string }): Promise<void> {
 
 // ===== TrafficMonitor 插件管理 =====
 
-interface TmServiceStatus {
-  enabled: boolean
-  running: boolean
-  port: number
-}
-
 const tmStatus = ref<TmServiceStatus>({ enabled: false, running: false, port: 19810 })
 const downloading = ref<string | false>(false)
 const downloadedPath = ref('')
 
 async function loadTmStatus(): Promise<void> {
   try {
-    tmStatus.value = await invoke<TmServiceStatus>('get_http_service_status')
+    tmStatus.value = await platformAdapter.getHttpServiceStatus()
   } catch { /* ignore */ }
 }
 loadTmStatus()
@@ -295,7 +280,7 @@ loadTmStatus()
 async function downloadPlugin(arch: 'x86' | 'x64'): Promise<void> {
   downloading.value = arch
   try {
-    const path = await invoke<string>('download_traffic_monitor_plugin', { arch })
+    const path = await platformAdapter.downloadTrafficMonitorPlugin(arch)
     downloadedPath.value = path
   } catch {
     // ignore
@@ -306,7 +291,7 @@ async function downloadPlugin(arch: 'x86' | 'x64'): Promise<void> {
 
 async function toggleService(enabled: boolean): Promise<void> {
   try {
-    tmStatus.value = await invoke<TmServiceStatus>('toggle_http_service', { enabled })
+    tmStatus.value = await platformAdapter.toggleHttpService(enabled)
   } catch {
     // ignore
   }

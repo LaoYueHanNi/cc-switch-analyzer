@@ -1,18 +1,17 @@
 use rusqlite::{Connection, OpenFlags};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Mutex;
 
 use crate::models::*;
 use crate::utils::*;
 
 // OpenCode SQLite 数据库服务（只读）
 pub struct OpenCodeDbService {
-    db: Option<Connection>,
+    db: Option<Mutex<Connection>>,
     db_path: String,
     latest_timestamp: Option<i64>,
 }
-
-unsafe impl Sync for OpenCodeDbService {}
 
 impl OpenCodeDbService {
     pub fn new() -> Self {
@@ -34,7 +33,7 @@ impl OpenCodeDbService {
             "打开数据库失败，请检查文件路径".to_string()
         })?;
         self.db_path = file_path.to_string();
-        self.db = Some(conn);
+        self.db = Some(Mutex::new(conn));
         self.latest_timestamp = self.get_latest_timestamp_internal();
         Ok(())
     }
@@ -48,10 +47,12 @@ impl OpenCodeDbService {
         self.db.is_some()
     }
 
-    fn db(&self) -> Result<&Connection, String> {
+    fn db(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
         self.db
             .as_ref()
-            .ok_or_else(|| "数据库未打开".to_string())
+            .ok_or_else(|| "数据库未打开".to_string())?
+            .lock()
+            .map_err(|e| format!("数据库锁失败: {}", e))
     }
 
     fn collect_rows<T, F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>>(
@@ -633,6 +634,7 @@ impl OpenCodeDbService {
                 Ok(SessionRequestToken {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    provider_id: "opencode".to_string(),
                     created_at: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
                     input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                     output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
@@ -678,6 +680,7 @@ impl OpenCodeDbService {
                 Ok(SessionRequestToken {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    provider_id: "opencode".to_string(),
                     created_at: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
                     input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                     output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),

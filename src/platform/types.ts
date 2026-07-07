@@ -1,7 +1,7 @@
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost, SessionModelCostEntry } from '@/types/common'
 import type { PricingData } from '@/types/pricing'
-import type { Task, TaskSession, TaskSessionInput, TaskWithStats, TaskDetail } from '@/types/task'
+import type { TaskSessionInput, TaskWithStats, TaskDetail } from '@/types/task'
 
 export interface OpenTaskSessionsResult {
   spawned: number
@@ -127,6 +127,32 @@ export interface UpdateInfo {
   body?: string
 }
 
+export interface CursorSyncResult {
+  synced: boolean
+  rows: number
+  error?: string
+}
+
+export interface CursorStatusInfo {
+  loggedIn: boolean
+  lastSync: number | null
+  recordCount: number
+  cachePath: string | null
+}
+
+export interface DefaultPaths {
+  ccSwitch: string | null
+  opencode: string | null
+  aiProxy: string | null
+  cursor: string | null
+}
+
+export interface TmServiceStatus {
+  enabled: boolean
+  running: boolean
+  port: number
+}
+
 export interface PlatformAdapter {
   // 数据库
   selectDatabase(): Promise<DbResult | null>
@@ -180,6 +206,20 @@ export interface PlatformAdapter {
   resumeOpenCodeSession(sessionId: string, projectDir?: string): Promise<void>
   openCodexTerminal(projectDir: string): Promise<void>
   resumeCodexSession(sessionId: string, projectDir?: string): Promise<void>
+  // Cursor 数据源
+  cursorLogin(sessionToken: string): Promise<SourceInfo[]>
+  cursorSync(): Promise<CursorSyncResult>
+  cursorStatus(): Promise<CursorStatusInfo>
+  cursorLogout(clearCache?: boolean): Promise<SourceInfo[]>
+  // 应用信息 / 系统交互
+  getAppVersion(): Promise<string>
+  pickDirectory(title: string): Promise<string | null>
+  onCheckUpdateRequested(callback: () => void): Promise<() => void>
+  // 默认路径 / TrafficMonitor 插件
+  getDefaultPaths(): Promise<DefaultPaths>
+  getHttpServiceStatus(): Promise<TmServiceStatus>
+  toggleHttpService(enabled: boolean): Promise<TmServiceStatus>
+  downloadTrafficMonitorPlugin(arch: 'x86' | 'x64'): Promise<string>
   // 任务管理
   listTasks(): Promise<TaskWithStats[]>
   getTaskDetail(taskId: number): Promise<TaskDetail>

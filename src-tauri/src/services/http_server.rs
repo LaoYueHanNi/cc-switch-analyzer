@@ -81,6 +81,7 @@ impl TrafficMonitorServerHandle {
 
 struct TmCache {
     data: Option<TmTodayData>,
+    tz: Option<i64>,
     updated_at: Option<Instant>,
 }
 
@@ -88,6 +89,7 @@ impl Default for TmCache {
     fn default() -> Self {
         Self {
             data: None,
+            tz: None,
             updated_at: None,
         }
     }
@@ -198,11 +200,10 @@ fn handle_request(
 }
 
 fn handle_today(cache: Arc<Mutex<TmCache>>, shared: Arc<SharedState>, tz: i64) -> (String, String) {
-    // 检查缓存
     {
         let c = cache.lock().unwrap();
-        if let (Some(data), Some(updated)) = (&c.data, c.updated_at) {
-            if updated.elapsed().as_secs() < TM_CACHE_TTL_SECS {
+        if let (Some(data), Some(cached_tz), Some(updated)) = (&c.data, c.tz, c.updated_at) {
+            if cached_tz == tz && updated.elapsed().as_secs() < TM_CACHE_TTL_SECS {
                 return ("200 OK".to_string(), serde_json::to_string(data).unwrap());
             }
         }
@@ -212,6 +213,7 @@ fn handle_today(cache: Arc<Mutex<TmCache>>, shared: Arc<SharedState>, tz: i64) -
         Ok(data) => {
             let mut c = cache.lock().unwrap();
             c.data = Some(data.clone());
+            c.tz = Some(tz);
             c.updated_at = Some(Instant::now());
             ("200 OK".to_string(), serde_json::to_string(&data).unwrap())
         }

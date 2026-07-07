@@ -2,6 +2,8 @@ use tauri::State;
 
 use crate::AppState;
 use crate::models::*;
+use crate::services::app_db::AppDbService;
+use crate::services::pricing_engine::PricingEngine;
 
 #[tauri::command]
 pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, String> {
@@ -57,6 +59,19 @@ pub fn get_pricing_overrides(state: State<AppState>) -> Result<Vec<PricingOverri
     app_db.get_all_overrides()
 }
 
+fn apply_set_pricing_override(
+    app_db: &AppDbService,
+    pricing: &mut PricingEngine,
+    model_id: &str,
+    input: f64,
+    output: f64,
+    cache_read: f64,
+    cache_creation: f64,
+) -> Result<(), String> {
+    app_db.save_override(model_id, input, output, cache_read, cache_creation)?;
+    pricing.refresh(app_db)
+}
+
 #[tauri::command]
 pub fn set_pricing_override(
     model_id: String,
@@ -73,13 +88,24 @@ pub fn set_pricing_override(
         return Err("价格不能为负数".to_string());
     }
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    app_db.save_override(&model_id, input, output, cache_read, cache_creation)
+    let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
+    apply_set_pricing_override(&app_db, &mut pricing, &model_id, input, output, cache_read, cache_creation)
+}
+
+fn apply_remove_pricing_override(
+    app_db: &AppDbService,
+    pricing: &mut PricingEngine,
+    model_id: &str,
+) -> Result<(), String> {
+    app_db.delete_override(model_id)?;
+    pricing.refresh(app_db)
 }
 
 #[tauri::command]
 pub fn remove_pricing_override(model_id: String, state: State<AppState>) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    app_db.delete_override(&model_id)
+    let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
+    apply_remove_pricing_override(&app_db, &mut pricing, &model_id)
 }
 
 #[tauri::command]
@@ -101,7 +127,10 @@ pub fn add_time_pricing_rule(
     state: State<AppState>,
 ) -> Result<i64, String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    app_db.add_time_override(&model_id, start_time, end_time, input, output, cache_read, cache_creation, &label)
+    let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
+    let id = app_db.add_time_override(&model_id, start_time, end_time, input, output, cache_read, cache_creation, &label)?;
+    pricing.refresh(&app_db)?;
+    Ok(id)
 }
 
 #[tauri::command]
@@ -117,7 +146,9 @@ pub fn update_time_pricing_rule(
     state: State<AppState>,
 ) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    app_db.update_time_override(id, start_time, end_time, input, output, cache_read, cache_creation, &label)
+    let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
+    app_db.update_time_override(id, start_time, end_time, input, output, cache_read, cache_creation, &label)?;
+    pricing.refresh(&app_db)
 }
 
 #[tauri::command]
@@ -126,7 +157,9 @@ pub fn delete_time_pricing_rule(
     state: State<AppState>,
 ) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    app_db.delete_time_override(id)
+    let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
+    app_db.delete_time_override(id)?;
+    pricing.refresh(&app_db)
 }
 
 #[tauri::command]
@@ -140,7 +173,9 @@ pub fn save_override_context_tier(
     state: State<AppState>,
 ) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    app_db.save_override_tier(&model_id, threshold, input, output, cache_read, cache_creation)
+    let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
+    app_db.save_override_tier(&model_id, threshold, input, output, cache_read, cache_creation)?;
+    pricing.refresh(&app_db)
 }
 
 #[tauri::command]
@@ -150,7 +185,9 @@ pub fn delete_override_context_tier(
     state: State<AppState>,
 ) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    app_db.delete_override_tier(&model_id, threshold)
+    let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
+    app_db.delete_override_tier(&model_id, threshold)?;
+    pricing.refresh(&app_db)
 }
 
 #[tauri::command]
@@ -166,7 +203,10 @@ pub fn save_time_rule_context_tier(
     state: State<AppState>,
 ) -> Result<i64, String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    app_db.add_time_override_tier(&model_id, start_time, end_time, threshold, input, output, cache_read, cache_creation)
+    let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
+    let id = app_db.add_time_override_tier(&model_id, start_time, end_time, threshold, input, output, cache_read, cache_creation)?;
+    pricing.refresh(&app_db)?;
+    Ok(id)
 }
 
 #[tauri::command]
@@ -179,7 +219,9 @@ pub fn update_time_rule_context_tier(
     state: State<AppState>,
 ) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    app_db.update_time_override_tier(id, input, output, cache_read, cache_creation)
+    let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
+    app_db.update_time_override_tier(id, input, output, cache_read, cache_creation)?;
+    pricing.refresh(&app_db)
 }
 
 #[tauri::command]
@@ -188,7 +230,9 @@ pub fn delete_time_rule_context_tier(
     state: State<AppState>,
 ) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-    app_db.delete_time_override(id)
+    let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
+    app_db.delete_time_override(id)?;
+    pricing.refresh(&app_db)
 }
 
 #[tauri::command]

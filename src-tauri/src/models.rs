@@ -218,6 +218,7 @@ pub struct SessionModelToken {
 pub struct SessionRequestToken {
     pub session_id: String,
     pub model: String,
+    pub provider_id: String,
     pub created_at: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,

@@ -94,18 +94,12 @@
     />
 
     <!-- Claude Code 供应商右键菜单(与 SessionAnalysis 保持一致) -->
-    <Teleport to="body">
-      <div v-if="providerDropdown.show" class="provider-ctx-overlay" @click="providerDropdown.show = false" @contextmenu.prevent="providerDropdown.show = false" />
-      <div v-if="providerDropdown.show" ref="ctxMenuRef" class="provider-ctx-menu" :style="{ left: providerDropdown.x + 'px', top: providerDropdown.y + 'px' }">
-        <div class="provider-ctx-header">选择供应商配置</div>
-        <div
-          v-for="item in providerDropdown.items"
-          :key="item.id"
-          class="provider-ctx-item"
-          @click="onProviderItemSelect(item.id)"
-        >{{ item.name }}</div>
-      </div>
-    </Teleport>
+    <ProviderContextMenu
+      :menu="providerMenu.menu"
+      :adjust-position="providerMenu.adjustMenuPosition"
+      @select="providerMenu.selectItem"
+      @close="providerMenu.closeMenu"
+    />
 
     <!-- 仅当 loadDetail 确认失败时显示(不会和"加载中"瞬态冲突) -->
     <div v-if="loadFailed" class="tab-empty">
@@ -116,18 +110,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { useTaskStore } from '@/stores/task'
 import { useDatabaseStore } from '@/stores/database'
 import { useFilterStore } from '@/stores/filter'
 import { platformAdapter } from '@/platform'
+import { useProviderContextMenu } from '@/composables/useProviderContextMenu'
+import { useSessionResume } from '@/composables/useSessionResume'
 import { formatNum, formatCost, epochToDateTimeStr } from '@/utils/format'
 import { TASK_STATUS_OPTIONS, type TaskSessionInput } from '@/types/task'
 import type { ProjectSessionDetail } from '@/platform/types'
 import SessionCard from '@/components/session/SessionCard.vue'
 import SessionPickerDialog from '@/components/task/SessionPickerDialog.vue'
+import ProviderContextMenu from '@/components/common/ProviderContextMenu.vue'
 import claudeSvg from '@/assets/claude.svg?raw'
 import opencodeSvg from '@/assets/opencode.svg?raw'
 import codexSvg from '@/assets/codex.svg?raw'
@@ -147,15 +144,9 @@ const pickerShow = ref(false)
 const pickerSaving = ref(false)
 
 // Claude Code 供应商右键菜单(与会话 tab 一致)
-const ctxMenuRef = ref<HTMLElement | null>(null)
-const providerDropdown = reactive({
-  show: false,
-  x: 0,
-  y: 0,
-  items: [] as { id: string; name: string }[],
-  pendingSessionId: '',
-  pendingProjectDir: ''
-})
+const providerMenu = useProviderContextMenu('TaskDetail')
+let pendingResumeSessionId = ''
+let pendingResumeProjectDir = ''
 
 const ccswitchDbPath = computed(() =>
   dbStore.sources.find(s => s.dbType === 'CC-Switch')?.path
@@ -170,12 +161,6 @@ const statusInfo = computed(() => {
 
 function sessionFromList(sessionId: string) {
   return store.currentDetail?.sessions.find(s => s.sessionId === sessionId)
-}
-
-function shortId(id: string): string {
-  if (id.startsWith('ses_')) return id.slice(0, 8)
-  const parts = id.split('-')
-  return parts[0] || id.slice(0, 8)
 }
 
 function basenameDir(p?: string): string {
@@ -260,101 +245,42 @@ async function onPickerSubmit(sessions: TaskSessionInput[]) {
 
 // ===== 会话恢复(与 SessionAnalysis 二级页保持一致) =====
 
+const { resumeSession } = useSessionResume('TaskDetail', (label, e) => {
+  message.error(`恢复 ${label} 会话失败: ` + (e?.message || e))
+})
+
 async function onResumeClaude(sessionId: string, projectDir?: string) {
-  try {
-    await platformAdapter.resumeClaudeSession(sessionId, projectDir)
-  } catch (e: any) {
-    console.error('[TaskDetail] 恢复 Claude 失败:', e?.message || e)
-    message.error('恢复 Claude 会话失败: ' + (e?.message || e))
-  }
+  await resumeSession('claude', sessionId, projectDir)
 }
 
 async function onResumeOpenCode(sessionId: string, projectDir?: string) {
-  try {
-    await platformAdapter.resumeOpenCodeSession(sessionId, projectDir)
-  } catch (e: any) {
-    console.error('[TaskDetail] 恢复 OpenCode 失败:', e?.message || e)
-    message.error('恢复 OpenCode 会话失败: ' + (e?.message || e))
-  }
+  await resumeSession('opencode', sessionId, projectDir)
 }
 
 async function onResumeCodex(sessionId: string, projectDir?: string) {
-  try {
-    await platformAdapter.resumeCodexSession(sessionId, projectDir)
-  } catch (e: any) {
-    console.error('[TaskDetail] 恢复 Codex 失败:', e?.message || e)
-    message.error('恢复 Codex 会话失败: ' + (e?.message || e))
-  }
+  await resumeSession('codex', sessionId, projectDir)
 }
 
 async function onContextResumeClaude(sessionId: string, projectDir: string | undefined, event: MouseEvent) {
-  if (!ccswitchDbPath.value) return
-  let items: { id: string; name: string }[]
-  try {
-    const providers = await platformAdapter.getCcswitchProviders(ccswitchDbPath.value)
-    items = providers.filter(p => p.hasEnv).map(p => ({ id: p.id, name: p.name }))
-  } catch (e: any) {
-    console.warn('[TaskDetail] 加载供应商失败:', e?.message || e)
-    return
-  }
+  const dbPath = ccswitchDbPath.value
+  if (!dbPath) return
+  const items = await providerMenu.loadProviderItems(dbPath)
   if (items.length === 0) {
     message.info('暂无可用供应商配置')
     return
   }
-  providerDropdown.items = items
-  providerDropdown.pendingSessionId = sessionId
-  providerDropdown.pendingProjectDir = projectDir || ''
-  // 与 SessionAnalysis 一致:用触发元素位置(而非鼠标位置),并做 zoom 校正
-  const el = (event.target as HTMLElement).closest('.action-terminal') as HTMLElement
-  nextTick(() => {
-    const pos = el ? menuPositionFromElement(el) : clampPosition(event.clientX, event.clientY)
-    providerDropdown.x = pos.x
-    providerDropdown.y = pos.y
-    providerDropdown.show = true
-    nextTick(adjustMenuPosition)
-  })
-}
-
-function clampPosition(x: number, y: number): { x: number; y: number } {
-  const DROPDOWN_W = 180
-  const MARGIN = 8
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  return {
-    x: Math.min(x, vw - DROPDOWN_W - MARGIN),
-    y: Math.min(y, vh - MARGIN),
-  }
-}
-
-function menuPositionFromElement(el: HTMLElement): { x: number; y: number } {
-  const rect = el.getBoundingClientRect()
-  const zoom = parseFloat(getComputedStyle(document.body).zoom) || 1
-  const max_x = window.innerWidth / zoom - 8
-  let x = rect.left / zoom
-  let y = (rect.bottom + 4) / zoom
-  if (x + 130 > max_x) x = Math.max(8, rect.right / zoom - 130)
-  return { x, y }
-}
-
-function adjustMenuPosition() {
-  const menu = ctxMenuRef.value
-  if (!menu) return
-  const zoom = parseFloat(getComputedStyle(document.body).zoom) || 1
-  const max_y = window.innerHeight / zoom - 8
-  const bottom = providerDropdown.y + menu.offsetHeight
-  if (bottom > max_y) {
-    providerDropdown.y = Math.max(8, max_y - menu.offsetHeight)
-  }
+  pendingResumeSessionId = sessionId
+  pendingResumeProjectDir = projectDir || ''
+  providerMenu.openMenu(event, items, (providerId) => onProviderItemSelect(providerId))
 }
 
 async function onProviderItemSelect(providerId: string) {
-  providerDropdown.show = false
   try {
     await platformAdapter.resumeClaudeSessionWithProvider(
-      providerDropdown.pendingSessionId,
+      pendingResumeSessionId,
       providerId,
       ccswitchDbPath.value!,
-      providerDropdown.pendingProjectDir || undefined
+      pendingResumeProjectDir || undefined
     )
   } catch (e: any) {
     message.error('恢复失败: ' + (e?.message || e))
@@ -535,40 +461,4 @@ async function onProviderItemSelect(providerId: string) {
 .cd-btn:hover { border-color: var(--color-blue); color: var(--color-blue); }
 .cd-btn.primary { background: var(--color-blue); border-color: var(--color-blue); color: #fff; }
 .cd-btn.primary:hover { opacity: 0.85; }
-</style>
-
-<style>
-/* Claude Code 供应商右键菜单(与 SessionAnalysis 保持一致) */
-.provider-ctx-overlay {
-  position: fixed; inset: 0; z-index: 9999;
-}
-.provider-ctx-menu {
-  position: fixed; z-index: 10000;
-  min-width: 120px; max-width: 220px;
-  max-height: 280px; overflow-y: auto;
-  background: var(--bg-card);
-  border: 1px solid var(--border-main);
-  border-radius: 6px;
-  box-shadow: var(--shadow-card);
-  padding: 3px 0;
-  font-size: 11px;
-}
-.provider-ctx-header {
-  padding: 3px 10px;
-  font-size: 10px;
-  color: var(--text-muted);
-  user-select: none;
-}
-.provider-ctx-item {
-  padding: 4px 10px;
-  color: var(--text-primary);
-  cursor: pointer;
-  border-radius: 3px;
-  margin: 0 3px;
-  transition: background 0.15s;
-}
-.provider-ctx-item:hover {
-  background: var(--bg-hover);
-  color: var(--color-blue);
-}
 </style>

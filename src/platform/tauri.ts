@@ -1,8 +1,9 @@
 import { invoke } from '@tauri-apps/api/core'
 import { getVersion } from '@tauri-apps/api/app'
 import { open } from '@tauri-apps/plugin-dialog'
+import { listen } from '@tauri-apps/api/event'
 import { check } from '@tauri-apps/plugin-updater'
-import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult } from './types'
+import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, DefaultPaths, TmServiceStatus } from './types'
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
 import type { PricingData } from '@/types/pricing'
@@ -221,14 +222,38 @@ export const platformAdapter: PlatformAdapter = {
   async cursorLogin(sessionToken: string): Promise<SourceInfo[]> {
     return invoke<SourceInfo[]>('cursor_login', { sessionToken })
   },
-  async cursorSync(): Promise<{ synced: boolean; rows: number; error?: string }> {
+  async cursorSync(): Promise<CursorSyncResult> {
     return invoke('cursor_sync')
   },
-  async cursorStatus(): Promise<{ loggedIn: boolean; lastSync: number | null; recordCount: number; cachePath: string | null }> {
+  async cursorStatus(): Promise<CursorStatusInfo> {
     return invoke('cursor_status')
   },
   async cursorLogout(clearCache = false): Promise<SourceInfo[]> {
     return invoke<SourceInfo[]>('cursor_logout', { clearCache })
+  },
+  // 应用信息 / 系统交互
+  async getAppVersion(): Promise<string> {
+    return getVersion()
+  },
+  async pickDirectory(title: string): Promise<string | null> {
+    const selected = await open({ directory: true, multiple: false, title })
+    return typeof selected === 'string' ? selected : null
+  },
+  async onCheckUpdateRequested(callback: () => void): Promise<() => void> {
+    return listen('check-update', () => callback())
+  },
+  // 默认路径 / TrafficMonitor 插件
+  async getDefaultPaths(): Promise<DefaultPaths> {
+    return invoke<DefaultPaths>('get_default_paths')
+  },
+  async getHttpServiceStatus(): Promise<TmServiceStatus> {
+    return invoke<TmServiceStatus>('get_http_service_status')
+  },
+  async toggleHttpService(enabled: boolean): Promise<TmServiceStatus> {
+    return invoke<TmServiceStatus>('toggle_http_service', { enabled })
+  },
+  async downloadTrafficMonitorPlugin(arch: 'x86' | 'x64'): Promise<string> {
+    return invoke<string>('download_traffic_monitor_plugin', { arch })
   },
   // 任务管理
   async listTasks(): Promise<TaskWithStats[]> {

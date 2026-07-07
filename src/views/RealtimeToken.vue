@@ -47,7 +47,7 @@
         <div class="session-header" :class="{ 'session-new': groupHasNew(group) }" @click="toggleGroup(group.sessionId)">
           <span class="sh-arrow" :class="{ collapsed: collapsedSessions.has(group.sessionId) }">▾</span>
           <span class="sh-project" v-if="getProject(group.sessionId)" :title="getProject(group.sessionId)">{{ getProject(group.sessionId) }}</span>
-          <span class="sh-id">{{ shortSession(group.sessionId) }}</span>
+          <span class="sh-id">{{ shortSessionId(group.sessionId) }}</span>
           <span class="sh-title" v-if="getTitle(group.sessionId)" :title="getTitle(group.sessionId)">{{ getTitle(group.sessionId) }}</span>
           <span class="sh-ctx">ctx {{ formatNum(group.maxContextWidth) }}</span>
           <span class="sh-count">{{ group.rows.length }} 次<template v-if="groupTierLabel(group)">（{{ groupTierLabel(group) }}）</template></span>
@@ -71,7 +71,7 @@
         </div>
         <!-- 数据行 -->
         <div class="session-rows">
-        <div class="log-row" :class="{ 'log-new': row.isNew }" v-for="(row, ri) in group.rows" :key="row.createdAt + row.model + ri">
+        <div class="log-row" :class="{ 'log-new': row.isNew }" v-for="(row, ri) in visibleRows(group)" :key="row.createdAt + row.model + ri">
           <span class="col-time">{{ formatTime(row.createdAt) }}</span>
           <span class="col-model" :title="row.model">{{ shortModel(row.model) }}</span>
           <span class="col-token c-input">
@@ -96,6 +96,14 @@
           <span class="col-tier" v-else>-</span>
           <span class="col-latency">{{ formatLatency(row.latencyMs) }}</span>
         </div>
+        <button
+          v-if="hasMoreRows(group)"
+          type="button"
+          class="show-more-btn"
+          @click="expandGroupRows(group.sessionId)"
+        >
+          展开全部 {{ group.rows.length }} 条
+        </button>
         </div>
         </div>
         </template>
@@ -114,7 +122,7 @@ import { computed, ref, onMounted, onActivated, onDeactivated, watch } from 'vue
 import { useDatabaseStore } from '@/stores/database'
 import { useRealtimePolling } from '@/composables/useRealtimePolling'
 import { useSessionTitles } from '@/composables/useSessionTitles'
-import { formatNum, formatCost, formatPercent } from '@/utils/format'
+import { formatNum, formatCost, formatPercent, shortSessionId } from '@/utils/format'
 import type { RealtimeRequestLog } from '@/types/database'
 
 const dbStore = useDatabaseStore()
@@ -122,8 +130,32 @@ const { logs, lastRefreshTime, startPolling, stopPolling, refreshNow } = useReal
 const { sessionTitles, getTitle, getProject, getSource, fetchTitles } = useSessionTitles()
 
 const collapsedSessions = ref<Set<string>>(new Set())
+const expandedRowLimits = ref<Set<string>>(new Set())
+const ROW_LIMIT = 40
+
+function visibleRows(group: SessionGroup): RealtimeRequestLog[] {
+  if (expandedRowLimits.value.has(group.sessionId) || group.rows.length <= ROW_LIMIT) {
+    return group.rows
+  }
+  return group.rows.slice(0, ROW_LIMIT)
+}
+
+function hasMoreRows(group: SessionGroup): boolean {
+  return group.rows.length > ROW_LIMIT && !expandedRowLimits.value.has(group.sessionId)
+}
+
+function expandGroupRows(sessionId: string): void {
+  const next = new Set(expandedRowLimits.value)
+  next.add(sessionId)
+  expandedRowLimits.value = next
+}
 
 function toggleGroup(sessionId: string): void {
+  const next = new Set(collapsedSessions.value)
+  if (next.has(sessionId)) next.delete(sessionId)
+  else next.add(sessionId)
+  collapsedSessions.value = next
+}
   const next = new Set(collapsedSessions.value)
   if (next.has(sessionId)) next.delete(sessionId)
   else next.add(sessionId)
@@ -218,6 +250,12 @@ const visibleGroups = computed<SessionGroup[]>(() => {
   })
 })
 
+watch(() => logs.value.length, (len, prev) => {
+  if (len > 0 && prev === 0 && sessionGroups.value.length > 1) {
+    collapsedSessions.value = new Set(sessionGroups.value.slice(1).map(g => g.sessionId))
+  }
+})
+
 function formatTime(epoch: number): string {
   const d = new Date(epoch * 1000)
   const mm = String(d.getMonth() + 1).padStart(2, '0')
@@ -242,12 +280,6 @@ function groupTierLabel(group: SessionGroup): string {
     const name = threshold === 0 ? '基础' : `≥${Math.round(threshold / 1000)}K`
     return `${name} ${pct}%`
   }).join(' ')
-}
-
-function shortSession(sessionId: string): string {
-  if (sessionId.startsWith('ses_')) return sessionId.slice(0, 8)
-  const parts = sessionId.split('-')
-  return parts[0] || sessionId.slice(0, 8)
 }
 
 function shortModel(name: string): string {
@@ -374,11 +406,31 @@ watch(() => dbStore.hasDatabase, (val) => {
 
 .session-body {
   border-bottom: 1px solid var(--border-main);
+  /* 折叠体多且不在视口内时跳过渲染/布局开销，替代重量级虚拟滚动方案 */
+  content-visibility: auto;
+  contain-intrinsic-size: 0 200px;
 }
 
 .session-rows {
   max-height: 270px;
   overflow-y: auto;
+}
+
+.show-more-btn {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-top: 1px solid var(--border-faint);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.show-more-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
 }
 
 .log-header {

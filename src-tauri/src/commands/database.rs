@@ -110,7 +110,7 @@ fn auto_load_paths(state: &State<AppState>, paths: Vec<String>) -> Result<Vec<So
     }
 
     // 刷新定价引擎
-    refresh_pricing(&state)?;
+    refresh_pricing(state)?;
 
     let info: Vec<SourceInfo> = sources.iter().map(|s| s.to_info()).collect();
     save_paths(&state, &info);
@@ -241,8 +241,8 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         let since = *state.db_latest_timestamp.lock().map_err(|e| e.to_string())?;
         let raw_records = run_streaming_dedup(&sources, since);
         let new_tokens: Vec<SessionRequestToken> = raw_records.into_iter()
-            .map(|(session_id, model, _provider_id, created_at, input_tokens, output_tokens, cache_read, cache_creation, _latency)| {
-                SessionRequestToken { session_id, model, created_at, input_tokens, output_tokens, cache_read, cache_creation }
+            .map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read, cache_creation, _latency)| {
+                SessionRequestToken { session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read, cache_creation }
             })
             .collect();
         let mut cache = state.request_cache.lock().map_err(|e| e.to_string())?;
@@ -316,13 +316,14 @@ fn validate_db_path(file_path: &str) -> Result<std::path::PathBuf, String> {
     Ok(canonical)
 }
 
-fn refresh_pricing(state: &State<AppState>) -> Result<(), String> {
+fn refresh_pricing(state: &AppState) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
-    match pricing.refresh(&app_db) {
-        Ok(()) => log::info!("[DB] 定价引擎刷新成功, 模型数={}", pricing.size()),
-        Err(e) => log::error!("[DB] 定价引擎刷新失败: {}", e),
-    }
+    pricing.refresh(&app_db).map_err(|e| {
+        log::error!("[DB] 定价引擎刷新失败: {}", e);
+        e
+    })?;
+    log::info!("[DB] 定价引擎刷新成功, 模型数={}", pricing.size());
     Ok(())
 }
 

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { platformAdapter } from '@/platform/tauri'
+import { platformAdapter } from '@/platform'
 import type { TaskDetail, TaskSessionInput, TaskStatus, TaskWithStats } from '@/types/task'
 
 export const useTaskStore = defineStore('task', () => {

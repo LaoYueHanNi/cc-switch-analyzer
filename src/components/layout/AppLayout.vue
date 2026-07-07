@@ -94,7 +94,7 @@ import { useThemeStore } from '@/stores/theme'
 import { useDatabase } from '@/composables/useDatabase'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { useUpdaterStore } from '@/stores/updater'
-import { listen } from '@tauri-apps/api/event'
+import { platformAdapter } from '@/platform'
 import Toolbar from './Toolbar.vue'
 import FilterBar from './FilterBar.vue'
 import SummaryBar from './SummaryBar.vue'
@@ -160,15 +160,19 @@ watch(() => dbStore.refreshVersion, () => {
   if (dbStore.hasDatabase) queryStore.executeQuery(filterStore.filterParams, true)
 })
 
+let unlistenCheckUpdate: (() => void) | null = null
+
 onMounted(async () => {
   syncLayoutHeight()
   window.addEventListener('resize', syncLayoutHeight)
   await autoLoadDatabase()
-  listen('check-update', () => updaterStore.checkForUpdate())
+  unlistenCheckUpdate = await platformAdapter.onCheckUpdateRequested(() => updaterStore.checkForUpdate())
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', syncLayoutHeight)
+  unlistenCheckUpdate?.()
+  unlistenCheckUpdate = null
 })
 </script>
 

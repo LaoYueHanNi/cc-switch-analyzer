@@ -1,20 +1,17 @@
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Mutex;
 
 use crate::models::*;
 use crate::utils::*;
 
 // 外部 CC-Switch 数据库服务（只读）
 pub struct ExternalDbService {
-    db: Option<Connection>,
+    db: Option<Mutex<Connection>>,
     db_path: String,
     latest_timestamp: Option<i64>,
 }
-
-// rusqlite::Connection 是 Send 但非 Sync（内部 RefCell），
-// 所有并发访问均由外部 RwLock 保护，此处安全实现 Sync。
-unsafe impl Sync for ExternalDbService {}
 
 impl ExternalDbService {
     pub fn new() -> Self {
@@ -36,7 +33,7 @@ impl ExternalDbService {
             "打开数据库失败，请检查文件路径".to_string()
         })?;
         self.db_path = file_path.to_string();
-        self.db = Some(conn);
+        self.db = Some(Mutex::new(conn));
         self.latest_timestamp = self.get_latest_timestamp_internal();
         Ok(())
     }
@@ -50,10 +47,12 @@ impl ExternalDbService {
         self.db.is_some()
     }
 
-    fn db(&self) -> Result<&Connection, String> {
+    fn db(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
         self.db
             .as_ref()
-            .ok_or_else(|| "数据库未打开".to_string())
+            .ok_or_else(|| "数据库未打开".to_string())?
+            .lock()
+            .map_err(|e| format!("数据库锁失败: {}", e))
     }
 
     /// 收集查询行结果为 Vec<T>，context 用于错误消息前缀
@@ -601,6 +600,7 @@ impl ExternalDbService {
             "SELECT
                 l.session_id,
                 l.model,
+                l.provider_id,
                 l.created_at,
                 l.input_tokens,
                 l.output_tokens,
@@ -628,11 +628,12 @@ impl ExternalDbService {
                 Ok(SessionRequestToken {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    created_at: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
-                    input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                    output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
-                    cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                    cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 })
             })
             .map_err(|e| format!("查询会话请求Token失败: {}", e))?;
@@ -655,6 +656,7 @@ impl ExternalDbService {
             "SELECT
                 l.session_id,
                 l.model,
+                l.provider_id,
                 l.created_at,
                 l.input_tokens,
                 l.output_tokens,
@@ -672,18 +674,19 @@ impl ExternalDbService {
         let refs: Vec<&dyn rusqlite::types::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
         let rows = stmt
             .query_map(refs.as_slice(), |row| {
-                let app_type: String = row.get::<_, Option<String>>(7)?.unwrap_or_default();
-                let raw_input: i64 = row.get::<_, Option<i64>>(3)?.unwrap_or(0);
-                let cache_read: i64 = row.get::<_, Option<i64>>(5)?.unwrap_or(0);
+                let app_type: String = row.get::<_, Option<String>>(8)?.unwrap_or_default();
+                let raw_input: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
+                let cache_read: i64 = row.get::<_, Option<i64>>(6)?.unwrap_or(0);
                 let input_tokens = if app_type == "codex" { raw_input.saturating_sub(cache_read) } else { raw_input };
                 Ok(SessionRequestToken {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    created_at: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                     input_tokens,
-                    output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
                     cache_read,
-                    cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 })
             })
             .map_err(|e| format!("查询会话请求Token失败: {}", e))?;
