@@ -1,6 +1,44 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-07-07",
+    "commits": [
+      {
+        "hash": "de373fc",
+        "subject": "feat: 接入 Cursor 数据源，支持 API 同步与用量统计",
+        "date": "2026-07-07"
+      }
+    ]
+  },
+  {
+    "version": "0.7.21",
+    "date": "2026-06-20",
+    "commits": [
+      {
+        "hash": "338c22d",
+        "subject": "chore: 同步版本号至 0.7.20 并启用 release 构建优化",
+        "date": "2026-06-20"
+      },
+      {
+        "hash": "5e3cfb3",
+        "subject": "test: 补充 pipeline 与 precompute 聚合及费用计算测试",
+        "date": "2026-06-20"
+      }
+    ]
+  },
+  {
+    "version": "0.7.20",
+    "date": "2026-06-19",
+    "commits": [
+      {
+        "hash": "ec97e8b",
+        "subject": "fix(pricing): 云端定价更新后重启一次即生效",
+        "date": "2026-06-19"
+      }
+    ]
+  },
+  {
+    "version": "0.7.19",
     "date": "2026-06-15",
     "commits": [
       {
