@@ -56,6 +56,23 @@ pub fn get_default_ai_proxy_db_path() -> Result<std::path::PathBuf, String> {
     Ok(home.join(".ai-agent-tools").join("data").join("access_log.db"))
 }
 
+/// Cursor 凭证文件路径
+pub fn get_cursor_credentials_path() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;
+    Ok(home.join(".cc-switch-analyzer").join("cursor-credentials.json"))
+}
+
+/// Cursor 用量 CSV 缓存目录
+pub fn get_cursor_cache_dir() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;
+    Ok(home.join(".cc-switch-analyzer").join("cursor-cache"))
+}
+
+/// Cursor 用量 CSV 缓存文件
+pub fn get_cursor_usage_csv_path() -> Result<std::path::PathBuf, String> {
+    Ok(get_cursor_cache_dir()?.join("usage.csv"))
+}
+
 /// 当前 Unix 秒
 pub fn now_epoch_seconds() -> i64 {
     chrono::Utc::now().timestamp()

@@ -73,6 +73,7 @@ pub enum DbType {
     ExternalDb,
     OpenCode,
     AiProxy,
+    Cursor,
 }
 
 impl DbType {
@@ -81,6 +82,7 @@ impl DbType {
             DbType::ExternalDb => "CC-Switch",
             DbType::OpenCode => "OpenCode",
             DbType::AiProxy => "AI-Proxy",
+            DbType::Cursor => "Cursor",
         }
     }
 }
@@ -152,12 +154,27 @@ pub fn detect_db_type(path: &str) -> Result<DbType, String> {
 }
 
 pub fn create_source_entry(path: &str) -> Result<SourceEntry, String> {
+    let path_obj = Path::new(path);
+    if path_obj.is_dir() && super::cursor_csv::detect_cursor_cache(path) {
+        let id = SOURCE_ID_COUNTER.fetch_add(1, Ordering::Relaxed).to_string();
+        let mut source = Box::new(super::cursor_csv::CursorCsvService::new()) as Box<dyn DataSource>;
+        source.open(path)?;
+        return Ok(SourceEntry {
+            id,
+            path: path.to_string(),
+            db_type: DbType::Cursor,
+            source,
+            enabled: true,
+        });
+    }
+
     let db_type = detect_db_type(path)?;
     let id = SOURCE_ID_COUNTER.fetch_add(1, Ordering::Relaxed).to_string();
     let mut source = match &db_type {
         DbType::ExternalDb => Box::new(super::external_db::ExternalDbService::new()) as Box<dyn DataSource>,
         DbType::OpenCode => Box::new(super::opencode_db::OpenCodeDbService::new()) as Box<dyn DataSource>,
         DbType::AiProxy => Box::new(super::ai_proxy_db::AiProxyDbService::new()) as Box<dyn DataSource>,
+        DbType::Cursor => return Err("Cursor 数据源需使用缓存目录路径".to_string()),
     };
     source.open(path)?;
     Ok(SourceEntry { id, path: path.to_string(), db_type, source, enabled: true })

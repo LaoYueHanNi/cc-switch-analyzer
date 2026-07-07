@@ -52,6 +52,7 @@ where
 
 #[tauri::command]
 pub fn query_summary(params: FilterParams, state: State<AppState>) -> Result<SummaryData, String> {
+    crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
     let records = fetch_deduped_records(&sources, &params)?;
@@ -60,6 +61,7 @@ pub fn query_summary(params: FilterParams, state: State<AppState>) -> Result<Sum
 
 #[tauri::command]
 pub fn query_by_model(params: FilterParams, state: State<AppState>) -> Result<Vec<ModelBreakdown>, String> {
+    crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
     let records = fetch_deduped_records(&sources, &params)?;
@@ -68,6 +70,7 @@ pub fn query_by_model(params: FilterParams, state: State<AppState>) -> Result<Ve
 
 #[tauri::command]
 pub fn query_by_provider(params: FilterParams, state: State<AppState>) -> Result<Vec<ProviderBreakdown>, String> {
+    crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
     let records = fetch_deduped_records(&sources, &params)?;
@@ -77,6 +80,7 @@ pub fn query_by_provider(params: FilterParams, state: State<AppState>) -> Result
 
 #[tauri::command]
 pub fn query_provider_model_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<ProviderModelToken>, String> {
+    crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
     let records = fetch_deduped_records(&sources, &params)?;
@@ -85,6 +89,7 @@ pub fn query_provider_model_tokens(params: FilterParams, state: State<AppState>)
 
 #[tauri::command]
 pub fn query_daily_trend(params: FilterParams, state: State<AppState>) -> Result<Vec<DailyTrendRow>, String> {
+    crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
     let records = fetch_deduped_records(&sources, &params)?;
@@ -94,6 +99,7 @@ pub fn query_daily_trend(params: FilterParams, state: State<AppState>) -> Result
 
 #[tauri::command]
 pub fn query_hourly_trend(params: FilterParams, state: State<AppState>) -> Result<Vec<DailyTrendRow>, String> {
+    crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
     let records = fetch_deduped_records(&sources, &params)?;
@@ -110,6 +116,7 @@ pub fn query_hourly_trend(params: FilterParams, state: State<AppState>) -> Resul
 
 #[tauri::command]
 pub fn query_sessions(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionBreakdown>, String> {
+    crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
     let records = fetch_deduped_records(&sources, &params)?;
@@ -118,6 +125,7 @@ pub fn query_sessions(params: FilterParams, state: State<AppState>) -> Result<Ve
 
 #[tauri::command]
 pub fn query_session_model_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionModelToken>, String> {
+    crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
     let records = fetch_deduped_records(&sources, &params)?;
@@ -149,6 +157,7 @@ pub fn query_session_request_tokens(params: FilterParams, state: State<AppState>
         }
     }
     // 缓存为空，回退到全量并行查询 + 去重
+    crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
     let all: Vec<Vec<SessionRequestToken>> = parallel_query(&sources, params.clone(), "session_request_tokens", |e, p| e.source.get_session_request_tokens(p));
@@ -157,6 +166,7 @@ pub fn query_session_request_tokens(params: FilterParams, state: State<AppState>
 
 #[tauri::command]
 pub fn query_session_timestamps(session_ids: Vec<String>, state: State<AppState>) -> Result<HashMap<String, Vec<i64>>, String> {
+    crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
     let all_maps: Vec<HashMap<String, Vec<i64>>> = {
@@ -186,6 +196,7 @@ pub fn query_session_timestamps(session_ids: Vec<String>, state: State<AppState>
 
 #[tauri::command]
 pub fn query_realtime(state: State<AppState>) -> Result<Vec<RealtimeBucket>, String> {
+    crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
     let results: Vec<Vec<RealtimeBucket>> = parallel_query(&sources, (), "realtime", |e, _| e.source.get_minute_level_token_trend());
@@ -194,6 +205,7 @@ pub fn query_realtime(state: State<AppState>) -> Result<Vec<RealtimeBucket>, Str
 
 #[tauri::command]
 pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result<Vec<RealtimeRequestLog>, String> {
+    crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
     let all_raw = run_streaming_dedup(&sources, since);
@@ -330,6 +342,7 @@ pub fn compute_precompute(
 pub fn query_precompute(params: FilterParams, state: State<AppState>) -> Result<PrecomputeQueryResult, String> {
     log::debug!("[QUERY] query_precompute: params={:?}", params);
 
+    crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
@@ -352,7 +365,8 @@ pub fn query_sessions_with_cost(
 ) -> Result<SessionsResponse, String> {
     // 第一轮：只查 session_breakdown
     let (all_sessions, session_sources) = {
-        let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+        crate::commands::cursor::sync_and_reload_if_needed(&state)?;
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
         require_sources!(sources);
 
         let session_lists: Vec<Vec<SessionBreakdown>> = std::thread::scope(|s| {
@@ -424,7 +438,8 @@ pub fn query_sessions_with_cost(
 
     // 第二轮 + 第三轮：只处理过滤后的 top 20
     let (session_request_tokens, session_model_tokens, max_context_widths, timestamps_map) = {
-        let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+        crate::commands::cursor::sync_and_reload_if_needed(&state)?;
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
         require_sources!(sources);
 
         let detail_data: Vec<_> = std::thread::scope(|s| {
@@ -545,6 +560,7 @@ pub fn query_session_project_groups(
     params: FilterParams,
     state: State<AppState>,
 ) -> Result<Vec<ProjectGroupStats>, String> {
+    crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
 
@@ -644,6 +660,7 @@ pub fn query_project_session_details(
 ) -> Result<Vec<ProjectSessionDetail>, String> {
     if session_ids.is_empty() { return Ok(vec![]); }
 
+    crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
 

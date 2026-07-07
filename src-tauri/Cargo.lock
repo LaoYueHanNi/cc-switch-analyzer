@@ -538,7 +538,7 @@ dependencies = [
 
 [[package]]
 name = "cc-switch-analyzer"
-version = "0.7.20"
+version = "0.7.21"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -552,6 +552,7 @@ dependencies = [
  "tauri-plugin-log",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tempfile",
  "ureq",
 ]
 

@@ -2,16 +2,52 @@
   <n-modal :show="show" @update:show="$emit('update:show', $event)" preset="card" title="数据源管理" size="small" style="max-width: 500px">
     <div class="source-list">
       <div class="source-item" v-for="slot in slots" :key="slot.key">
-        <n-switch size="small" :value="slot.enabled" :disabled="!slot.path" @update:value="onToggle(slot)" />
-        <button class="source-type" :class="slot.key" @click="onSelect(slot.key)">
-          {{ slot.label }}
-        </button>
-        <span class="source-path" :title="slot.path || ''">{{ slot.path || '未选择' }}</span>
-        <button v-if="slot.path" class="remove-btn" @click="onRemove(slot.key)" title="移除">
-          <n-icon size="12"><close-outline /></n-icon>
-        </button>
+        <template v-if="slot.key === 'cursor'">
+          <n-switch size="small" :value="slot.enabled" :disabled="!cursorStatus.loggedIn" @update:value="onToggle(slot)" />
+          <button v-if="!cursorStatus.loggedIn" class="source-type cursor" @click="showLoginDialog = true">
+            登录 Cursor
+          </button>
+          <button v-else class="source-type cursor" @click="onCursorSync" :disabled="cursorSyncing">
+            {{ cursorSyncing ? '同步中...' : 'Cursor' }}
+          </button>
+          <span class="source-path" :title="cursorStatusText">{{ cursorStatusText }}</span>
+          <button v-if="cursorStatus.loggedIn" class="sync-btn" @click="onCursorSync" :disabled="cursorSyncing" title="立即同步">
+            ↻
+          </button>
+          <button v-if="cursorStatus.loggedIn" class="remove-btn" @click="onCursorLogout" title="退出登录">
+            <n-icon size="12"><close-outline /></n-icon>
+          </button>
+        </template>
+        <template v-else>
+          <n-switch size="small" :value="slot.enabled" :disabled="!slot.path" @update:value="onToggle(slot)" />
+          <button class="source-type" :class="slot.key" @click="onSelect(slot.key)">
+            {{ slot.label }}
+          </button>
+          <span class="source-path" :title="slot.path || ''">{{ slot.path || '未选择' }}</span>
+          <button v-if="slot.path" class="remove-btn" @click="onRemove(slot.key)" title="移除">
+            <n-icon size="12"><close-outline /></n-icon>
+          </button>
+        </template>
       </div>
     </div>
+
+    <n-modal v-model:show="showLoginDialog" preset="card" title="登录 Cursor" size="small" style="max-width: 420px">
+      <p class="login-hint">
+        在浏览器打开 cursor.com 并登录，从 DevTools → Application → Cookies 复制
+        <code>WorkosCursorSessionToken</code> 的值粘贴到下方。
+      </p>
+      <n-input
+        v-model:value="sessionToken"
+        type="textarea"
+        placeholder="粘贴 WorkosCursorSessionToken"
+        :rows="3"
+      />
+      <div class="login-actions">
+        <n-button size="small" :loading="loginLoading" :disabled="!sessionToken.trim()" @click="onCursorLogin">
+          登录并同步
+        </n-button>
+      </div>
+    </n-modal>
 
     <!-- TrafficMonitor 插件管理 -->
     <n-divider style="margin: 12px 0 8px" />
@@ -64,8 +100,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { NModal, NIcon, NButton, NSwitch, NDivider } from 'naive-ui'
+import { computed, ref, onMounted } from 'vue'
+import { NModal, NIcon, NButton, NSwitch, NDivider, NInput } from 'naive-ui'
 import { CloseOutline } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
 import { getVersion } from '@tauri-apps/api/app'
@@ -83,8 +119,86 @@ const currentVersion = ref('')
 getVersion().then(v => currentVersion.value = v).catch(() => {})
 const { addDatabase, removeDatabase, refreshAfterToggle } = useDatabase()
 
-interface DefaultPaths { ccSwitch: string | null; opencode: string | null; aiProxy: string | null }
-const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null })
+interface DefaultPaths { ccSwitch: string | null; opencode: string | null; aiProxy: string | null; cursor: string | null }
+const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null, cursor: null })
+
+interface CursorStatus {
+  loggedIn: boolean
+  lastSync: number | null
+  recordCount: number
+  cachePath: string | null
+}
+
+const cursorStatus = ref<CursorStatus>({ loggedIn: false, lastSync: null, recordCount: 0, cachePath: null })
+const showLoginDialog = ref(false)
+const sessionToken = ref('')
+const loginLoading = ref(false)
+const cursorSyncing = ref(false)
+
+const cursorStatusText = computed(() => {
+  if (!cursorStatus.value.loggedIn) return '未登录'
+  const parts: string[] = []
+  if (cursorStatus.value.recordCount > 0) {
+    parts.push(`${cursorStatus.value.recordCount} 条记录`)
+  }
+  if (cursorStatus.value.lastSync) {
+    const d = new Date(cursorStatus.value.lastSync * 1000)
+    parts.push(`同步于 ${d.toLocaleString()}`)
+  }
+  return parts.join(' · ') || '已登录'
+})
+
+async function loadCursorStatus(): Promise<void> {
+  try {
+    cursorStatus.value = await invoke<CursorStatus>('cursor_status')
+  } catch { /* ignore */ }
+}
+
+async function onCursorLogin(): Promise<void> {
+  const token = sessionToken.value.trim()
+  if (!token) return
+  loginLoading.value = true
+  try {
+    const sources = await invoke<typeof dbStore.sources>('cursor_login', { sessionToken: token })
+    dbStore.setSources(sources)
+    showLoginDialog.value = false
+    sessionToken.value = ''
+    await loadCursorStatus()
+    await refreshAfterToggle()
+  } catch (e) {
+    console.error('[cursor] login failed:', e)
+  } finally {
+    loginLoading.value = false
+  }
+}
+
+async function onCursorSync(): Promise<void> {
+  cursorSyncing.value = true
+  try {
+    await invoke('cursor_sync')
+    const sources = await platformAdapter.listDatabases()
+    dbStore.setSources(sources)
+    await loadCursorStatus()
+    await refreshAfterToggle()
+  } catch (e) {
+    console.error('[cursor] sync failed:', e)
+  } finally {
+    cursorSyncing.value = false
+  }
+}
+
+async function onCursorLogout(): Promise<void> {
+  try {
+    const sources = await invoke<typeof dbStore.sources>('cursor_logout', { clearCache: false })
+    dbStore.setSources(sources)
+    await loadCursorStatus()
+    await refreshAfterToggle()
+  } catch { /* ignore */ }
+}
+
+onMounted(() => {
+  loadCursorStatus()
+})
 
 async function loadDefaultPaths(): Promise<void> {
   try {
@@ -117,6 +231,14 @@ const slots = computed(() => [
     defaultPath: defaultPaths.value.aiProxy,
     sourceId: dbStore.sources.find(s => s.dbType === 'AI-Proxy')?.id || '',
     enabled: dbStore.sources.find(s => s.dbType === 'AI-Proxy')?.enabled ?? true,
+  },
+  {
+    key: 'cursor',
+    label: 'Cursor',
+    path: dbStore.sources.find(s => s.dbType === 'Cursor')?.path || cursorStatus.value.cachePath || '',
+    defaultPath: defaultPaths.value.cursor,
+    sourceId: dbStore.sources.find(s => s.dbType === 'Cursor')?.id || '',
+    enabled: dbStore.sources.find(s => s.dbType === 'Cursor')?.enabled ?? true,
   },
 ])
 
@@ -240,6 +362,64 @@ async function toggleService(enabled: boolean): Promise<void> {
 
 .source-type.ai-proxy:hover {
   opacity: 0.85;
+}
+
+.source-type.cursor {
+  background: #6c5ce7;
+  color: #fff;
+}
+
+.source-type.cursor:hover {
+  opacity: 0.85;
+}
+
+.source-type.cursor:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.sync-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.sync-btn:hover:not(:disabled) {
+  background: var(--border-light);
+  color: var(--text-primary);
+}
+
+.sync-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.login-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0 0 10px;
+}
+
+.login-hint code {
+  font-size: 11px;
+  background: var(--border-light);
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+.login-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 
 .source-path {

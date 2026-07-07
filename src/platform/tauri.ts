@@ -217,6 +217,19 @@ export const platformAdapter: PlatformAdapter = {
   async resumeCodexSession(sessionId: string, projectDir?: string): Promise<void> {
     return invoke<void>('resume_codex_session', { sessionId, projectDir: projectDir || null })
   },
+  // Cursor 数据源
+  async cursorLogin(sessionToken: string): Promise<SourceInfo[]> {
+    return invoke<SourceInfo[]>('cursor_login', { sessionToken })
+  },
+  async cursorSync(): Promise<{ synced: boolean; rows: number; error?: string }> {
+    return invoke('cursor_sync')
+  },
+  async cursorStatus(): Promise<{ loggedIn: boolean; lastSync: number | null; recordCount: number; cachePath: string | null }> {
+    return invoke('cursor_status')
+  },
+  async cursorLogout(clearCache = false): Promise<SourceInfo[]> {
+    return invoke<SourceInfo[]>('cursor_logout', { clearCache })
+  },
   // 任务管理
   async listTasks(): Promise<TaskWithStats[]> {
     return invoke<TaskWithStats[]>('list_tasks')

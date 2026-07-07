@@ -47,6 +47,11 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
         {
             defaults.push(p);
         }
+        if cursor_should_auto_load() {
+            if let Ok(dir) = crate::utils::get_cursor_cache_dir() {
+                defaults.push(dir.to_string_lossy().to_string());
+            }
+        }
         if !defaults.is_empty() {
             return auto_load_paths(&state, defaults);
         }
@@ -74,6 +79,21 @@ fn auto_load_paths(state: &State<AppState>, paths: Vec<String>) -> Result<Vec<So
                 sources.push(entry);
             }
             Err(e) => log::error!("[DB] 加载失败 {}: {}", path, e),
+        }
+    }
+
+    if cursor_should_auto_load()
+        && !sources.iter().any(|s| matches!(s.db_type, crate::services::data_source::DbType::Cursor))
+    {
+        if let Ok(dir) = crate::utils::get_cursor_cache_dir() {
+            let cache_str = dir.to_string_lossy().to_string();
+            match create_source_entry(&cache_str) {
+                Ok(entry) => {
+                    log::info!("[DB] 自动加载 Cursor: {}", cache_str);
+                    sources.push(entry);
+                }
+                Err(e) => log::error!("[DB] Cursor 加载失败: {}", e),
+            }
         }
     }
 
@@ -175,6 +195,8 @@ pub fn list_databases(state: State<AppState>) -> Result<Vec<SourceInfo>, String>
 
 #[tauri::command]
 pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String> {
+    let _ = crate::commands::cursor::sync_and_reload_if_needed(&state);
+
     // Phase 1: 快速检查文件 mtime，无变化则直接返回
     {
         let sources = state.data_sources.read().map_err(|e| e.to_string())?;
@@ -185,8 +207,7 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         let mut mtimes = state.db_file_mtimes.lock().map_err(|e| e.to_string())?;
         let mut any_changed = false;
         for entry in sources.iter() {
-            let mtime = std::fs::metadata(&entry.path)
-                .ok()
+            let mtime = source_mtime(&entry.path, &entry.db_type)
                 .and_then(|m| m.modified().ok());
             let prev = mtimes.get(&entry.path).copied();
             if mtime != prev {
@@ -306,6 +327,10 @@ fn refresh_pricing(state: &State<AppState>) -> Result<(), String> {
 }
 
 fn save_paths(state: &State<AppState>, info: &[SourceInfo]) {
+    save_paths_public(state, info);
+}
+
+pub fn save_paths_public(state: &State<AppState>, info: &[SourceInfo]) {
     let paths: Vec<&str> = info.iter().map(|s| s.path.as_str()).collect();
     if let Ok(json) = serde_json::to_string(&paths) {
         if let Ok(app_db) = state.app_db.lock() {
@@ -355,6 +380,7 @@ pub struct DefaultPaths {
     pub cc_switch: Option<String>,
     pub opencode: Option<String>,
     pub ai_proxy: Option<String>,
+    pub cursor: Option<String>,
 }
 
 #[tauri::command]
@@ -365,7 +391,27 @@ pub fn get_default_paths() -> Result<DefaultPaths, String> {
         .map(|p| best_default_path(&p));
     let ai_proxy = crate::utils::get_default_ai_proxy_db_path().ok()
         .map(|p| best_default_path(&p));
-    Ok(DefaultPaths { cc_switch, opencode, ai_proxy })
+    let cursor = crate::utils::get_cursor_cache_dir().ok()
+        .map(|p| p.to_string_lossy().to_string());
+    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor })
+}
+
+fn cursor_should_auto_load() -> bool {
+    crate::services::cursor_sync::is_logged_in()
+        && crate::utils::get_cursor_usage_csv_path()
+            .map(|p| p.exists())
+            .unwrap_or(false)
+}
+
+fn source_mtime(path: &str, db_type: &crate::services::data_source::DbType) -> Option<std::fs::Metadata> {
+    use crate::services::data_source::DbType;
+    match db_type {
+        DbType::Cursor => {
+            let csv = std::path::Path::new(path).join("usage.csv");
+            std::fs::metadata(csv).ok()
+        }
+        _ => std::fs::metadata(path).ok(),
+    }
 }
 
 /// 为文件选择对话框选择最佳默认路径：

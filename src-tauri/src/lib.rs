@@ -173,6 +173,11 @@ pub fn run() {
             commands::database::refresh_database,
             commands::database::get_filter_options,
             commands::database::get_default_paths,
+            // Cursor 数据源
+            commands::cursor::cursor_login,
+            commands::cursor::cursor_sync,
+            commands::cursor::cursor_status,
+            commands::cursor::cursor_logout,
             // 数据查询
             commands::query::query_summary,
             commands::query::query_by_model,
