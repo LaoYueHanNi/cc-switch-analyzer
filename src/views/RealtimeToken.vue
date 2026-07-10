@@ -156,11 +156,6 @@ function toggleGroup(sessionId: string): void {
   else next.add(sessionId)
   collapsedSessions.value = next
 }
-  const next = new Set(collapsedSessions.value)
-  if (next.has(sessionId)) next.delete(sessionId)
-  else next.add(sessionId)
-  collapsedSessions.value = next
-}
 
 function groupHasNew(group: SessionGroup): boolean {
   return group.rows.some(r => r.isNew)
