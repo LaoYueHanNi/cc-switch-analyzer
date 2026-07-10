@@ -1,6 +1,22 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-07-10",
+    "commits": [
+      {
+        "hash": "8894b9f",
+        "subject": "feat(pricing): 定价 Tab 按模型家族分组展示并透传云端 families",
+        "date": "2026-07-10"
+      },
+      {
+        "hash": "07135dc",
+        "subject": "fix: 修复定价与查询并发问题并优化前端架构",
+        "date": "2026-07-07"
+      }
+    ]
+  },
+  {
+    "version": "0.7.23",
     "date": "2026-07-07",
     "commits": [
       {
