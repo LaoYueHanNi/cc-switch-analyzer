@@ -4,6 +4,22 @@
     "date": "2026-07-10",
     "commits": [
       {
+        "hash": "d81f0a3",
+        "subject": "fix: 移除 RealtimeToken toggleGroup 重复代码修复构建失败",
+        "date": "2026-07-10"
+      },
+      {
+        "hash": "e64f369",
+        "subject": "fix: 同步 pnpm-lock.yaml 与 package.json",
+        "date": "2026-07-10"
+      }
+    ]
+  },
+  {
+    "version": "0.7.24",
+    "date": "2026-07-10",
+    "commits": [
+      {
         "hash": "8894b9f",
         "subject": "feat(pricing): 定价 Tab 按模型家族分组展示并透传云端 families",
         "date": "2026-07-10"

@@ -24,11 +24,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          if ! gh release view "$TAG" > /dev/null 2>&1; then
-            NOTES=$(git log -1 --format=%b HEAD)
-            # 注意:不要加 --verify-tag(我们的 tag 是 lightweight,没有 GPG 签名,
-            # --verify-tag 会失败并 fallback 到 draft,导致 updater 看不到 release)
-            gh release create "$TAG" --title "$TAG" --notes "$NOTES"
+          TARGET="$(git rev-parse HEAD)"
+          NOTES=$(git log -1 --format=%b HEAD)
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # 重打 tag 后 release 可能变 draft，强制发布并指向当前 commit
+            gh release edit "$TAG" --draft=false --target "$TARGET" --notes "$NOTES"
+          else
+            gh release create "$TAG" --title "$TAG" --notes "$NOTES" --target "$TARGET"
           fi
 
   build-windows:
