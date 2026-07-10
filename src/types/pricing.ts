@@ -1,5 +1,10 @@
 // 定价类型定义
 
+export interface PricingFamily {
+  id: string
+  label: string
+}
+
 export interface ContextTier {
   id?: number                     // 时间规则档位行 ID（仅时间规则下的 tier 有）
   threshold: number               // 上下文大小边界（tokens）
@@ -76,6 +81,7 @@ export interface PricingData {
   aliases: string[]
   userAliases: string[]
   noCacheSupport?: boolean
+  family?: string
 }
 
 export interface TokenDimensions {

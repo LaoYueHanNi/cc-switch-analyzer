@@ -4,6 +4,16 @@
     <div class="pricing-toolbar">
       <div class="toolbar-row">
         <div class="filter-group">
+          <span class="filter-label">家族</span>
+          <CompactSelect
+            :model-value="searchFamily"
+            :options="familyOptions"
+            clearable
+            placeholder="全部"
+            @update:model-value="searchFamily = $event"
+          />
+        </div>
+        <div class="filter-group">
           <span class="filter-label">模型</span>
           <CompactSelect
             :model-value="searchModel"
@@ -36,58 +46,67 @@
       </div>
     </div>
 
-    <!-- 已使用模型 -->
-    <div class="pricing-section">
-      <div class="section-title">已使用模型</div>
-      <div class="pricing-grid">
-        <PricingCard
-          v-for="card in usedCards"
-          :key="card.modelId"
-          :pricing="card"
-          :model-name="card.modelId"
-          :computed-cost="card.computedCost"
-          :is-override="card?.isOverride || false"
-          :time-rules="card?.timeRules || []"
-          :cloud-time-rules="card?.cloudTimeRules || []"
-          :context-tiers="card?.contextTiers || []"
-          :sim-tokens="simTokens"
-          :aliases="card.aliases || []"
-          @edit="onOpenEditDialog(card)"
-          @add-time-rule="onAddTimeRule(card.modelId)"
-          @edit-time-rule="(rule) => onEditTimeRule(rule)"
-          @delete-time-rule="(rule) => onDeleteTimeRule(rule)"
-          @view-time-rule="(rule) => onViewTimeRule(rule)"
-          @manage-aliases="onManageAliases(card)"
-        />
-      </div>
-    </div>
+    <div
+      v-for="group in familyGroups"
+      :key="group.family.id"
+      class="pricing-family-section"
+    >
+      <div class="family-title">{{ group.family.label }}</div>
 
-    <!-- 未使用模型（折叠） -->
-    <div class="pricing-section">
-      <div class="section-title collapsible" @click="showUnused = !showUnused">
-        <span class="chevron">{{ showUnused ? '▴' : '▾' }}</span>
-        未使用模型 ({{ unusedCards.length }})
+      <div v-if="group.used.length > 0" class="pricing-section">
+        <div class="section-title subsection-title">已使用模型</div>
+        <div class="pricing-grid">
+          <PricingCard
+            v-for="card in group.used"
+            :key="card.modelId"
+            :pricing="card"
+            :model-name="card.modelId"
+            :computed-cost="card.computedCost"
+            :is-override="card?.isOverride || false"
+            :time-rules="card?.timeRules || []"
+            :cloud-time-rules="card?.cloudTimeRules || []"
+            :context-tiers="card?.contextTiers || []"
+            :sim-tokens="simTokens"
+            :aliases="card.aliases || []"
+            @edit="onOpenEditDialog(card)"
+            @add-time-rule="onAddTimeRule(card.modelId)"
+            @edit-time-rule="(rule) => onEditTimeRule(rule)"
+            @delete-time-rule="(rule) => onDeleteTimeRule(rule)"
+            @view-time-rule="(rule) => onViewTimeRule(rule)"
+            @manage-aliases="onManageAliases(card)"
+          />
+        </div>
       </div>
-      <div v-if="showUnused" class="pricing-grid">
-        <PricingCard
-          v-for="card in unusedCards"
-          :key="card.modelId"
-          :pricing="card"
-          :model-name="card.modelId"
-          :computed-cost="card.computedCost"
-          :is-override="card?.isOverride || false"
-          :time-rules="card?.timeRules || []"
-          :cloud-time-rules="card?.cloudTimeRules || []"
-          :context-tiers="card?.contextTiers || []"
-          :sim-tokens="simTokens"
-          :aliases="card.aliases || []"
-          @edit="onOpenEditDialog(card)"
-          @add-time-rule="onAddTimeRule(card.modelId)"
-          @edit-time-rule="(rule) => onEditTimeRule(rule)"
-          @delete-time-rule="(rule) => onDeleteTimeRule(rule)"
-          @view-time-rule="(rule) => onViewTimeRule(rule)"
-          @manage-aliases="onManageAliases(card)"
-        />
+
+      <div v-if="group.unused.length > 0" class="pricing-section">
+        <div
+          class="section-title subsection-title collapsible"
+          @click="toggleUnusedFamily(group.family.id)"
+        >
+          <span class="chevron">{{ isUnusedExpanded(group.family.id) ? '▴' : '▾' }}</span>
+          未使用模型 ({{ group.unused.length }})
+        </div>
+        <div v-if="isUnusedExpanded(group.family.id)" class="pricing-grid">
+          <PricingCard
+            v-for="card in group.unused"
+            :key="card.modelId"
+            :pricing="card"
+            :model-name="card.modelId"
+            :computed-cost="card.computedCost"
+            :is-override="card?.isOverride || false"
+            :time-rules="card?.timeRules || []"
+            :cloud-time-rules="card?.cloudTimeRules || []"
+            :context-tiers="card?.contextTiers || []"
+            :sim-tokens="simTokens"
+            :aliases="card.aliases || []"
+            @edit="onOpenEditDialog(card)"
+            @add-time-rule="onAddTimeRule(card.modelId)"
+            @edit-time-rule="(rule) => onEditTimeRule(rule)"
+            @delete-time-rule="(rule) => onDeleteTimeRule(rule)"
+            @view-time-rule="(rule) => onViewTimeRule(rule)"
+            @manage-aliases="onManageAliases(card)"
+          />
+        </div>
       </div>
     </div>
 
@@ -138,7 +157,7 @@ import PricingEditDialog from '@/components/pricing/PricingEditDialog.vue'
 import TimePricingDialog from '@/components/pricing/TimePricingDialog.vue'
 import AliasDialog from '@/components/pricing/AliasDialog.vue'
 import { getActiveRate } from '@/utils/pricing'
-import type { PricingData, TimePricingRule, CloudPricingTimeRule, ContextTier } from '@/types/pricing'
+import type { PricingData, PricingFamily, TimePricingRule, CloudPricingTimeRule, ContextTier } from '@/types/pricing'
 import { epochToDateStr } from '@/utils/format'
 
 const dbStore = useDatabaseStore()
@@ -146,11 +165,21 @@ const pricingStore = usePricingStore()
 const message = useMessage()
 
 const searchModel = ref('')
+const searchFamily = ref('')
 const simInput = ref(1)
 const simCacheRead = ref(70)
 const simOutput = ref(1)
 const simCacheCreation = ref(0)
-const showUnused = ref(false)
+const expandedUnusedFamilies = ref<Set<string>>(new Set())
+
+const OTHER_FAMILY: PricingFamily = { id: 'other', label: '其他' }
+/** 已合并/废弃的 family id，不再出现在筛选与分组列表 */
+const DEPRECATED_FAMILY_IDS = new Set(['cursor', 'grok', 'composer'])
+const LEGACY_FAMILY_MAP: Record<string, string> = {
+  grok: 'spacex-ai',
+  composer: 'spacex-ai',
+  cursor: 'gpt'
+}
 
 // 编辑定价弹窗
 const showEditDialog = ref(false)
@@ -243,12 +272,59 @@ const simTokens = computed(() => ({
   cacheCreation: debouncedCacheCreation.value * 1000
 }))
 
-// 模型选项
-const modelOptions = computed(() =>
-  pricingStore.pricingData.map(p => ({
-    label: p.modelId,
-    value: p.modelId
+// 家族列表（含兜底「其他」，过滤已废弃 id）
+const effectiveFamilies = computed<PricingFamily[]>(() => {
+  const raw = pricingStore.families.length > 0 ? pricingStore.families : [OTHER_FAMILY]
+  const list = raw.filter(f => !DEPRECATED_FAMILY_IDS.has(f.id))
+  if (list.some(f => f.id === 'other')) return list
+  return [...list, OTHER_FAMILY]
+})
+
+watch(effectiveFamilies, () => {
+  if (searchFamily.value && DEPRECATED_FAMILY_IDS.has(searchFamily.value)) {
+    searchFamily.value = ''
+  }
+})
+
+const familyOptions = computed(() =>
+  effectiveFamilies.value.map(f => ({
+    label: f.label,
+    value: f.id
   }))
+)
+
+function resolveFamilyId(p: PricingData): string {
+  const fam = p.family?.trim()
+  if (!fam) return 'other'
+  const mapped = LEGACY_FAMILY_MAP[fam] ?? fam
+  return effectiveFamilies.value.some(f => f.id === mapped) ? mapped : 'other'
+}
+
+function matchesModelFilter(p: PricingData): boolean {
+  if (!searchModel.value) return true
+  return p.modelId.includes(searchModel.value)
+    || (p.aliases?.some(a => a.includes(searchModel.value)) ?? false)
+}
+
+function isUnusedExpanded(familyId: string): boolean {
+  return expandedUnusedFamilies.value.has(familyId)
+}
+
+function toggleUnusedFamily(familyId: string): void {
+  const next = new Set(expandedUnusedFamilies.value)
+  if (next.has(familyId)) next.delete(familyId)
+  else next.add(familyId)
+  expandedUnusedFamilies.value = next
+}
+
+// 模型选项（受家族筛选约束）
+const modelOptions = computed(() =>
+  pricingStore.pricingData
+    .filter(p => !searchFamily.value || resolveFamilyId(p) === searchFamily.value)
+    .map(p => ({
+      label: p.modelId,
+      value: p.modelId
+    }))
 )
 
 // 卡片数据（含模拟费用计算）
@@ -261,7 +337,8 @@ const allCards = computed<CardEntry[]>(() => {
   const st = simTokens.value
   const contextSize = st.input + st.cacheRead
   return pricingStore.pricingData
-    .filter(p => !searchModel.value || p.modelId.includes(searchModel.value) || (p.aliases && p.aliases.some((a: string) => a.includes(searchModel.value))))
+    .filter(p => matchesModelFilter(p))
+    .filter(p => !searchFamily.value || resolveFamilyId(p) === searchFamily.value)
     .map(p => {
       const rates = getActiveRate(p, contextSize)
       const cost = rates.inputRate * st.input / 1_000_000
@@ -277,8 +354,28 @@ const allCards = computed<CardEntry[]>(() => {
     .sort((a, b) => b.computedCost - a.computedCost)
 })
 
-const usedCards = computed(() => allCards.value.filter(c => c.isUsed))
-const unusedCards = computed(() => allCards.value.filter(c => !c.isUsed))
+interface FamilyGroup {
+  family: PricingFamily
+  used: CardEntry[]
+  unused: CardEntry[]
+}
+
+const familyGroups = computed<FamilyGroup[]>(() => {
+  const familiesToShow = searchFamily.value
+    ? effectiveFamilies.value.filter(f => f.id === searchFamily.value)
+    : effectiveFamilies.value
+
+  return familiesToShow
+    .map(family => {
+      const cards = allCards.value.filter(c => resolveFamilyId(c) === family.id)
+      return {
+        family,
+        used: cards.filter(c => c.isUsed),
+        unused: cards.filter(c => !c.isUsed)
+      }
+    })
+    .filter(g => g.used.length > 0 || g.unused.length > 0)
+})
 
 // 打开编辑弹窗
 function onOpenEditDialog(card: CardEntry): void {
@@ -298,8 +395,12 @@ function onOpenEditDialog(card: CardEntry): void {
 // 加载完整定价数据
 async function loadPricingData(): Promise<void> {
   try {
-    const pricing = await platformAdapter.getAllPricing()
+    const [pricing, families] = await Promise.all([
+      platformAdapter.getAllPricing(),
+      platformAdapter.getPricingFamilies()
+    ])
     pricingStore.pricingData = pricing
+    pricingStore.families = families
   } catch (e) { console.error('加载定价数据失败', e) }
 }
 
@@ -524,6 +625,24 @@ watch(() => dbStore.hasDatabase, async (val) => {
   font-size: 11px;
   color: var(--text-tertiary);
   white-space: nowrap;
+}
+
+.pricing-family-section {
+  margin-bottom: 20px;
+}
+
+.family-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.subsection-title {
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .pricing-section {

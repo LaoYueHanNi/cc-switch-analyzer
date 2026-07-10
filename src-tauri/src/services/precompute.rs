@@ -374,6 +374,7 @@ mod tests {
             version: 1,
             updated_at: 1700000000,
             currency: "RMB".to_string(),
+            families: vec![],
             models: vec![CloudPricingModel {
                 model_id: "claude-sonnet-4".to_string(),
                 input_cost_per_million: 21.0,
@@ -384,6 +385,7 @@ mod tests {
                 time_rules: vec![],
                 aliases: vec![],
                 no_cache_support: false,
+                family: "claude".to_string(),
             }],
         }).unwrap();
         let mut engine = PricingEngine::new();

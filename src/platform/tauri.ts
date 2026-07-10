@@ -6,7 +6,7 @@ import { check } from '@tauri-apps/plugin-updater'
 import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, DefaultPaths, TmServiceStatus } from './types'
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
-import type { PricingData } from '@/types/pricing'
+import type { PricingData, PricingFamily } from '@/types/pricing'
 import type { TaskWithStats, TaskSessionInput } from '@/types/task'
 
 interface TauriFilterParams {
@@ -110,6 +110,9 @@ export const platformAdapter: PlatformAdapter = {
   // 定价
   async getAllPricing(): Promise<PricingData[]> {
     return invoke<PricingData[]>('get_all_pricing')
+  },
+  async getPricingFamilies(): Promise<PricingFamily[]> {
+    return invoke<PricingFamily[]>('get_pricing_families')
   },
   async setPricingOverride(data: PricingOverrideData): Promise<void> {
     return invoke<void>('set_pricing_override', {

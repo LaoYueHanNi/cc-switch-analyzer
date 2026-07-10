@@ -34,6 +34,8 @@ pub struct PricingEngine {
     alias_to_model_id: HashMap<String, String>,
     model_aliases: HashMap<String, Vec<String>>,
     no_cache_models: std::collections::HashSet<String>,
+    model_families: HashMap<String, String>,
+    families: Vec<PricingFamily>,
 }
 
 impl PricingEngine {
@@ -49,6 +51,8 @@ impl PricingEngine {
             alias_to_model_id: HashMap::new(),
             model_aliases: HashMap::new(),
             no_cache_models: std::collections::HashSet::new(),
+            model_families: HashMap::new(),
+            families: Vec::new(),
         }
     }
 
@@ -92,7 +96,9 @@ impl PricingEngine {
     // 刷新全部定价数据
     pub fn refresh(&mut self, app_db: &AppDbService) -> Result<(), String> {
         // 1. 加载云端定价：优先在线拉取，失败则读缓存
-        let (base, cloud_tiers, cloud_time_rules, cloud_aliases, no_cache_models) = self.load_cloud_base(app_db);
+        let (base, cloud_tiers, cloud_time_rules, cloud_aliases, no_cache_models, model_families, families) = self.load_cloud_base(app_db);
+        self.model_families = model_families;
+        self.families = families;
 
         // 2. 先构建云端别名反向映射（统一小写 key），供 merge 和 resolve 使用
         self.alias_to_model_id.clear();
@@ -160,16 +166,17 @@ impl PricingEngine {
     }
 
     /// 从本地缓存加载云端基础定价（无网络请求）
-    fn load_cloud_base(&self, app_db: &AppDbService) -> (Vec<ModelPricing>, HashMap<String, Vec<ContextTier>>, HashMap<String, Vec<CloudPricingTimeRule>>, HashMap<String, Vec<String>>, Vec<String>) {
+    fn load_cloud_base(&self, app_db: &AppDbService) -> (Vec<ModelPricing>, HashMap<String, Vec<ContextTier>>, HashMap<String, Vec<CloudPricingTimeRule>>, HashMap<String, Vec<String>>, Vec<String>, HashMap<String, String>, Vec<PricingFamily>) {
         match app_db.load_cloud_pricing() {
-            Ok((base, tiers, cloud_time_rules, cloud_aliases, no_cache_models)) => {
+            Ok((base, tiers, cloud_time_rules, cloud_aliases, no_cache_models, model_families)) => {
+                let families = app_db.load_cloud_families().unwrap_or_default();
                 let time_rule_count: usize = cloud_time_rules.values().map(|v| v.len()).sum();
                 log::info!("[PRICING] 从缓存加载云端定价: {} 个模型, {} 条时间规则, {} 个无缓存模型", base.len(), time_rule_count, no_cache_models.len());
-                (base, tiers, cloud_time_rules, cloud_aliases, no_cache_models)
+                (base, tiers, cloud_time_rules, cloud_aliases, no_cache_models, model_families, families)
             }
             Err(e) => {
                 log::error!("[PRICING] 读取云端定价缓存失败: {}", e);
-                (Vec::new(), HashMap::new(), HashMap::new(), HashMap::new(), Vec::new())
+                (Vec::new(), HashMap::new(), HashMap::new(), HashMap::new(), Vec::new(), HashMap::new(), Vec::new())
             }
         }
     }
@@ -253,6 +260,18 @@ impl PricingEngine {
 
     pub fn get_no_cache_support(&self, model_id: &str) -> bool {
         self.no_cache_models.contains(model_id)
+    }
+
+    pub fn get_family(&self, model_id: &str) -> String {
+        self.model_families
+            .get(model_id)
+            .cloned()
+            .filter(|f| !f.is_empty())
+            .unwrap_or_else(|| "other".to_string())
+    }
+
+    pub fn get_families(&self) -> &[PricingFamily] {
+        &self.families
     }
 
     // 获取固定合并定价
@@ -502,6 +521,7 @@ mod tests {
             version: 1,
             updated_at: 1700000000,
             currency: "RMB".to_string(),
+            families: vec![],
             models: vec![
                 CloudPricingModel {
                     model_id: "claude-sonnet-4".to_string(),
@@ -520,6 +540,7 @@ mod tests {
                     time_rules: vec![],
                     aliases: vec!["claude-4-sonnet".to_string()],
                     no_cache_support: false,
+                    family: "claude".to_string(),
                 },
                 CloudPricingModel {
                     model_id: "claude-haiku-4".to_string(),
@@ -531,6 +552,7 @@ mod tests {
                     time_rules: vec![],
                     aliases: vec![],
                     no_cache_support: false,
+                    family: "claude".to_string(),
                 },
             ],
         }).unwrap();

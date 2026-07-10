@@ -117,8 +117,12 @@ export function useDatabase() {
 
   async function loadPricing(): Promise<void> {
     try {
-      const pricing = await platformAdapter.getAllPricing()
+      const [pricing, families] = await Promise.all([
+        platformAdapter.getAllPricing(),
+        platformAdapter.getPricingFamilies()
+      ])
       pricingStore.pricingData = pricing
+      pricingStore.families = families
     } catch (err: any) {
       console.error('定价加载失败:', err)
     }

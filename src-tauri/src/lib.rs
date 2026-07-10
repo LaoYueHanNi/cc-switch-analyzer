@@ -210,6 +210,7 @@ pub fn run() {
             commands::session_manager::resume_codex_session,
             // 定价操作
             commands::pricing::get_all_pricing,
+            commands::pricing::get_pricing_families,
             commands::pricing::get_pricing_overrides,
             commands::pricing::set_pricing_override,
             commands::pricing::remove_pricing_override,

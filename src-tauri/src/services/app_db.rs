@@ -72,6 +72,9 @@ impl AppDbService {
             self.backup_before_migration(7)?;
             self.migrate_v8()?;
         }
+        if version < 9 {
+            self.migrate_v9()?;
+        }
 
         Ok(())
     }
@@ -324,6 +327,19 @@ impl AppDbService {
             CREATE INDEX IF NOT EXISTS idx_task_sessions_task ON task_sessions(task_id);"
         ).map_err(|e| format!("迁移 v8 (tasks/task_sessions 表) 失败: {}", e))?;
         self.set_schema_version(8)?;
+        Ok(())
+    }
+
+    fn migrate_v9(&mut self) -> Result<(), String> {
+        let has_family = self.db
+            .prepare("SELECT family FROM cloud_pricing_cache LIMIT 0")
+            .is_ok();
+        if !has_family {
+            self.db.execute_batch(
+                "ALTER TABLE cloud_pricing_cache ADD COLUMN family TEXT NOT NULL DEFAULT '';"
+            ).map_err(|e| format!("迁移 v9 (cloud family) 失败: {}", e))?;
+        }
+        self.set_schema_version(9)?;
         Ok(())
     }
 
@@ -983,8 +999,8 @@ impl AppDbService {
             tx.execute(
                 "INSERT INTO cloud_pricing_cache
                     (model_id, display_name, input_cost_per_million, output_cost_per_million,
-                     cache_read_cost_per_million, cache_creation_cost_per_million, threshold, aliases, no_cache_support)
-                 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                     cache_read_cost_per_million, cache_creation_cost_per_million, threshold, aliases, no_cache_support, family)
+                 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
                 params![
                     model.model_id,
                     model.model_id,
@@ -994,6 +1010,7 @@ impl AppDbService {
                     model.cache_creation_cost_per_million,
                     aliases_str,
                     model.no_cache_support,
+                    model.family,
                 ],
             ).map_err(|e| format!("写入云端定价缓存失败: {}", e))?;
 
@@ -1069,19 +1086,26 @@ impl AppDbService {
             params![data.updated_at.to_string()],
         ).map_err(|e| format!("写入云端定价更新时间失败: {}", e))?;
 
+        let families_json = serde_json::to_string(&data.families)
+            .map_err(|e| format!("序列化 families 失败: {}", e))?;
+        tx.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('cloud_pricing_families', ?, strftime('%s','now'))",
+            params![families_json],
+        ).map_err(|e| format!("写入云端定价 families 失败: {}", e))?;
+
         tx.commit().map_err(|e| format!("提交云端定价缓存失败: {}", e))?;
         Ok(())
     }
 
-    /// 从缓存读取云端定价（返回基础行 + 按模型分组的上下文档位 + 按 model_id 分组的云端时间规则 + 云端别名）
-    pub fn load_cloud_pricing(&self) -> Result<(Vec<ModelPricing>, HashMap<String, Vec<ContextTier>>, HashMap<String, Vec<crate::models::CloudPricingTimeRule>>, HashMap<String, Vec<String>>, Vec<String>), String> {
+    /// 从缓存读取云端定价（返回基础行 + 按模型分组的上下文档位 + 按 model_id 分组的云端时间规则 + 云端别名 + 模型家族）
+    pub fn load_cloud_pricing(&self) -> Result<(Vec<ModelPricing>, HashMap<String, Vec<ContextTier>>, HashMap<String, Vec<crate::models::CloudPricingTimeRule>>, HashMap<String, Vec<String>>, Vec<String>, HashMap<String, String>), String> {
         // 读取基础行 (threshold = 0)
         let mut stmt = self.db
             .prepare(
                 "SELECT model_id,
                         input_cost_per_million, output_cost_per_million,
                         cache_read_cost_per_million, cache_creation_cost_per_million,
-                        aliases, no_cache_support
+                        aliases, no_cache_support, family
                  FROM cloud_pricing_cache WHERE threshold = 0 ORDER BY model_id"
             )
             .map_err(|e| format!("查询云端定价缓存失败: {}", e))?;
@@ -1097,14 +1121,16 @@ impl AppDbService {
                 },
                 row.get::<_, String>("aliases")?,
                 row.get::<_, bool>("no_cache_support")?,
+                row.get::<_, String>("family")?,
             ))
         }).map_err(|e| format!("查询云端定价缓存失败: {}", e))?;
 
         let mut base = Vec::new();
         let mut cloud_aliases: HashMap<String, Vec<String>> = HashMap::new();
         let mut no_cache_models: Vec<String> = Vec::new();
+        let mut model_families: HashMap<String, String> = HashMap::new();
         for row in base_rows {
-            let (pricing, aliases_str, no_cache) = row.map_err(|e| format!("读取云端定价缓存失败: {}", e))?;
+            let (pricing, aliases_str, no_cache, family) = row.map_err(|e| format!("读取云端定价缓存失败: {}", e))?;
             let aliases: Vec<String> = if aliases_str.is_empty() {
                 Vec::new()
             } else {
@@ -1112,6 +1138,9 @@ impl AppDbService {
             };
             cloud_aliases.insert(pricing.model_id.clone(), aliases);
             if no_cache { no_cache_models.push(pricing.model_id.clone()); }
+            if !family.is_empty() {
+                model_families.insert(pricing.model_id.clone(), family);
+            }
             base.push(pricing);
         }
 
@@ -1148,7 +1177,17 @@ impl AppDbService {
         // 读取云端时间规则
         let cloud_time_rules = self.load_cloud_time_rules()?;
 
-        Ok((base, tiers, cloud_time_rules, cloud_aliases, no_cache_models))
+        Ok((base, tiers, cloud_time_rules, cloud_aliases, no_cache_models, model_families))
+    }
+
+    /// 从 settings 读取云端 families 有序列表
+    pub fn load_cloud_families(&self) -> Result<Vec<crate::models::PricingFamily>, String> {
+        match self.get_setting("cloud_pricing_families") {
+            Some(json) if !json.is_empty() => {
+                serde_json::from_str(&json).map_err(|e| format!("解析 cloud_pricing_families 失败: {}", e))
+            }
+            _ => Ok(Vec::new()),
+        }
     }
 
     /// 从缓存读取云端时间规则（按 model_id 分组）
@@ -1314,6 +1353,7 @@ impl AppDbService {
                 threshold INTEGER NOT NULL DEFAULT 0,
                 aliases TEXT NOT NULL DEFAULT '',
                 no_cache_support INTEGER NOT NULL DEFAULT 0,
+                family TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (model_id, threshold)
             );
             CREATE TABLE IF NOT EXISTS cloud_time_rules (
@@ -1359,7 +1399,7 @@ impl AppDbService {
                 FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
             );"
         ).map_err(|e| format!("初始化内存表失败: {}", e))?;
-        self.set_setting("schema_version", "8")?;
+        self.set_setting("schema_version", "9")?;
         Ok(())
     }
 }
@@ -1385,7 +1425,7 @@ mod tests {
     #[test]
     fn test_schema_version() {
         let db = create_db();
-        assert_eq!(db.get_setting("schema_version").unwrap(), "8");
+        assert_eq!(db.get_setting("schema_version").unwrap(), "9");
     }
 
     #[test]
@@ -1470,6 +1510,12 @@ mod tests {
             version: 3,
             updated_at: 1700000000,
             currency: "RMB".to_string(),
+            families: vec![
+                crate::models::PricingFamily {
+                    id: "gpt".to_string(),
+                    label: "GPT".to_string(),
+                },
+            ],
             models: vec![
                 crate::models::CloudPricingModel {
                     model_id: "model-a".to_string(),
@@ -1498,11 +1544,12 @@ mod tests {
                     }],
                     aliases: vec!["model-a-alias".to_string()],
                     no_cache_support: false,
+                    family: "gpt".to_string(),
                 },
             ],
         };
         db.save_cloud_pricing(&data).unwrap();
-        let (base, tiers, cloud_time_rules, _cloud_aliases, _no_cache_models) = db.load_cloud_pricing().unwrap();
+        let (base, tiers, cloud_time_rules, _cloud_aliases, _no_cache_models, model_families) = db.load_cloud_pricing().unwrap();
         assert_eq!(base.len(), 1);
         assert_eq!(base[0].model_id, "model-a");
         assert!(tiers.contains_key("model-a"));
@@ -1511,6 +1558,10 @@ mod tests {
         assert!(cloud_time_rules.contains_key("model-a"));
         assert_eq!(cloud_time_rules["model-a"].len(), 1);
         assert_eq!(cloud_time_rules["model-a"][0].label, "折扣");
+        assert_eq!(model_families.get("model-a").map(|s| s.as_str()), Some("gpt"));
+        let families = db.load_cloud_families().unwrap();
+        assert_eq!(families.len(), 1);
+        assert_eq!(families[0].id, "gpt");
     }
 
     #[test]
@@ -1520,6 +1571,7 @@ mod tests {
             version: 5,
             updated_at: 1700000000,
             currency: "RMB".to_string(),
+            families: vec![],
             models: vec![],
         };
         db.save_cloud_pricing(&data).unwrap();

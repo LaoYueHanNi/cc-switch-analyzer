@@ -48,9 +48,16 @@ pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, Strin
                 aliases: pricing.get_aliases(&p.model_id),
                 user_aliases: user_alias_map.get(&p.model_id).cloned().unwrap_or_default(),
                 no_cache_support: pricing.get_no_cache_support(&p.model_id),
+                family: pricing.get_family(&p.model_id),
             }
         })
         .collect())
+}
+
+#[tauri::command]
+pub fn get_pricing_families(state: State<AppState>) -> Result<Vec<PricingFamily>, String> {
+    let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
+    Ok(pricing.get_families().to_vec())
 }
 
 #[tauri::command]

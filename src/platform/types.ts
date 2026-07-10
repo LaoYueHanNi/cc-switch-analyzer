@@ -1,6 +1,6 @@
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost, SessionModelCostEntry } from '@/types/common'
-import type { PricingData } from '@/types/pricing'
+import type { PricingData, PricingFamily } from '@/types/pricing'
 import type { TaskSessionInput, TaskWithStats, TaskDetail } from '@/types/task'
 
 export interface OpenTaskSessionsResult {
@@ -175,6 +175,7 @@ export interface PlatformAdapter {
   querySessionsWithCost(params: FilterParams, project?: string): Promise<{ sessions: SessionWithCost[]; availableProjects: string[] }>
   // 定价
   getAllPricing(): Promise<PricingData[]>
+  getPricingFamilies(): Promise<PricingFamily[]>
   setPricingOverride(data: PricingOverrideData): Promise<void>
   removePricingOverride(modelId: string): Promise<void>
   addTimePricingRule(data: TimePricingRuleData): Promise<void>

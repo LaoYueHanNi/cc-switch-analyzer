@@ -302,6 +302,8 @@ pub struct PricingData {
     pub user_aliases: Vec<String>,
     #[serde(default)]
     pub no_cache_support: bool,
+    #[serde(default)]
+    pub family: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -425,6 +427,13 @@ pub struct CloudPricingTimeRule {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PricingFamily {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CloudPricingModel {
     pub model_id: String,
     pub input_cost_per_million: f64,
@@ -439,6 +448,8 @@ pub struct CloudPricingModel {
     pub aliases: Vec<String>,
     #[serde(default)]
     pub no_cache_support: bool,
+    #[serde(default)]
+    pub family: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -447,6 +458,8 @@ pub struct CloudPricingData {
     pub version: i64,
     pub updated_at: i64,
     pub currency: String,
+    #[serde(default)]
+    pub families: Vec<PricingFamily>,
     pub models: Vec<CloudPricingModel>,
 }
 

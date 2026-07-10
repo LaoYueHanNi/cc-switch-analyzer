@@ -76,6 +76,26 @@ function toggle() {
   })
 }
 
+let measureCanvas: HTMLCanvasElement | null = null
+
+function measureTextWidth(text: string): number {
+  if (!measureCanvas) measureCanvas = document.createElement('canvas')
+  const ctx = measureCanvas.getContext('2d')
+  if (!ctx) return text.length * 7
+  ctx.font = '600 11px system-ui, -apple-system, "Segoe UI", sans-serif'
+  return ctx.measureText(text).width
+}
+
+function getPanelContentWidth(): number {
+  const labels = filteredOptions.value.map(o => o.label)
+  let maxW = measureTextWidth('搜索...')
+  for (const label of labels) {
+    maxW = Math.max(maxW, measureTextWidth(label))
+  }
+  const scrollbar = labels.length > 7 ? 12 : 0
+  return maxW + 16 + scrollbar
+}
+
 function positionPanel() {
   const el = triggerRef.value
   if (!el) return
@@ -85,9 +105,9 @@ function positionPanel() {
   const max_y = window.innerHeight / zoom - 8
   let x = rect.left / zoom
   let y = (rect.bottom + 2) / zoom
-  // panel 宽度与 trigger 对齐,至少 80px(保证搜索框可用)
   const tw = rect.width / zoom
-  const pw = Math.max(tw, 80)
+  const contentW = getPanelContentWidth()
+  const pw = Math.min(Math.max(tw, contentW, 80), 420, max_x - x)
   const ph = Math.min(filteredOptions.value.length * 22 + 28, 220)
   if (x + pw > max_x) x = Math.max(8, max_x - pw)
   if (y + ph > max_y) y = Math.max(8, rect.top / zoom - ph - 2)
