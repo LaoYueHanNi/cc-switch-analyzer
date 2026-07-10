@@ -17,6 +17,9 @@ importers:
       '@tauri-apps/plugin-updater':
         specifier: ^2.10.1
         version: 2.10.1
+      '@vicons/ionicons5':
+        specifier: ^0.12.0
+        version: 0.12.0
       echarts:
         specifier: ^5.5.0
         version: 5.6.0
@@ -29,9 +32,6 @@ importers:
       vue:
         specifier: ^3.4.0
         version: 3.5.34(typescript@5.9.3)
-      vue-echarts:
-        specifier: ^7.0.0
-        version: 7.0.3(@vue/runtime-core@3.5.34)(echarts@5.6.0)(vue@3.5.34(typescript@5.9.3))
       vue-router:
         specifier: ^4.3.0
         version: 4.6.4(vue@3.5.34(typescript@5.9.3))
@@ -39,15 +39,9 @@ importers:
       '@tauri-apps/cli':
         specifier: ^2
         version: 2.11.2
-      '@vicons/ionicons5':
-        specifier: ^0.12.0
-        version: 0.12.0
       '@vitejs/plugin-vue':
         specifier: ^5.0.0
         version: 5.2.4(vite@5.4.21)(vue@3.5.34(typescript@5.9.3))
-      sql.js:
-        specifier: ^1.14.1
-        version: 1.14.1
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -739,9 +733,6 @@ packages:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
     engines: {node: '>=0.10.0'}
 
-  sql.js@1.14.1:
-    resolution: {integrity: sha512-gcj8zBWU5cFsi9WUP+4bFNXAyF1iRpA3LLyS/DP5xlrNzGmPIizUeBggKa8DbDwdqaKwUcTEnChtd2grWo/x/A==}
-
   stackback@0.0.2:
     resolution: {integrity: sha512-1XMJE5fQo1jGH6Y/7ebnwPOBEkIEnT4QF32d5R1+VXdXveM0IBMJt8zfaxX1P3QhVwrYe+576+jkANtSS2mBbw==}
 
@@ -851,17 +842,6 @@ packages:
   vscode-uri@3.1.0:
     resolution: {integrity: sha512-/BpdSx+yCQGnCvecbyXdxHDkuk55/G3xwnC0GqY4gmQ3j+A+g8kzzgB4Nk/SINjqn6+waqw3EgbVF2QKExkRxQ==}
 
-  vue-demi@0.13.11:
-    resolution: {integrity: sha512-IR8HoEEGM65YY3ZJYAjMlKygDQn25D5ajNFNoKh9RSDMQtlzCxtfQjdQgv9jjK+m3377SsJXY8ysq8kLCZL25A==}
-    engines: {node: '>=12'}
-    hasBin: true
-    peerDependencies:
-      '@vue/composition-api': ^1.0.0-rc.1
-      vue: ^3.0.0-0 || ^2.6.0
-    peerDependenciesMeta:
-      '@vue/composition-api':
-        optional: true
-
   vue-demi@0.14.10:
     resolution: {integrity: sha512-nMZBOwuzabUO0nLgIcc6rycZEebF6eeUfaiQx9+WSk8e29IbLvPU9feI6tqW4kTo3hvoYAJkMh8n8D0fuISphg==}
     engines: {node: '>=12'}
@@ -871,16 +851,6 @@ packages:
       vue: ^3.0.0-0 || ^2.6.0
     peerDependenciesMeta:
       '@vue/composition-api':
-        optional: true
-
-  vue-echarts@7.0.3:
-    resolution: {integrity: sha512-/jSxNwOsw5+dYAUcwSfkLwKPuzTQ0Cepz1LxCOpj2QcHrrmUa/Ql0eQqMmc1rTPQVrh2JQ29n2dhq75ZcHvRDw==}
-    peerDependencies:
-      '@vue/runtime-core': ^3.0.0
-      echarts: ^5.5.1
-      vue: ^2.7.0 || ^3.1.1
-    peerDependenciesMeta:
-      '@vue/runtime-core':
         optional: true
 
   vue-router@4.6.4:
@@ -1490,8 +1460,6 @@ snapshots:
 
   source-map-js@1.2.1: {}
 
-  sql.js@1.14.1: {}
-
   stackback@0.0.2: {}
 
   std-env@3.10.0: {}
@@ -1583,23 +1551,9 @@ snapshots:
 
   vscode-uri@3.1.0: {}
 
-  vue-demi@0.13.11(vue@3.5.34(typescript@5.9.3)):
-    dependencies:
-      vue: 3.5.34(typescript@5.9.3)
-
   vue-demi@0.14.10(vue@3.5.34(typescript@5.9.3)):
     dependencies:
       vue: 3.5.34(typescript@5.9.3)
-
-  vue-echarts@7.0.3(@vue/runtime-core@3.5.34)(echarts@5.6.0)(vue@3.5.34(typescript@5.9.3)):
-    dependencies:
-      echarts: 5.6.0
-      vue: 3.5.34(typescript@5.9.3)
-      vue-demi: 0.13.11(vue@3.5.34(typescript@5.9.3))
-    optionalDependencies:
-      '@vue/runtime-core': 3.5.34
-    transitivePeerDependencies:
-      - '@vue/composition-api'
 
   vue-router@4.6.4(vue@3.5.34(typescript@5.9.3)):
     dependencies:
