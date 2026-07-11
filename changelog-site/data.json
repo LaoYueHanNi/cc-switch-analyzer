@@ -1,6 +1,22 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-07-11",
+    "commits": [
+      {
+        "hash": "19fb678",
+        "subject": "feat(realtime): 实时 Tab codex 请求按真实 session 聚合",
+        "date": "2026-07-11"
+      },
+      {
+        "hash": "13b8138",
+        "subject": "refactor(streaming): 携带 is_codex 标志,为实时 Tab codex 会话合并做准备",
+        "date": "2026-07-11"
+      }
+    ]
+  },
+  {
+    "version": "0.7.25",
     "date": "2026-07-10",
     "commits": [
       {
