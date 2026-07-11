@@ -33,7 +33,7 @@ pub fn collect_provider_names(sources: &[SourceEntry]) -> HashMap<String, String
 pub fn run_streaming_dedup(
     sources: &[SourceEntry],
     since: Option<i64>,
-) -> Vec<(String, String, String, i64, i64, i64, i64, i64, i64)> {
+) -> Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)> {
     let (tx, rx) = mpsc::channel();
 
     // 并行 Producer：每个数据源一个线程，逐条发送到 channel

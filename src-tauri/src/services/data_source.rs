@@ -35,7 +35,7 @@ pub trait DataSource: Send + Sync {
     fn get_session_timestamps(&self, ids: &[String]) -> Result<HashMap<String, Vec<i64>>, String>;
     fn get_model_context_tier_buckets(&self, params: &FilterParams, thresholds: &[i64]) -> Result<Vec<ModelContextTierBucket>, String>;
     fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String>;
-    fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64)>, String>;
+    fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)>, String>;
 
     /// 按 FilterParams 过滤查询原始请求记录，返回 RawRecord。
     /// 这是去重管道的入口：所有聚合查询应从这里取数据。
@@ -43,10 +43,11 @@ pub trait DataSource: Send + Sync {
 
     /// 流式查询请求记录。逐行通过 callback 发射，避免一次性加载全部数据到内存。
     /// 默认实现委托给 `get_recent_request_logs_raw`。
+    /// Tuple 末尾 `is_codex` 标记该记录是否来自 OpenAI Codex 协议（用于会话重映射）。
     fn stream_records(
         &self,
         since: Option<i64>,
-        on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64)),
+        on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64, bool)),
     ) -> Result<(), String> {
         for record in self.get_recent_request_logs_raw(since)? {
             on_record(record);

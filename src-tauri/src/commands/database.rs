@@ -241,7 +241,7 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         let since = *state.db_latest_timestamp.lock().map_err(|e| e.to_string())?;
         let raw_records = run_streaming_dedup(&sources, since);
         let new_tokens: Vec<SessionRequestToken> = raw_records.into_iter()
-            .map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read, cache_creation, _latency)| {
+            .map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read, cache_creation, _latency, _is_codex)| {
                 SessionRequestToken { session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read, cache_creation }
             })
             .collect();
