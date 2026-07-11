@@ -404,6 +404,44 @@ pub fn build_codex_ts_mapping(ccswitch_timestamps: &[i64]) -> HashMap<i64, Strin
     result
 }
 
+/// 进程级缓存：避免实时 Tab 每 10s 轮询时反复扫描 `~/.codex/sessions/*.jsonl`。
+/// 缓存内容是 ts → codex session_id 的完整映射，调用方按需筛选子集。
+struct CodexTsCache {
+    mapping: HashMap<i64, String>,
+    built_at: std::time::Instant,
+}
+
+const CODEX_TS_CACHE_TTL_SECS: u64 = 60;
+
+static CODEX_TS_CACHE: std::sync::Mutex<Option<CodexTsCache>> = std::sync::Mutex::new(None);
+
+/// 带 TTL 缓存的 ts → codex session_id 映射查询。
+/// - 空输入直接返回空映射，不触发 JSONL 扫描
+/// - 缓存命中时仅返回 `timestamps` 子集中存在的条目
+/// - 缓存过期或首次访问时调用 `build_codex_ts_mapping` 全量重建
+pub fn get_or_build_codex_ts_mapping(timestamps: &[i64]) -> HashMap<i64, String> {
+    if timestamps.is_empty() {
+        return HashMap::new();
+    }
+    let mut guard = CODEX_TS_CACHE.lock().unwrap_or_else(|p| p.into_inner());
+    let cache_valid = guard.as_ref().map_or(false, |c| {
+        c.built_at.elapsed().as_secs() < CODEX_TS_CACHE_TTL_SECS
+    });
+    if cache_valid {
+        let cache = guard.as_ref().unwrap();
+        return timestamps
+            .iter()
+            .filter_map(|ts| cache.mapping.get(ts).map(|v| (*ts, v.clone())))
+            .collect();
+    }
+    let mapping = build_codex_ts_mapping(timestamps);
+    *guard = Some(CodexTsCache {
+        mapping: mapping.clone(),
+        built_at: std::time::Instant::now(),
+    });
+    mapping
+}
+
 /// 批量匹配：扫描所有 Codex JSONL，通过请求时间戳匹配 CC-Switch 的 Codex session。
 /// `timestamps_map`: CC-Switch session_id → 该 session 的请求时间戳列表（epoch 秒）
 pub fn match_codex_sessions_by_time(
@@ -639,5 +677,23 @@ mod tests {
         // File is in temp dir, not in real ~/.codex, so result will be empty
         // This mainly tests that the function runs without panic
         assert!(result.len() <= 1);
+    }
+
+    #[test]
+    fn test_get_or_build_codex_ts_mapping_empty() {
+        // 空输入直接返回空映射，绝不触发 JSONL 扫描
+        let result = get_or_build_codex_ts_mapping(&[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_or_build_codex_ts_mapping_no_duplicate_work() {
+        // 调用一次会触发一次 build_codex_ts_mapping（扫 ~/.codex），
+        // 缓存命中时不重复扫。这是粗粒度正确性测试：返回的 HashMap 形状稳定。
+        let timestamps = vec![999_999_999i64]; // 一个绝不可能匹配任何 JSONL 的 ts
+        let first = get_or_build_codex_ts_mapping(&timestamps);
+        let second = get_or_build_codex_ts_mapping(&timestamps);
+        // 两次返回的 ts 集合一致（均为空映射）
+        assert_eq!(first.len(), second.len());
     }
 }

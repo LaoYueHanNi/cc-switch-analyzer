@@ -246,9 +246,24 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     let all_raw = run_streaming_dedup(&sources, since);
     drop(sources);
 
+    // Codex 会话重映射：CC-Switch 给 codex 每个请求分配独立 UUID 作为 session_id，
+    // 通过时间戳匹配 codex JSONL 真实 session_id 把同一会话的多个请求合并。
+    // 仅对 is_codex 记录做重映射，其他数据源 session_id 保持原值。
+    let codex_ts_mapping = {
+        let codex_ts: Vec<i64> = all_raw.iter()
+            .filter_map(|(_, _, _, ts, _, _, _, _, _, is_codex)| is_codex.then_some(*ts))
+            .collect();
+        crate::services::codex_sessions::get_or_build_codex_ts_mapping(&codex_ts)
+    };
+
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
 
-    let result: Vec<RealtimeRequestLog> = all_raw.into_iter().map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms)| {
+    let result: Vec<RealtimeRequestLog> = all_raw.into_iter().map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms, is_codex)| {
+        let session_id = if is_codex {
+            codex_ts_mapping.get(&created_at).cloned().unwrap_or(session_id)
+        } else {
+            session_id
+        };
         let context_size = input_tokens + cache_read_tokens;
         let (input_cost, output_cost, cache_read_cost, cache_creation_cost) =
             if let Some(p) = pricing.get_pricing_at_with_context(&model, created_at, context_size) {
