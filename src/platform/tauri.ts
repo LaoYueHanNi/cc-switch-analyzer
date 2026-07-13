@@ -231,6 +231,9 @@ export const platformAdapter: PlatformAdapter = {
   async cursorStatus(): Promise<CursorStatusInfo> {
     return invoke('cursor_status')
   },
+  async cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo> {
+    return invoke('cursor_toggle_attribution', { enabled })
+  },
   async cursorLogout(clearCache = false): Promise<SourceInfo[]> {
     return invoke<SourceInfo[]>('cursor_logout', { clearCache })
   },

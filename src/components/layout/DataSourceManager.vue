@@ -1,33 +1,59 @@
 <template>
-  <n-modal :show="show" @update:show="$emit('update:show', $event)" preset="card" title="数据源管理" size="small" style="max-width: 500px">
+  <n-modal :show="show" @update:show="$emit('update:show', $event)" preset="card" title="数据源管理" size="small" style="max-width: 560px">
     <div class="source-list">
-      <div class="source-item" v-for="slot in slots" :key="slot.key">
-        <template v-if="slot.key === 'cursor'">
-          <n-switch size="small" :value="slot.enabled" :disabled="!cursorStatus.loggedIn" @update:value="onToggle(slot)" />
-          <button v-if="!cursorStatus.loggedIn" class="source-type cursor" @click="showLoginDialog = true">
-            登录 Cursor
-          </button>
-          <button v-else class="source-type cursor" @click="onCursorSync" :disabled="cursorSyncing">
-            {{ cursorSyncing ? '同步中...' : 'Cursor' }}
-          </button>
-          <span class="source-path" :title="cursorStatusText">{{ cursorStatusText }}</span>
-          <button v-if="cursorStatus.loggedIn" class="sync-btn" @click="onCursorSync" :disabled="cursorSyncing" title="立即同步">
-            ↻
-          </button>
-          <button v-if="cursorStatus.loggedIn" class="remove-btn" @click="onCursorLogout" title="退出登录">
-            <n-icon size="12"><close-outline /></n-icon>
-          </button>
-        </template>
-        <template v-else>
-          <n-switch size="small" :value="slot.enabled" :disabled="!slot.path" @update:value="onToggle(slot)" />
-          <button class="source-type" :class="slot.key" @click="onSelect(slot.key)">
-            {{ slot.label }}
-          </button>
-          <span class="source-path" :title="slot.path || ''">{{ slot.path || '未选择' }}</span>
-          <button v-if="slot.path" class="remove-btn" @click="onRemove(slot.key)" title="移除">
-            <n-icon size="12"><close-outline /></n-icon>
-          </button>
-        </template>
+      <div class="source-block" v-for="slot in slots" :key="slot.key">
+        <div class="source-item">
+          <template v-if="slot.key === 'cursor'">
+            <n-switch size="small" :value="slot.enabled" :disabled="!cursorStatus.loggedIn" @update:value="onToggle(slot)" />
+            <button v-if="!cursorStatus.loggedIn" class="source-type cursor" @click="showLoginDialog = true">
+              登录 Cursor
+            </button>
+            <button v-else class="source-type cursor" @click="onCursorSync" :disabled="cursorSyncing">
+              {{ cursorSyncing ? '同步中...' : 'Cursor' }}
+            </button>
+            <span class="source-path" :title="cursorStatusText">{{ cursorStatusText }}</span>
+            <button v-if="cursorStatus.loggedIn" class="sync-btn" @click="onCursorSync" :disabled="cursorSyncing" title="立即同步">
+              ↻
+            </button>
+            <button v-if="cursorStatus.loggedIn" class="remove-btn" @click="onCursorLogout" title="退出登录">
+              <n-icon size="12"><close-outline /></n-icon>
+            </button>
+          </template>
+          <template v-else>
+            <n-switch size="small" :value="slot.enabled" :disabled="!slot.path" @update:value="onToggle(slot)" />
+            <button class="source-type" :class="slot.key" @click="onSelect(slot.key)">
+              {{ slot.label }}
+            </button>
+            <span class="source-path" :title="slot.path || ''">{{ slot.path || '未选择' }}</span>
+            <button v-if="slot.path" class="remove-btn" @click="onRemove(slot.key)" title="移除">
+              <n-icon size="12"><close-outline /></n-icon>
+            </button>
+          </template>
+        </div>
+
+        <!-- Cursor 本机精准归因（归属 Cursor） -->
+        <div v-if="slot.key === 'cursor' && cursorStatus.loggedIn" class="cursor-attr">
+          <div class="cursor-attr-row">
+            <n-switch
+              size="small"
+              :value="!!cursorStatus.attributionEnabled"
+              :disabled="attributionToggling"
+              @update:value="onToggleAttribution"
+            />
+            <span class="tm-label">本机精准归因</span>
+            <span class="tm-hint">{{ cursorStatus.attributionHint || '按本机 Hook 过滤（分钟±1 + 模型家族）' }}</span>
+          </div>
+          <div class="attr-stats">
+            <div class="attr-stats-row">
+              <span class="attr-stats-label">CSV 总计</span>
+              <span class="attr-stats-vals" :title="tokenQuadTitle(csvTotal)">{{ formatTokenQuad(csvTotal) }}</span>
+            </div>
+            <div class="attr-stats-row">
+              <span class="attr-stats-label">归因过滤</span>
+              <span class="attr-stats-vals filtered" :title="tokenQuadTitle(filteredOut)">{{ formatTokenQuad(filteredOut) }}</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -100,17 +126,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { NModal, NIcon, NButton, NSwitch, NDivider, NInput } from 'naive-ui'
 import { CloseOutline } from '@vicons/ionicons5'
 import { useDatabaseStore } from '@/stores/database'
 import { useDatabase } from '@/composables/useDatabase'
 import { useUpdaterStore } from '@/stores/updater'
 import { platformAdapter } from '@/platform'
-import type { CursorStatusInfo, DefaultPaths, TmServiceStatus } from '@/platform/types'
+import { formatNum } from '@/utils/format'
+import type { CursorStatusInfo, DefaultPaths, TokenQuad, TmServiceStatus } from '@/platform/types'
 
-defineProps<{ show: boolean }>()
+const props = defineProps<{ show: boolean }>()
 defineEmits<{ 'update:show': [value: boolean] }>()
+
+const emptyQuad = (): TokenQuad => ({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 })
 
 const dbStore = useDatabaseStore()
 const updaterStore = useUpdaterStore()
@@ -120,11 +149,33 @@ const { addDatabase, removeDatabase, refreshAfterToggle } = useDatabase()
 
 const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null, cursor: null })
 
-const cursorStatus = ref<CursorStatusInfo>({ loggedIn: false, lastSync: null, recordCount: 0, cachePath: null })
+const cursorStatus = ref<CursorStatusInfo>({
+  loggedIn: false,
+  lastSync: null,
+  recordCount: 0,
+  cachePath: null,
+  attributionEnabled: false,
+  hookInstalled: false,
+  localEventCount: 0,
+  attributionHint: '',
+  attributionStats: { csvTotal: emptyQuad(), filteredOut: emptyQuad() },
+})
 const showLoginDialog = ref(false)
 const sessionToken = ref('')
 const loginLoading = ref(false)
 const cursorSyncing = ref(false)
+const attributionToggling = ref(false)
+
+const csvTotal = computed(() => cursorStatus.value.attributionStats?.csvTotal ?? emptyQuad())
+const filteredOut = computed(() => cursorStatus.value.attributionStats?.filteredOut ?? emptyQuad())
+
+function formatTokenQuad(q: TokenQuad): string {
+  return `输入 ${formatNum(q.input)} · 输出 ${formatNum(q.output)} · 缓存读 ${formatNum(q.cacheRead)} · 缓存写 ${formatNum(q.cacheCreation)}`
+}
+
+function tokenQuadTitle(q: TokenQuad): string {
+  return `输入 ${q.input} · 输出 ${q.output} · 缓存读 ${q.cacheRead} · 缓存写 ${q.cacheCreation}`
+}
 
 const cursorStatusText = computed(() => {
   if (!cursorStatus.value.loggedIn) return '未登录'
@@ -187,9 +238,31 @@ async function onCursorLogout(): Promise<void> {
   } catch { /* ignore */ }
 }
 
-onMounted(() => {
-  loadCursorStatus()
-})
+async function onToggleAttribution(enabled: boolean): Promise<void> {
+  attributionToggling.value = true
+  try {
+    cursorStatus.value = await platformAdapter.cursorToggleAttribution(enabled)
+    const sources = await platformAdapter.listDatabases()
+    dbStore.setSources(sources)
+    await refreshAfterToggle()
+  } catch (e) {
+    console.error('[cursor] toggle attribution failed:', e)
+    await loadCursorStatus()
+  } finally {
+    attributionToggling.value = false
+  }
+}
+
+// 弹窗打开时再拉状态，避开启动时 auto_load 尚未完成的竞态
+watch(
+  () => props.show,
+  (visible) => {
+    if (visible) {
+      loadCursorStatus()
+      loadTmStatus()
+    }
+  },
+)
 
 async function loadDefaultPaths(): Promise<void> {
   try {
@@ -305,10 +378,61 @@ async function toggleService(enabled: boolean): Promise<void> {
   gap: 6px;
 }
 
+.source-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .source-item {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.cursor-attr {
+  margin-left: 28px;
+  padding: 6px 8px;
+  border-left: 2px solid #6c5ce7;
+  background: color-mix(in srgb, #6c5ce7 8%, transparent);
+  border-radius: 0 4px 4px 0;
+}
+
+.cursor-attr-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.attr-stats {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.attr-stats-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.attr-stats-label {
+  flex-shrink: 0;
+  width: 52px;
+  color: var(--text-tertiary);
+}
+
+.attr-stats-vals {
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.attr-stats-vals.filtered {
+  color: var(--color-cost, #e17055);
 }
 
 .source-type {
@@ -456,6 +580,7 @@ async function toggleService(enabled: boolean): Promise<void> {
 .tm-label {
   font-size: 12px;
   color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .tm-hint {

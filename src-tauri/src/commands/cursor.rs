@@ -2,6 +2,8 @@ use tauri::State;
 
 use crate::AppState;
 use crate::models::SourceInfo;
+use crate::services::cursor_attribution::AttributionTokenStats;
+use crate::services::cursor_local_hook;
 use crate::services::cursor_sync::{self, SyncCursorResult};
 use crate::services::data_source::{create_source_entry, DbType};
 use crate::utils;
@@ -14,10 +16,80 @@ pub struct CursorStatus {
     pub record_count: i64,
     pub cache_path: Option<String>,
     pub membership_type: Option<String>,
+    pub attribution_enabled: bool,
+    pub hook_installed: bool,
+    pub local_event_count: i64,
+    pub attribution_hint: String,
+    pub attribution_stats: AttributionTokenStats,
 }
 
 fn cursor_cache_dir_str() -> Result<String, String> {
     Ok(utils::get_cursor_cache_dir()?.to_string_lossy().to_string())
+}
+
+fn build_cursor_status(state: &State<AppState>) -> Result<CursorStatus, String> {
+    let logged_in = cursor_sync::is_logged_in();
+    let cache_path = utils::get_cursor_cache_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().to_string());
+    let last_sync = cursor_sync::cache_last_modified()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
+
+    // 启动竞态：前端可能在 auto_load 完成前调 status；CSV 已存在但内存源未 open 时补载
+    if logged_in {
+        let csv_ready = utils::get_cursor_usage_csv_path()
+            .map(|p| p.exists())
+            .unwrap_or(false);
+        if csv_ready {
+            let need_load = {
+                let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+                !sources.iter().any(|s| {
+                    matches!(s.db_type, DbType::Cursor)
+                        && s.source.get_record_count().ok().unwrap_or(0) > 0
+                })
+            };
+            if need_load {
+                let _ = ensure_cursor_source_registered(state);
+            }
+        }
+    }
+
+    let record_count = {
+        let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+        sources
+            .iter()
+            .find(|s| matches!(s.db_type, DbType::Cursor))
+            .and_then(|s| s.source.get_record_count().ok())
+            .unwrap_or(0)
+    };
+
+    let attribution_enabled = cursor_local_hook::is_attribution_enabled();
+    let hook_installed = cursor_local_hook::is_hook_installed();
+    let local_event_count = cursor_local_hook::local_event_count() as i64;
+    let attribution_hint = cursor_local_hook::attribution_hint(attribution_enabled);
+
+    let attribution_stats = {
+        let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+        sources
+            .iter()
+            .find(|s| matches!(s.db_type, DbType::Cursor))
+            .and_then(|s| s.source.get_cursor_attribution_stats())
+            .unwrap_or_default()
+    };
+
+    Ok(CursorStatus {
+        logged_in,
+        last_sync,
+        record_count,
+        cache_path,
+        membership_type: None,
+        attribution_enabled,
+        hook_installed,
+        local_event_count,
+        attribution_hint,
+        attribution_stats,
+    })
 }
 
 pub fn reload_cursor_sources(state: &State<AppState>) -> Result<(), String> {
@@ -31,9 +103,7 @@ pub fn reload_cursor_sources(state: &State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_cursor_source_registered(
-    state: &State<AppState>,
-) -> Result<(), String> {
+fn ensure_cursor_source_registered(state: &State<AppState>) -> Result<(), String> {
     let cache_str = cursor_cache_dir_str()?;
     let csv_path = utils::get_cursor_usage_csv_path()?;
     if !csv_path.exists() {
@@ -41,7 +111,10 @@ fn ensure_cursor_source_registered(
     }
 
     let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
-    if let Some(entry) = sources.iter_mut().find(|s| matches!(s.db_type, DbType::Cursor)) {
+    if let Some(entry) = sources
+        .iter_mut()
+        .find(|s| matches!(s.db_type, DbType::Cursor))
+    {
         entry.source.open(&cache_str)?;
         return Ok(());
     }
@@ -79,13 +152,17 @@ pub fn sync_and_reload_if_needed(state: &State<AppState>) -> Result<(), String> 
 pub fn cursor_login(session_token: String, state: State<AppState>) -> Result<Vec<SourceInfo>, String> {
     let validation = cursor_sync::validate_cursor_session(&session_token);
     if !validation.valid {
-        return Err(validation.error.unwrap_or_else(|| "Cursor 登录验证失败".to_string()));
+        return Err(validation
+            .error
+            .unwrap_or_else(|| "Cursor 登录验证失败".to_string()));
     }
 
     cursor_sync::save_credentials(&session_token)?;
     let sync = cursor_sync::sync_cursor_cache();
     if !sync.synced {
-        return Err(sync.error.unwrap_or_else(|| "Cursor 同步失败".to_string()));
+        return Err(sync
+            .error
+            .unwrap_or_else(|| "Cursor 同步失败".to_string()));
     }
 
     ensure_cursor_source_registered(&state)?;
@@ -105,30 +182,37 @@ pub fn cursor_sync(state: State<AppState>) -> Result<SyncCursorResult, String> {
 
 #[tauri::command]
 pub fn cursor_status(state: State<AppState>) -> Result<CursorStatus, String> {
-    let logged_in = cursor_sync::is_logged_in();
-    let cache_path = utils::get_cursor_cache_dir().ok().map(|p| p.to_string_lossy().to_string());
-    let last_sync = cursor_sync::cache_last_modified()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64);
+    build_cursor_status(&state)
+}
 
-    let record_count = {
-        let sources = state.data_sources.read().map_err(|e| e.to_string())?;
-        sources
-            .iter()
-            .find(|s| matches!(s.db_type, DbType::Cursor))
-            .and_then(|s| s.source.get_record_count().ok())
-            .unwrap_or(0)
+#[tauri::command]
+pub fn cursor_toggle_attribution(
+    enabled: bool,
+    state: State<AppState>,
+) -> Result<CursorStatus, String> {
+    cursor_local_hook::set_attribution_enabled(enabled)?;
+    let hint = if enabled {
+        cursor_local_hook::install_hooks()?
+    } else {
+        cursor_local_hook::uninstall_hooks()?
     };
+    log::info!("[CURSOR] attribution toggle enabled={} hint={}", enabled, hint);
 
-    let membership_type = None;
+    // 有 CSV 时重载以应用过滤
+    if utils::get_cursor_usage_csv_path()
+        .map(|p| p.exists())
+        .unwrap_or(false)
+    {
+        let _ = ensure_cursor_source_registered(&state);
+        let _ = reload_cursor_sources(&state);
+        let _ = save_sources(&state);
+    }
 
-    Ok(CursorStatus {
-        logged_in,
-        last_sync,
-        record_count,
-        cache_path,
-        membership_type,
-    })
+    let mut status = build_cursor_status(&state)?;
+    if !hint.is_empty() {
+        status.attribution_hint = hint;
+    }
+    Ok(status)
 }
 
 #[tauri::command]

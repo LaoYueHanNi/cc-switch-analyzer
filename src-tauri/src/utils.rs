@@ -73,6 +73,18 @@ pub fn get_cursor_usage_csv_path() -> Result<std::path::PathBuf, String> {
     Ok(get_cursor_cache_dir()?.join("usage.csv"))
 }
 
+/// Cursor 本机 Hook 日志目录（~/.cursor/local-usage）
+pub fn get_cursor_local_usage_dir() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;
+    Ok(home.join(".cursor").join("local-usage"))
+}
+
+/// Cursor 用户级 hooks.json 路径
+pub fn get_cursor_hooks_json_path() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;
+    Ok(home.join(".cursor").join("hooks.json"))
+}
+
 /// 当前 Unix 秒
 pub fn now_epoch_seconds() -> i64 {
     chrono::Utc::now().timestamp()

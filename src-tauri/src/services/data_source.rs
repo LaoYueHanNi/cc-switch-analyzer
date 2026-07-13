@@ -67,6 +67,13 @@ pub trait DataSource: Send + Sync {
     ) -> Option<Result<HashMap<String, (String, String)>, String>> {
         None
     }
+
+    /// Cursor 本机归因 token 统计；非 Cursor 源返回 None。
+    fn get_cursor_attribution_stats(
+        &self,
+    ) -> Option<crate::services::cursor_attribution::AttributionTokenStats> {
+        None
+    }
 }
 
 #[derive(Debug)]

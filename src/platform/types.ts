@@ -133,11 +133,28 @@ export interface CursorSyncResult {
   error?: string
 }
 
+export interface TokenQuad {
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreation: number
+}
+
+export interface AttributionTokenStats {
+  csvTotal: TokenQuad
+  filteredOut: TokenQuad
+}
+
 export interface CursorStatusInfo {
   loggedIn: boolean
   lastSync: number | null
   recordCount: number
   cachePath: string | null
+  attributionEnabled?: boolean
+  hookInstalled?: boolean
+  localEventCount?: number
+  attributionHint?: string
+  attributionStats?: AttributionTokenStats
 }
 
 export interface DefaultPaths {
@@ -211,6 +228,7 @@ export interface PlatformAdapter {
   cursorLogin(sessionToken: string): Promise<SourceInfo[]>
   cursorSync(): Promise<CursorSyncResult>
   cursorStatus(): Promise<CursorStatusInfo>
+  cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo>
   cursorLogout(clearCache?: boolean): Promise<SourceInfo[]>
   // 应用信息 / 系统交互
   getAppVersion(): Promise<string>

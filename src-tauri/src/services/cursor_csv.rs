@@ -3,6 +3,11 @@ use std::path::Path;
 use std::sync::RwLock;
 
 use crate::models::*;
+use crate::services::cursor_attribution::{
+    is_likely_local, should_apply_attribution_for_ts, AttributionTokenStats, LocalHookEvent,
+    TokenQuad, ATTRIBUTION_SLACK_SECS,
+};
+use crate::services::cursor_local_hook;
 use crate::services::data_source::DataSource;
 use crate::services::pipeline::{
     aggregate_combined_records, aggregate_daily_trend, aggregate_hourly_trend,
@@ -18,6 +23,8 @@ pub struct CursorCsvService {
     cache_dir: String,
     records: RwLock<Vec<RawRecord>>,
     latest_timestamp: Option<i64>,
+    attribution_enabled: bool,
+    local_events: Vec<LocalHookEvent>,
 }
 
 impl CursorCsvService {
@@ -26,7 +33,26 @@ impl CursorCsvService {
             cache_dir: String::new(),
             records: RwLock::new(Vec::new()),
             latest_timestamp: None,
+            attribution_enabled: false,
+            local_events: Vec::new(),
         }
+    }
+
+    fn reload_attribution(&mut self) {
+        self.attribution_enabled = cursor_local_hook::is_attribution_enabled();
+        if self.attribution_enabled {
+            self.local_events = cursor_local_hook::load_local_events().unwrap_or_else(|e| {
+                log::warn!("[CURSOR] 读取本机 Hook 日志失败: {}", e);
+                Vec::new()
+            });
+        } else {
+            self.local_events.clear();
+        }
+        log::info!(
+            "[CURSOR] 本机归因 enabled={} local_events={}",
+            self.attribution_enabled,
+            self.local_events.len()
+        );
     }
 
     pub fn open(&mut self, dir_path: &str) -> Result<(), String> {
@@ -39,6 +65,7 @@ impl CursorCsvService {
         self.latest_timestamp = parsed.iter().map(|r| r.created_at).max();
         *self.records.write().map_err(|e| format!("数据锁失败: {}", e))? = parsed;
         self.cache_dir = dir_path.to_string();
+        self.reload_attribution();
         Ok(())
     }
 
@@ -48,6 +75,8 @@ impl CursorCsvService {
             guard.clear();
         }
         self.latest_timestamp = None;
+        self.attribution_enabled = false;
+        self.local_events.clear();
     }
 
     pub fn is_open(&self) -> bool {
@@ -58,6 +87,48 @@ impl CursorCsvService {
         self.records.read().map_err(|e| format!("数据锁失败: {}", e))
     }
 
+    /// CSV 全量 token 与因本机归因被滤掉的 token。
+    pub fn attribution_token_stats(&self) -> AttributionTokenStats {
+        let records = match self.records_read() {
+            Ok(guard) => guard,
+            Err(_) => return AttributionTokenStats::default(),
+        };
+        let apply_attr = self.attribution_enabled && !self.local_events.is_empty();
+        let mut csv_total = TokenQuad::default();
+        let mut filtered_out = TokenQuad::default();
+        for r in records.iter() {
+            csv_total.add_record_tokens(
+                r.input_tokens,
+                r.output_tokens,
+                r.cache_read,
+                r.cache_creation,
+            );
+            if !apply_attr {
+                continue;
+            }
+            if !should_apply_attribution_for_ts(r.created_at) {
+                continue;
+            }
+            if !is_likely_local(
+                r.created_at,
+                &r.model,
+                &self.local_events,
+                ATTRIBUTION_SLACK_SECS,
+            ) {
+                filtered_out.add_record_tokens(
+                    r.input_tokens,
+                    r.output_tokens,
+                    r.cache_read,
+                    r.cache_creation,
+                );
+            }
+        }
+        AttributionTokenStats {
+            csv_total,
+            filtered_out,
+        }
+    }
+
     fn filter_records(&self, params: &FilterParams) -> Vec<RawRecord> {
         let records = match self.records_read() {
             Ok(guard) => guard,
@@ -66,9 +137,25 @@ impl CursorCsvService {
                 return Vec::new();
             }
         };
+        let apply_attr = self.attribution_enabled && !self.local_events.is_empty();
         records
             .iter()
             .filter(|r| record_matches_params(r, params))
+            .filter(|r| {
+                if !apply_attr {
+                    return true;
+                }
+                // 截止时刻之前：不过滤（CSV 为 UTC epoch，截止为东八区 15:30）
+                if !should_apply_attribution_for_ts(r.created_at) {
+                    return true;
+                }
+                is_likely_local(
+                    r.created_at,
+                    &r.model,
+                    &self.local_events,
+                    ATTRIBUTION_SLACK_SECS,
+                )
+            })
             .cloned()
             .collect()
     }
@@ -507,6 +594,10 @@ impl DataSource for CursorCsvService {
 
     fn get_filtered_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> {
         Ok(self.filter_records(params))
+    }
+
+    fn get_cursor_attribution_stats(&self) -> Option<AttributionTokenStats> {
+        Some(self.attribution_token_stats())
     }
 }
 
