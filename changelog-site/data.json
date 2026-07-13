@@ -1,6 +1,17 @@
 [
   {
-    "version": "Unreleased",
+    "version": "0.7.27",
+    "date": "2026-07-13",
+    "commits": [
+      {
+        "hash": "acb9482",
+        "subject": "feat(cursor): 本机精准归因过滤与设置页详情",
+        "date": "2026-07-13"
+      }
+    ]
+  },
+  {
+    "version": "0.7.26",
     "date": "2026-07-11",
     "commits": [
       {
