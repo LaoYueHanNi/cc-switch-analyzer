@@ -1,5 +1,26 @@
 [
   {
+    "version": "Unreleased",
+    "date": "2026-07-14",
+    "commits": [
+      {
+        "hash": "4d2b398",
+        "subject": "refactor(settings): 设置弹窗改为左右分栏布局",
+        "date": "2026-07-14"
+      },
+      {
+        "hash": "e41d35b",
+        "subject": "feat(cursor): CSV预览过滤原因并将归因窗扩至5分钟",
+        "date": "2026-07-14"
+      },
+      {
+        "hash": "cac4e25",
+        "subject": "fix: 同步 Cargo.lock 至 0.7.27",
+        "date": "2026-07-13"
+      }
+    ]
+  },
+  {
     "version": "0.7.27",
     "date": "2026-07-13",
     "commits": [

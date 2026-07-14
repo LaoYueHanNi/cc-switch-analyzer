@@ -538,7 +538,7 @@ dependencies = [
 
 [[package]]
 name = "cc-switch-analyzer"
-version = "0.7.27"
+version = "0.7.28"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
