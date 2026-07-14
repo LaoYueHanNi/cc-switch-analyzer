@@ -21,6 +21,7 @@ pub struct CursorStatus {
     pub local_event_count: i64,
     pub attribution_hint: String,
     pub attribution_stats: AttributionTokenStats,
+    pub sync_lookback: String,
 }
 
 fn cursor_cache_dir_str() -> Result<String, String> {
@@ -89,6 +90,7 @@ fn build_cursor_status(state: &State<AppState>) -> Result<CursorStatus, String> 
         local_event_count,
         attribution_hint,
         attribution_stats,
+        sync_lookback: cursor_sync::get_sync_lookback().as_str().to_string(),
     })
 }
 
@@ -256,6 +258,16 @@ pub fn cursor_toggle_attribution(
         status.attribution_hint = hint;
     }
     Ok(status)
+}
+
+#[tauri::command]
+pub fn cursor_set_sync_lookback(
+    lookback: String,
+    state: State<AppState>,
+) -> Result<CursorStatus, String> {
+    let parsed = cursor_sync::set_sync_lookback(&lookback)?;
+    log::info!("[CURSOR] sync lookback set to {}", parsed.as_str());
+    build_cursor_status(&state)
 }
 
 #[tauri::command]

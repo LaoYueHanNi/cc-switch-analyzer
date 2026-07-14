@@ -82,6 +82,22 @@
         </template>
       </div>
 
+      <div v-if="slot.key === 'cursor' && cursorStatus.loggedIn" class="sync-lookback-row">
+        <span class="tm-label">同步范围</span>
+        <select
+          class="lookback-select"
+          :value="cursorStatus.syncLookback || '7d'"
+          :disabled="lookbackSaving"
+          @change="onLookbackChange(($event.target as HTMLSelectElement).value)"
+        >
+          <option value="1d">1 天</option>
+          <option value="7d">7 天</option>
+          <option value="30d">30 天</option>
+          <option value="all">全部</option>
+        </select>
+        <span class="tm-hint">按北京时间日历日 · 下次同步生效</span>
+      </div>
+
       <!-- Cursor 归因子设置（普通下级，无引用块样式） -->
       <div v-if="slot.key === 'cursor' && cursorStatus.loggedIn" class="cursor-attr">
         <div class="cursor-attr-row">
@@ -162,12 +178,14 @@ const cursorStatus = ref<CursorStatusInfo>({
   localEventCount: 0,
   attributionHint: '',
   attributionStats: { csvTotal: emptyQuad(), filteredOut: emptyQuad() },
+  syncLookback: '7d',
 })
 const showLoginDialog = ref(false)
 const sessionToken = ref('')
 const loginLoading = ref(false)
 const cursorSyncing = ref(false)
 const attributionToggling = ref(false)
+const lookbackSaving = ref(false)
 const showCsvPreview = ref(false)
 const csvPreviewFilteredOnly = ref(false)
 
@@ -260,6 +278,18 @@ async function onToggleAttribution(enabled: boolean): Promise<void> {
     await loadCursorStatus()
   } finally {
     attributionToggling.value = false
+  }
+}
+
+async function onLookbackChange(lookback: string): Promise<void> {
+  lookbackSaving.value = true
+  try {
+    cursorStatus.value = await platformAdapter.cursorSetSyncLookback(lookback)
+  } catch (e) {
+    console.error('[cursor] set sync lookback failed:', e)
+    await loadCursorStatus()
+  } finally {
+    lookbackSaving.value = false
   }
 }
 
@@ -472,6 +502,33 @@ async function onToggle(slot: { sourceId: string }): Promise<void> {
   flex-direction: column;
   gap: 6px;
   padding-top: 2px;
+}
+
+.sync-lookback-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lookback-select {
+  font-size: 11px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  outline: none;
+  cursor: pointer;
+}
+
+.lookback-select:focus {
+  border-color: var(--color-blue);
+}
+
+.lookback-select:disabled {
+  opacity: 0.5;
+  cursor: wait;
 }
 
 .cursor-attr-row {

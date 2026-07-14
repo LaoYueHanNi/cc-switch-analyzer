@@ -175,6 +175,8 @@ export interface CursorStatusInfo {
   localEventCount?: number
   attributionHint?: string
   attributionStats?: AttributionTokenStats
+  /** Cursor CSV 同步范围：1d | 7d | 30d | all */
+  syncLookback?: string
 }
 
 export interface DefaultPaths {
@@ -250,6 +252,7 @@ export interface PlatformAdapter {
   cursorStatus(): Promise<CursorStatusInfo>
   cursorPreviewCsv(page?: number, pageSize?: number, filteredOnly?: boolean): Promise<CursorCsvPreviewPage>
   cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo>
+  cursorSetSyncLookback(lookback: string): Promise<CursorStatusInfo>
   cursorLogout(clearCache?: boolean): Promise<SourceInfo[]>
   // 应用信息 / 系统交互
   getAppVersion(): Promise<string>

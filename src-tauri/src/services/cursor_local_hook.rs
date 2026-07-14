@@ -19,7 +19,7 @@ const HOOK_EVENTS: &[&str] = &["beforeSubmitPrompt", "afterAgentResponse", "stop
 const RUN_LOG_PS1: &[u8] = include_bytes!("../../resources/cursor-local-usage/run_log.ps1");
 const LOG_REQUEST_PS1: &[u8] = include_bytes!("../../resources/cursor-local-usage/log_request.ps1");
 
-fn read_setting_raw(key: &str) -> Option<String> {
+pub(crate) fn read_setting_raw(key: &str) -> Option<String> {
     let path = utils::get_app_db_path().ok()?;
     if !path.exists() {
         return None;
@@ -35,7 +35,7 @@ fn read_setting_raw(key: &str) -> Option<String> {
     .flatten()
 }
 
-fn write_setting_raw(key: &str, value: &str) -> Result<(), String> {
+pub(crate) fn write_setting_raw(key: &str, value: &str) -> Result<(), String> {
     let path = utils::get_app_db_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {}", e))?;

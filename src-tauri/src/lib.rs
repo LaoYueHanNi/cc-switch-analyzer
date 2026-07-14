@@ -179,6 +179,7 @@ pub fn run() {
             commands::cursor::cursor_status,
             commands::cursor::cursor_preview_csv,
             commands::cursor::cursor_toggle_attribution,
+            commands::cursor::cursor_set_sync_lookback,
             commands::cursor::cursor_logout,
             // 数据查询
             commands::query::query_summary,

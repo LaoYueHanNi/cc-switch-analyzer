@@ -3,18 +3,164 @@ use std::io::Write;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
+use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::services::cursor_csv::parse_date_to_epoch_secs;
+use crate::services::cursor_local_hook::{read_setting_raw, write_setting_raw};
 use crate::utils;
 
 const CURSOR_HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 /// 自动同步缓存有效期：24 小时内不重复请求 Cursor API（手动同步不受限）
 pub const CURSOR_AUTO_SYNC_FRESHNESS: Duration = Duration::from_secs(24 * 60 * 60);
 
-const USAGE_CSV_ENDPOINT: &str =
-    "https://cursor.com/api/dashboard/export-usage-events-csv?strategy=tokens";
+const USAGE_CSV_BASE: &str = "https://cursor.com/api/dashboard/export-usage-events-csv";
 const USAGE_SUMMARY_ENDPOINT: &str = "https://cursor.com/api/usage-summary";
+pub const SYNC_LOOKBACK_SETTING_KEY: &str = "cursor_sync_lookback";
 
+/// Cursor CSV 同步时间范围档位。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncLookback {
+    Days(u32),
+    All,
+}
+
+impl SyncLookback {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SyncLookback::Days(1) => "1d",
+            SyncLookback::Days(7) => "7d",
+            SyncLookback::Days(30) => "30d",
+            SyncLookback::All => "all",
+            SyncLookback::Days(_) => "7d",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_lowercase().as_str() {
+            "1d" | "1" => SyncLookback::Days(1),
+            "30d" | "30" => SyncLookback::Days(30),
+            "all" => SyncLookback::All,
+            "7d" | "7" => SyncLookback::Days(7),
+            _ => SyncLookback::Days(7),
+        }
+    }
+}
+
+pub fn get_sync_lookback() -> SyncLookback {
+    read_setting_raw(SYNC_LOOKBACK_SETTING_KEY)
+        .map(|v| SyncLookback::parse(&v))
+        .unwrap_or(SyncLookback::Days(7))
+}
+
+pub fn set_sync_lookback(lookback: &str) -> Result<SyncLookback, String> {
+    let parsed = SyncLookback::parse(lookback);
+    write_setting_raw(SYNC_LOOKBACK_SETTING_KEY, parsed.as_str())?;
+    Ok(parsed)
+}
+
+fn beijing_tz() -> FixedOffset {
+    FixedOffset::east_opt(8 * 3600).expect("UTC+8")
+}
+
+/// 按北京日历日计算拉取窗口。
+/// 返回 `(start_ms, end_ms, start_epoch_secs)`；`All` 返回 `None`。
+pub fn lookback_window_ms(
+    lookback: SyncLookback,
+    now_utc: DateTime<Utc>,
+) -> Option<(i64, i64, i64)> {
+    let days = match lookback {
+        SyncLookback::All => return None,
+        SyncLookback::Days(n) => n.max(1),
+    };
+    let bj = now_utc.with_timezone(&beijing_tz());
+    let today = bj.date_naive();
+    let start_date = today - chrono::Duration::days((days as i64) - 1);
+    let start_naive = start_date
+        .and_hms_milli_opt(0, 0, 0, 0)
+        .expect("valid start midnight");
+    let end_naive = today
+        .and_hms_milli_opt(23, 59, 59, 999)
+        .expect("valid end of day");
+    let start_bj = beijing_tz()
+        .from_local_datetime(&start_naive)
+        .single()
+        .expect("beijing start");
+    let end_bj = beijing_tz()
+        .from_local_datetime(&end_naive)
+        .single()
+        .expect("beijing end");
+    Some((
+        start_bj.timestamp_millis(),
+        end_bj.timestamp_millis(),
+        start_bj.timestamp(),
+    ))
+}
+
+fn build_usage_csv_url(lookback: SyncLookback) -> (String, Option<i64>) {
+    match lookback_window_ms(lookback, Utc::now()) {
+        None => (format!("{}?strategy=tokens", USAGE_CSV_BASE), None),
+        Some((start_ms, end_ms, start_epoch)) => (
+            format!(
+                "{}?startDate={}&endDate={}&strategy=tokens",
+                USAGE_CSV_BASE, start_ms, end_ms
+            ),
+            Some(start_epoch),
+        ),
+    }
+}
+
+/// 将本次拉取的 CSV 与本地缓存合并：保留 `created_at < start_epoch` 的旧行，窗口内用新数据。
+pub fn merge_usage_csv(existing: Option<&str>, fetched: &str, start_epoch: i64) -> String {
+    let fetched = fetched.trim_start_matches('\u{feff}');
+    let mut fetched_lines = fetched.lines();
+    let Some(new_header) = fetched_lines.next() else {
+        return fetched.to_string();
+    };
+    let new_rows: Vec<&str> = fetched_lines.filter(|l| !l.trim().is_empty()).collect();
+
+    let mut kept_old: Vec<String> = Vec::new();
+    if let Some(old) = existing {
+        let old = old.trim_start_matches('\u{feff}');
+        let mut old_lines = old.lines();
+        let Some(old_header) = old_lines.next() else {
+            return format!("{}\n{}", new_header, new_rows.join("\n"));
+        };
+        if !old_header.contains("Date") {
+            return format!("{}\n{}", new_header, new_rows.join("\n"));
+        }
+        for line in old_lines {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let date_field = line.split(',').next().unwrap_or("").trim().trim_matches('"');
+            let ts = parse_date_to_epoch_secs(date_field);
+            if ts > 0 && ts < start_epoch {
+                kept_old.push(line.to_string());
+            }
+        }
+    }
+
+    let mut out = String::with_capacity(fetched.len() + kept_old.iter().map(|s| s.len() + 1).sum::<usize>());
+    out.push_str(new_header);
+    out.push('\n');
+    for line in &kept_old {
+        out.push_str(line);
+        out.push('\n');
+    }
+    for (i, line) in new_rows.iter().enumerate() {
+        out.push_str(line);
+        if i + 1 < new_rows.len() || !kept_old.is_empty() {
+            // always newline between rows; final newline ok
+        }
+        out.push('\n');
+    }
+    // trim trailing newline for consistency with typical CSV? keep trailing newline
+    if out.ends_with('\n') && !new_rows.is_empty() {
+        // fine
+    }
+    out
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CursorCredentials {
     #[serde(rename = "sessionToken")]
@@ -250,17 +396,20 @@ pub fn validate_cursor_session(session_token: &str) -> ValidateSessionResult {
     }
 }
 
-pub fn fetch_cursor_usage_csv(session_token: &str) -> Result<String, String> {
+pub fn fetch_cursor_usage_csv(session_token: &str) -> Result<(String, Option<i64>), String> {
+    let lookback = get_sync_lookback();
+    let (url, start_epoch) = build_usage_csv_url(lookback);
     let agent = build_http_agent();
     let started = std::time::Instant::now();
     log::info!(
-        "[CURSOR] fetch CSV GET {} token={} timeout={}s",
-        USAGE_CSV_ENDPOINT,
+        "[CURSOR] fetch CSV GET {} lookback={} token={} timeout={}s",
+        url,
+        lookback.as_str(),
         mask_token(session_token),
         CURSOR_HTTP_TIMEOUT.as_secs()
     );
     let response = agent
-        .get(USAGE_CSV_ENDPOINT)
+        .get(&url)
         .header("Cookie", &format!("WorkosCursorSessionToken={}", session_token.trim()))
         .header("Referer", "https://www.cursor.com/settings")
         .header("Accept", "*/*")
@@ -311,14 +460,14 @@ pub fn fetch_cursor_usage_csv(session_token: &str) -> Result<String, String> {
         body.chars().take(60).collect::<String>()
     );
 
-    if !body.starts_with("Date,") {
+    if !body.trim_start_matches('\u{feff}').starts_with("Date,") {
         log::warn!(
             "[CURSOR] fetch CSV non-CSV body prefix={:?}",
             body.chars().take(160).collect::<String>()
         );
         return Err("Cursor API 返回非 CSV 格式".to_string());
     }
-    Ok(body)
+    Ok((body, start_epoch))
 }
 
 pub fn count_cursor_csv_rows(csv_text: &str) -> usize {
@@ -366,7 +515,7 @@ pub fn sync_cursor_cache() -> SyncCursorResult {
     );
 
     match fetch_cursor_usage_csv(&creds.session_token) {
-        Ok(csv_text) => {
+        Ok((csv_text, start_epoch)) => {
             let cache_dir = match utils::get_cursor_cache_dir() {
                 Ok(dir) => dir,
                 Err(e) => {
@@ -388,8 +537,29 @@ pub fn sync_cursor_cache() -> SyncCursorResult {
                 };
             }
             let file_path = cache_dir.join("usage.csv");
-            let row_count = count_cursor_csv_rows(&csv_text);
-            if let Err(e) = atomic_write_file(&file_path, &csv_text) {
+            let existing = fs::read_to_string(&file_path).ok();
+            let merged = match start_epoch {
+                Some(start) => {
+                    let out = merge_usage_csv(existing.as_deref(), &csv_text, start);
+                    log::info!(
+                        "[CURSOR] merge lookback={} start_epoch={} fetched_rows={} merged_rows={}",
+                        get_sync_lookback().as_str(),
+                        start,
+                        count_cursor_csv_rows(&csv_text),
+                        count_cursor_csv_rows(&out)
+                    );
+                    out
+                }
+                None => {
+                    log::info!(
+                        "[CURSOR] full overwrite lookback=all fetched_rows={}",
+                        count_cursor_csv_rows(&csv_text)
+                    );
+                    csv_text
+                }
+            };
+            let row_count = count_cursor_csv_rows(&merged);
+            if let Err(e) = atomic_write_file(&file_path, &merged) {
                 log::warn!("[CURSOR] sync write cache failed: {}", e);
                 return SyncCursorResult {
                     synced: false,
@@ -446,5 +616,85 @@ pub fn maybe_auto_sync() -> Result<bool, String> {
         Ok(false)
     } else {
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn lookback_parse_defaults() {
+        assert_eq!(SyncLookback::parse("7d"), SyncLookback::Days(7));
+        assert_eq!(SyncLookback::parse("1d"), SyncLookback::Days(1));
+        assert_eq!(SyncLookback::parse("30d"), SyncLookback::Days(30));
+        assert_eq!(SyncLookback::parse("all"), SyncLookback::All);
+        assert_eq!(SyncLookback::parse("ALL"), SyncLookback::All);
+        assert_eq!(SyncLookback::parse("bogus"), SyncLookback::Days(7));
+    }
+
+    #[test]
+    fn beijing_7d_window_from_fixed_now() {
+        // 北京 2026-07-14 15:00 = UTC 2026-07-14 07:00
+        let now = Utc.with_ymd_and_hms(2026, 7, 14, 7, 0, 0).unwrap();
+        let (start_ms, end_ms, start_epoch) =
+            lookback_window_ms(SyncLookback::Days(7), now).unwrap();
+        // start: 2026-07-08 00:00:00 +08 = 2026-07-07 16:00:00 UTC
+        let expect_start = beijing_tz()
+            .with_ymd_and_hms(2026, 7, 8, 0, 0, 0)
+            .unwrap()
+            .timestamp_millis();
+        let expect_end = beijing_tz()
+            .with_ymd_and_hms(2026, 7, 14, 23, 59, 59)
+            .unwrap()
+            .timestamp_millis()
+            + 999; // 23:59:59.999
+        assert_eq!(start_ms, expect_start);
+        assert_eq!(end_ms, expect_end);
+        assert_eq!(start_epoch, expect_start / 1000);
+        assert!(lookback_window_ms(SyncLookback::All, now).is_none());
+    }
+
+    #[test]
+    fn beijing_1d_is_today_only() {
+        let now = Utc.with_ymd_and_hms(2026, 7, 14, 7, 0, 0).unwrap();
+        let (start_ms, end_ms, _) = lookback_window_ms(SyncLookback::Days(1), now).unwrap();
+        let expect_start = beijing_tz()
+            .with_ymd_and_hms(2026, 7, 14, 0, 0, 0)
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(start_ms, expect_start);
+        assert!(end_ms > start_ms);
+    }
+
+    #[test]
+    fn merge_keeps_rows_before_window() {
+        let header = "Date,Cloud Agent ID,Automation ID,Kind,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost";
+        let old_outside = "2026-07-01T01:00:00.000Z,,,,,,,0,10,0,5,15,Included";
+        let old_inside = "2026-07-10T01:00:00.000Z,,,,,,,0,20,0,5,25,Included";
+        let existing = format!("{}\n{}\n{}\n", header, old_outside, old_inside);
+        let fetched = format!(
+            "{}\n{}\n",
+            header, "2026-07-12T02:00:00.000Z,,,,,,,0,30,0,5,35,Included"
+        );
+        // 2026-07-08 00:00 +08
+        let start_epoch = beijing_tz()
+            .with_ymd_and_hms(2026, 7, 8, 0, 0, 0)
+            .unwrap()
+            .timestamp();
+        let merged = merge_usage_csv(Some(&existing), &fetched, start_epoch);
+        assert!(merged.contains("2026-07-01T01:00:00.000Z"));
+        assert!(!merged.contains("2026-07-10T01:00:00.000Z"));
+        assert!(merged.contains("2026-07-12T02:00:00.000Z"));
+        assert_eq!(count_cursor_csv_rows(&merged), 2);
+    }
+
+    #[test]
+    fn merge_without_existing_uses_fetched() {
+        let fetched = "Date,Model\n2026-07-12T02:00:00.000Z,composer-2.5\n";
+        let merged = merge_usage_csv(None, fetched, 0);
+        assert_eq!(merged.lines().next().unwrap(), "Date,Model");
+        assert!(merged.contains("composer-2.5"));
     }
 }

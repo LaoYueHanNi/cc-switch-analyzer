@@ -398,7 +398,7 @@ fn parse_csv_line(line: &str) -> Vec<&str> {
     fields
 }
 
-fn parse_date_to_epoch_secs(date_str: &str) -> i64 {
+pub(crate) fn parse_date_to_epoch_secs(date_str: &str) -> i64 {
     use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
 
     if let Ok(dt) = NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S%.3fZ") {
