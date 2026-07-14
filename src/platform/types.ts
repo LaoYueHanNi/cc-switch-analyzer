@@ -145,6 +145,26 @@ export interface AttributionTokenStats {
   filteredOut: TokenQuad
 }
 
+export type CursorFilterReason = 'model' | 'time' | 'none'
+
+export interface CursorCsvPreviewRow {
+  createdAt: number
+  model: string
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreation: number
+  filtered: boolean
+  reason: CursorFilterReason | null
+}
+
+export interface CursorCsvPreviewPage {
+  items: CursorCsvPreviewRow[]
+  total: number
+  page: number
+  pageSize: number
+}
+
 export interface CursorStatusInfo {
   loggedIn: boolean
   lastSync: number | null
@@ -228,6 +248,7 @@ export interface PlatformAdapter {
   cursorLogin(sessionToken: string): Promise<SourceInfo[]>
   cursorSync(): Promise<CursorSyncResult>
   cursorStatus(): Promise<CursorStatusInfo>
+  cursorPreviewCsv(page?: number, pageSize?: number, filteredOnly?: boolean): Promise<CursorCsvPreviewPage>
   cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo>
   cursorLogout(clearCache?: boolean): Promise<SourceInfo[]>
   // 应用信息 / 系统交互

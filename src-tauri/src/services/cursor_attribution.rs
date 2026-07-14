@@ -1,11 +1,11 @@
-//! Cursor CSV 本机归因：分钟±1 + 模型家族匹配
+//! Cursor CSV 本机归因：分钟±5 + 模型家族匹配
 
 use serde::{Deserialize, Serialize};
 
 use chrono::{FixedOffset, TimeZone};
 
 pub const ATTRIBUTION_SETTING_KEY: &str = "cursor_local_attribution_enabled";
-pub const ATTRIBUTION_SLACK_SECS: i64 = 60;
+pub const ATTRIBUTION_SLACK_SECS: i64 = 300;
 
 /// 本机归因过滤起始时刻：2026-07-13 15:30:00（东八区）。
 /// CSV 的 `created_at` 为 Unix 秒（UTC）；此之前的行不过滤，保留账号全量。
@@ -50,6 +50,42 @@ pub struct AttributionTokenStats {
     pub filtered_out: TokenQuad,
 }
 
+/// 被滤掉的原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FilterReason {
+    /// 时间窗内有本机 Hook，但模型家族不一致
+    Model,
+    /// 存在同家族 Hook，但不在 ±slack 内
+    Time,
+    /// 既无窗内事件，也无同家族事件
+    None,
+}
+
+/// CSV 预览单行。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorCsvPreviewRow {
+    pub created_at: i64,
+    pub model: String,
+    pub input: i64,
+    pub output: i64,
+    pub cache_read: i64,
+    pub cache_creation: i64,
+    pub filtered: bool,
+    pub reason: Option<FilterReason>,
+}
+
+/// CSV 预览分页结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorCsvPreviewPage {
+    pub items: Vec<CursorCsvPreviewRow>,
+    pub total: usize,
+    pub page: usize,
+    pub page_size: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalHookEvent {
     pub ts_epoch: i64,
@@ -88,18 +124,54 @@ pub fn normalize_model_family(name: &str) -> String {
 /// 判断 CSV 行是否较像本机用量。
 /// `events` 应已筛过 beforeSubmitPrompt/stop，且带非空 model。
 pub fn is_likely_local(csv_ts: i64, csv_model: &str, events: &[LocalHookEvent], slack_secs: i64) -> bool {
+    explain_filter_reason(csv_ts, csv_model, events, slack_secs).is_none()
+}
+
+/// 解释为何应被滤掉。`None` = 保留（含 fail-open、空家族以外的匹配成功）。
+/// 优先级：model > time > none。
+pub fn explain_filter_reason(
+    csv_ts: i64,
+    csv_model: &str,
+    events: &[LocalHookEvent],
+    slack_secs: i64,
+) -> Option<FilterReason> {
     if events.is_empty() {
-        return true; // fail-open：由调用方在「无事件」时跳过过滤
+        return None; // fail-open
     }
     let fam = normalize_model_family(csv_model);
     if fam.is_empty() {
-        return false;
+        return Some(FilterReason::None);
     }
-    events.iter().any(|e| {
-        !e.family.is_empty()
-            && e.family == fam
-            && (e.ts_epoch - csv_ts).abs() <= slack_secs
-    })
+
+    let mut family_in_slack = false;
+    let mut any_in_slack = false;
+    let mut family_outside_slack = false;
+    for e in events {
+        if e.family.is_empty() {
+            continue;
+        }
+        let in_slack = (e.ts_epoch - csv_ts).abs() <= slack_secs;
+        let same_family = e.family == fam;
+        if in_slack {
+            any_in_slack = true;
+            if same_family {
+                family_in_slack = true;
+            }
+        } else if same_family {
+            family_outside_slack = true;
+        }
+    }
+
+    if family_in_slack {
+        return None;
+    }
+    if any_in_slack {
+        return Some(FilterReason::Model);
+    }
+    if family_outside_slack {
+        return Some(FilterReason::Time);
+    }
+    Some(FilterReason::None)
 }
 
 #[cfg(test)]
@@ -175,5 +247,85 @@ mod tests {
     #[test]
     fn test_is_likely_local_empty_events_fail_open() {
         assert!(is_likely_local(1, "grok-4.5", &[], 60));
+        assert_eq!(explain_filter_reason(1, "grok-4.5", &[], 60), None);
+    }
+
+    #[test]
+    fn test_explain_filter_reason_model() {
+        let events = vec![LocalHookEvent {
+            ts_epoch: 1_000_000,
+            model: "grok-4.5".into(),
+            family: "grok-4.5".into(),
+            hook_event_name: "beforeSubmitPrompt".into(),
+        }];
+        assert_eq!(
+            explain_filter_reason(1_000_000, "gpt-5.6-terra-medium", &events, 60),
+            Some(FilterReason::Model)
+        );
+    }
+
+    #[test]
+    fn test_explain_filter_reason_time() {
+        let events = vec![LocalHookEvent {
+            ts_epoch: 1_000_000,
+            model: "grok-4.5".into(),
+            family: "grok-4.5".into(),
+            hook_event_name: "beforeSubmitPrompt".into(),
+        }];
+        assert_eq!(
+            explain_filter_reason(1_000_120, "cursor-grok-4.5-high", &events, 60),
+            Some(FilterReason::Time)
+        );
+    }
+
+    #[test]
+    fn test_explain_filter_reason_none() {
+        let events = vec![LocalHookEvent {
+            ts_epoch: 1_000_000,
+            model: "grok-4.5".into(),
+            family: "grok-4.5".into(),
+            hook_event_name: "beforeSubmitPrompt".into(),
+        }];
+        assert_eq!(
+            explain_filter_reason(2_000_000, "gpt-5.6-terra-medium", &events, 60),
+            Some(FilterReason::None)
+        );
+    }
+
+    #[test]
+    fn test_explain_filter_reason_model_over_time() {
+        // 窗内错模型 + 窗外同家族 → 优先模型不对
+        let events = vec![
+            LocalHookEvent {
+                ts_epoch: 1_000_000,
+                model: "gpt".into(),
+                family: "gpt-5.6-terra".into(),
+                hook_event_name: "beforeSubmitPrompt".into(),
+            },
+            LocalHookEvent {
+                ts_epoch: 1_000_200,
+                model: "grok".into(),
+                family: "grok-4.5".into(),
+                hook_event_name: "stop".into(),
+            },
+        ];
+        assert_eq!(
+            explain_filter_reason(1_000_000, "cursor-grok-4.5-high", &events, 60),
+            Some(FilterReason::Model)
+        );
+    }
+
+    #[test]
+    fn test_explain_filter_reason_kept() {
+        let events = vec![LocalHookEvent {
+            ts_epoch: 1_000_000,
+            model: "grok-4.5".into(),
+            family: "grok-4.5".into(),
+            hook_event_name: "beforeSubmitPrompt".into(),
+        }];
+        assert_eq!(
+            explain_filter_reason(1_000_030, "cursor-grok-4.5-high", &events, 60),
+            None
+        );
     }
 }

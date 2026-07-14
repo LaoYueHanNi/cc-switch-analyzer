@@ -41,21 +41,26 @@
               @update:value="onToggleAttribution"
             />
             <span class="tm-label">本机精准归因</span>
-            <span class="tm-hint">{{ cursorStatus.attributionHint || '按本机 Hook 过滤（分钟±1 + 模型家族）' }}</span>
+            <span class="tm-hint">{{ cursorStatus.attributionHint || '按本机 Hook 过滤（分钟±5 + 模型家族）' }}</span>
           </div>
           <div class="attr-stats">
-            <div class="attr-stats-row">
+            <button type="button" class="attr-stats-row clickable" title="预览 CSV 全量" @click="openCsvPreview(false)">
               <span class="attr-stats-label">CSV 总计</span>
               <span class="attr-stats-vals" :title="tokenQuadTitle(csvTotal)">{{ formatTokenQuad(csvTotal) }}</span>
-            </div>
-            <div class="attr-stats-row">
+            </button>
+            <button type="button" class="attr-stats-row clickable" title="预览被归因过滤的记录" @click="openCsvPreview(true)">
               <span class="attr-stats-label">归因过滤</span>
               <span class="attr-stats-vals filtered" :title="tokenQuadTitle(filteredOut)">{{ formatTokenQuad(filteredOut) }}</span>
-            </div>
+            </button>
           </div>
         </div>
       </div>
     </div>
+
+    <CursorCsvPreviewDialog
+      v-model:show="showCsvPreview"
+      :initial-filtered-only="csvPreviewFilteredOnly"
+    />
 
     <n-modal v-model:show="showLoginDialog" preset="card" title="登录 Cursor" size="small" style="max-width: 420px">
       <p class="login-hint">
@@ -129,6 +134,7 @@
 import { computed, ref, watch } from 'vue'
 import { NModal, NIcon, NButton, NSwitch, NDivider, NInput } from 'naive-ui'
 import { CloseOutline } from '@vicons/ionicons5'
+import CursorCsvPreviewDialog from '@/components/layout/CursorCsvPreviewDialog.vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useDatabase } from '@/composables/useDatabase'
 import { useUpdaterStore } from '@/stores/updater'
@@ -165,6 +171,8 @@ const sessionToken = ref('')
 const loginLoading = ref(false)
 const cursorSyncing = ref(false)
 const attributionToggling = ref(false)
+const showCsvPreview = ref(false)
+const csvPreviewFilteredOnly = ref(false)
 
 const csvTotal = computed(() => cursorStatus.value.attributionStats?.csvTotal ?? emptyQuad())
 const filteredOut = computed(() => cursorStatus.value.attributionStats?.filteredOut ?? emptyQuad())
@@ -175,6 +183,11 @@ function formatTokenQuad(q: TokenQuad): string {
 
 function tokenQuadTitle(q: TokenQuad): string {
   return `输入 ${q.input} · 输出 ${q.output} · 缓存读 ${q.cacheRead} · 缓存写 ${q.cacheCreation}`
+}
+
+function openCsvPreview(filteredOnly: boolean): void {
+  csvPreviewFilteredOnly.value = filteredOnly
+  showCsvPreview.value = true
 }
 
 const cursorStatusText = computed(() => {
@@ -418,6 +431,21 @@ async function toggleService(enabled: boolean): Promise<void> {
   gap: 8px;
   font-size: 11px;
   line-height: 1.4;
+}
+
+.attr-stats-row.clickable {
+  width: 100%;
+  margin: 0;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.attr-stats-row.clickable:hover {
+  background: color-mix(in srgb, #6c5ce7 12%, transparent);
 }
 
 .attr-stats-label {

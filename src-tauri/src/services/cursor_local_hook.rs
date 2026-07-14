@@ -292,7 +292,7 @@ pub fn attribution_hint(enabled: bool) -> String {
     #[cfg(target_os = "windows")]
     {
         if installed {
-            format!("已装 Hook · {} 条本机事件（分钟±1 + 模型家族）", count)
+            format!("已装 Hook · {} 条本机事件（分钟±5 + 模型家族）", count)
         } else {
             format!("已启用但 Hook 未检测到 · {} 条本机事件", count)
         }

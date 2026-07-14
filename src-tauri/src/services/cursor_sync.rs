@@ -130,8 +130,21 @@ pub fn is_logged_in() -> bool {
     load_credentials().is_some()
 }
 
+fn mask_token(token: &str) -> String {
+    let t = token.trim();
+    if t.len() <= 16 {
+        return "***".to_string();
+    }
+    format!("{}...{}(len={})", &t[..8], &t[t.len().saturating_sub(6)..], t.len())
+}
+
 pub fn validate_cursor_session(session_token: &str) -> ValidateSessionResult {
     let agent = build_http_agent();
+    log::info!(
+        "[CURSOR] validate session GET {} token={}",
+        USAGE_SUMMARY_ENDPOINT,
+        mask_token(session_token)
+    );
 
     let response = match agent
         .get(USAGE_SUMMARY_ENDPOINT)
@@ -140,8 +153,15 @@ pub fn validate_cursor_session(session_token: &str) -> ValidateSessionResult {
         .header("Accept", "*/*")
         .call()
     {
-        Ok(resp) => resp,
+        Ok(resp) => {
+            log::info!(
+                "[CURSOR] validate session OK status={}",
+                resp.status()
+            );
+            resp
+        }
         Err(ureq::Error::StatusCode(code)) => {
+            log::warn!("[CURSOR] validate session HTTP {}", code);
             if code == 401 || code == 403 {
                 return ValidateSessionResult {
                     valid: false,
@@ -156,6 +176,7 @@ pub fn validate_cursor_session(session_token: &str) -> ValidateSessionResult {
             };
         }
         Err(e) => {
+            log::warn!("[CURSOR] validate session request failed: {}", e);
             return ValidateSessionResult {
                 valid: false,
                 membership_type: None,
@@ -167,6 +188,7 @@ pub fn validate_cursor_session(session_token: &str) -> ValidateSessionResult {
     let body = match response.into_body().read_to_string() {
         Ok(body) => body,
         Err(e) => {
+            log::warn!("[CURSOR] validate session read body failed: {}", e);
             return ValidateSessionResult {
                 valid: false,
                 membership_type: None,
@@ -174,10 +196,16 @@ pub fn validate_cursor_session(session_token: &str) -> ValidateSessionResult {
             };
         }
     };
+    log::info!("[CURSOR] validate session body_len={}", body.len());
 
     let data: serde_json::Value = match serde_json::from_str(&body) {
         Ok(data) => data,
         Err(e) => {
+            log::warn!(
+                "[CURSOR] validate session JSON parse failed: {} body_prefix={:?}",
+                e,
+                body.chars().take(120).collect::<String>()
+            );
             return ValidateSessionResult {
                 valid: false,
                 membership_type: None,
@@ -196,15 +224,24 @@ pub fn validate_cursor_session(session_token: &str) -> ValidateSessionResult {
         .is_some();
 
     if has_billing_start && has_billing_end {
+        let membership = data
+            .get("membershipType")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        log::info!(
+            "[CURSOR] validate session valid=true membership={:?}",
+            membership
+        );
         ValidateSessionResult {
             valid: true,
-            membership_type: data
-                .get("membershipType")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
+            membership_type: membership,
             error: None,
         }
     } else {
+        log::warn!(
+            "[CURSOR] validate session invalid body keys={:?}",
+            data.as_object().map(|o| o.keys().collect::<Vec<_>>())
+        );
         ValidateSessionResult {
             valid: false,
             membership_type: None,
@@ -215,25 +252,70 @@ pub fn validate_cursor_session(session_token: &str) -> ValidateSessionResult {
 
 pub fn fetch_cursor_usage_csv(session_token: &str) -> Result<String, String> {
     let agent = build_http_agent();
+    let started = std::time::Instant::now();
+    log::info!(
+        "[CURSOR] fetch CSV GET {} token={} timeout={}s",
+        USAGE_CSV_ENDPOINT,
+        mask_token(session_token),
+        CURSOR_HTTP_TIMEOUT.as_secs()
+    );
     let response = agent
         .get(USAGE_CSV_ENDPOINT)
         .header("Cookie", &format!("WorkosCursorSessionToken={}", session_token.trim()))
         .header("Referer", "https://www.cursor.com/settings")
         .header("Accept", "*/*")
         .call()
-        .map_err(|e| match e {
-            ureq::Error::StatusCode(code) if code == 401 || code == 403 => {
-                "Cursor Session Token 已过期，请重新登录".to_string()
-            }
-            other => format!("Cursor API 请求失败: {}", other),
+        .map_err(|e| {
+            let msg = match &e {
+                ureq::Error::StatusCode(code) if *code == 401 || *code == 403 => {
+                    "Cursor Session Token 已过期，请重新登录".to_string()
+                }
+                other => format!("Cursor API 请求失败: {}", other),
+            };
+            log::warn!(
+                "[CURSOR] fetch CSV failed after {:?}: {}",
+                started.elapsed(),
+                msg
+            );
+            msg
         })?;
+
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    log::info!(
+        "[CURSOR] fetch CSV response status={} content-type={} elapsed={:?}",
+        status,
+        content_type,
+        started.elapsed()
+    );
 
     let body = response
         .into_body()
         .read_to_string()
-        .map_err(|e| format!("读取 Cursor CSV 响应失败: {}", e))?;
+        .map_err(|e| {
+            let msg = format!("读取 Cursor CSV 响应失败: {}", e);
+            log::warn!("[CURSOR] {}", msg);
+            msg
+        })?;
+
+    let rows = count_cursor_csv_rows(&body);
+    log::info!(
+        "[CURSOR] fetch CSV body_len={} rows={} prefix={:?}",
+        body.len(),
+        rows,
+        body.chars().take(60).collect::<String>()
+    );
 
     if !body.starts_with("Date,") {
+        log::warn!(
+            "[CURSOR] fetch CSV non-CSV body prefix={:?}",
+            body.chars().take(160).collect::<String>()
+        );
         return Err("Cursor API 返回非 CSV 格式".to_string());
     }
     Ok(body)
@@ -268,6 +350,7 @@ pub fn sync_cursor_cache() -> SyncCursorResult {
     let creds = match load_credentials() {
         Some(c) => c,
         None => {
+            log::warn!("[CURSOR] sync aborted: no credentials");
             return SyncCursorResult {
                 synced: false,
                 rows: 0,
@@ -275,12 +358,19 @@ pub fn sync_cursor_cache() -> SyncCursorResult {
             };
         }
     };
+    log::info!(
+        "[CURSOR] sync start user_id={:?} creds_created_at={} token={}",
+        creds.user_id,
+        creds.created_at,
+        mask_token(&creds.session_token)
+    );
 
     match fetch_cursor_usage_csv(&creds.session_token) {
         Ok(csv_text) => {
             let cache_dir = match utils::get_cursor_cache_dir() {
                 Ok(dir) => dir,
                 Err(e) => {
+                    log::warn!("[CURSOR] sync get cache dir failed: {}", e);
                     return SyncCursorResult {
                         synced: false,
                         rows: 0,
@@ -289,43 +379,65 @@ pub fn sync_cursor_cache() -> SyncCursorResult {
                 }
             };
             if let Err(e) = fs::create_dir_all(&cache_dir) {
+                let msg = format!("创建缓存目录失败: {}", e);
+                log::warn!("[CURSOR] {}", msg);
                 return SyncCursorResult {
                     synced: false,
                     rows: 0,
-                    error: Some(format!("创建缓存目录失败: {}", e)),
+                    error: Some(msg),
                 };
             }
             let file_path = cache_dir.join("usage.csv");
             let row_count = count_cursor_csv_rows(&csv_text);
             if let Err(e) = atomic_write_file(&file_path, &csv_text) {
+                log::warn!("[CURSOR] sync write cache failed: {}", e);
                 return SyncCursorResult {
                     synced: false,
                     rows: 0,
                     error: Some(e),
                 };
             }
+            log::info!(
+                "[CURSOR] sync OK rows={} path={}",
+                row_count,
+                file_path.display()
+            );
             SyncCursorResult {
                 synced: true,
                 rows: row_count,
                 error: None,
             }
         }
-        Err(e) => SyncCursorResult {
-            synced: false,
-            rows: 0,
-            error: Some(e),
-        },
+        Err(e) => {
+            log::warn!("[CURSOR] sync failed: {}", e);
+            SyncCursorResult {
+                synced: false,
+                rows: 0,
+                error: Some(e),
+            }
+        }
     }
 }
 
 /// 缓存过期时自动同步，返回是否执行了同步
 pub fn maybe_auto_sync() -> Result<bool, String> {
     if !is_logged_in() {
+        log::debug!("[CURSOR] auto-sync skip: not logged in");
         return Ok(false);
     }
     if cache_is_fresh() {
+        let age = cache_last_modified()
+            .and_then(|t| t.elapsed().ok())
+            .map(|d| format!("{}s", d.as_secs()))
+            .unwrap_or_else(|| "unknown".into());
+        log::info!(
+            "[CURSOR] auto-sync skip: cache fresh (age≈{}, ttl={}h)",
+            age,
+            CURSOR_AUTO_SYNC_FRESHNESS.as_secs() / 3600
+        );
         return Ok(false);
     }
+    log::info!("[CURSOR] auto-sync triggered: cache stale or missing");
     let result = sync_cursor_cache();
     if result.synced {
         Ok(true)

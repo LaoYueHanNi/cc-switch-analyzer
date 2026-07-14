@@ -3,7 +3,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import { check } from '@tauri-apps/plugin-updater'
-import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, DefaultPaths, TmServiceStatus } from './types'
+import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, CursorCsvPreviewPage, DefaultPaths, TmServiceStatus } from './types'
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
 import type { PricingData, PricingFamily } from '@/types/pricing'
@@ -230,6 +230,9 @@ export const platformAdapter: PlatformAdapter = {
   },
   async cursorStatus(): Promise<CursorStatusInfo> {
     return invoke('cursor_status')
+  },
+  async cursorPreviewCsv(page = 1, pageSize = 50, filteredOnly = false): Promise<CursorCsvPreviewPage> {
+    return invoke('cursor_preview_csv', { page, pageSize, filteredOnly })
   },
   async cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo> {
     return invoke('cursor_toggle_attribution', { enabled })

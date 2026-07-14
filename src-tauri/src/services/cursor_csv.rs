@@ -4,8 +4,8 @@ use std::sync::RwLock;
 
 use crate::models::*;
 use crate::services::cursor_attribution::{
-    is_likely_local, should_apply_attribution_for_ts, AttributionTokenStats, LocalHookEvent,
-    TokenQuad, ATTRIBUTION_SLACK_SECS,
+    explain_filter_reason, is_likely_local, should_apply_attribution_for_ts, AttributionTokenStats,
+    CursorCsvPreviewPage, CursorCsvPreviewRow, LocalHookEvent, TokenQuad, ATTRIBUTION_SLACK_SECS,
 };
 use crate::services::cursor_local_hook;
 use crate::services::data_source::DataSource;
@@ -53,6 +53,10 @@ impl CursorCsvService {
             self.attribution_enabled,
             self.local_events.len()
         );
+    }
+
+    pub fn refresh_local_events(&mut self) {
+        self.reload_attribution();
     }
 
     pub fn open(&mut self, dir_path: &str) -> Result<(), String> {
@@ -126,6 +130,101 @@ impl CursorCsvService {
         AttributionTokenStats {
             csv_total,
             filtered_out,
+        }
+    }
+
+    /// 分页预览 CSV。按时间降序；`filtered_only` 时仅返回被归因滤掉的行。
+    pub fn preview_csv(
+        &self,
+        page: usize,
+        page_size: usize,
+        filtered_only: bool,
+    ) -> CursorCsvPreviewPage {
+        let page = page.max(1);
+        let page_size = page_size.clamp(1, 100);
+        let empty = CursorCsvPreviewPage {
+            items: Vec::new(),
+            total: 0,
+            page,
+            page_size,
+        };
+        let records = match self.records_read() {
+            Ok(guard) => guard,
+            Err(_) => return empty,
+        };
+
+        let apply_attr = self.attribution_enabled && !self.local_events.is_empty();
+
+        // 收集索引：按 created_at 降序
+        let mut indices: Vec<usize> = (0..records.len()).collect();
+        indices.sort_by(|&a, &b| {
+            records[b]
+                .created_at
+                .cmp(&records[a].created_at)
+                .then_with(|| a.cmp(&b))
+        });
+
+        if filtered_only {
+            if !apply_attr {
+                return empty;
+            }
+            indices.retain(|&i| {
+                let r = &records[i];
+                should_apply_attribution_for_ts(r.created_at)
+                    && explain_filter_reason(
+                        r.created_at,
+                        &r.model,
+                        &self.local_events,
+                        ATTRIBUTION_SLACK_SECS,
+                    )
+                    .is_some()
+            });
+        }
+
+        let total = indices.len();
+        let start = (page - 1).saturating_mul(page_size);
+        if start >= total {
+            return CursorCsvPreviewPage {
+                items: Vec::new(),
+                total,
+                page,
+                page_size,
+            };
+        }
+        let end = (start + page_size).min(total);
+
+        let items: Vec<CursorCsvPreviewRow> = indices[start..end]
+            .iter()
+            .map(|&i| {
+                let r = &records[i];
+                let reason = if apply_attr && should_apply_attribution_for_ts(r.created_at) {
+                    explain_filter_reason(
+                        r.created_at,
+                        &r.model,
+                        &self.local_events,
+                        ATTRIBUTION_SLACK_SECS,
+                    )
+                } else {
+                    None
+                };
+                CursorCsvPreviewRow {
+                    created_at: r.created_at,
+                    model: r.model.clone(),
+                    input: r.input_tokens,
+                    output: r.output_tokens,
+                    cache_read: r.cache_read,
+                    cache_creation: r.cache_creation,
+                    filtered: reason.is_some(),
+                    reason,
+                }
+            })
+            .collect();
+
+        CursorCsvPreviewPage {
+            items,
+            total,
+            page,
+            page_size,
         }
     }
 
@@ -598,6 +697,19 @@ impl DataSource for CursorCsvService {
 
     fn get_cursor_attribution_stats(&self) -> Option<AttributionTokenStats> {
         Some(self.attribution_token_stats())
+    }
+
+    fn refresh_cursor_local_events(&mut self) {
+        self.refresh_local_events();
+    }
+
+    fn get_cursor_csv_preview(
+        &self,
+        page: usize,
+        page_size: usize,
+        filtered_only: bool,
+    ) -> Option<CursorCsvPreviewPage> {
+        Some(self.preview_csv(page, page_size, filtered_only))
     }
 }
 

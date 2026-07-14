@@ -74,6 +74,19 @@ pub trait DataSource: Send + Sync {
     ) -> Option<crate::services::cursor_attribution::AttributionTokenStats> {
         None
     }
+
+    /// 刷新 Cursor 本机 Hook 事件缓存。
+    fn refresh_cursor_local_events(&mut self) {}
+
+    /// Cursor CSV 分页预览；非 Cursor 源返回 None。
+    fn get_cursor_csv_preview(
+        &self,
+        _page: usize,
+        _page_size: usize,
+        _filtered_only: bool,
+    ) -> Option<crate::services::cursor_attribution::CursorCsvPreviewPage> {
+        None
+    }
 }
 
 #[derive(Debug)]

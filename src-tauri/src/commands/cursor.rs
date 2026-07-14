@@ -2,7 +2,7 @@ use tauri::State;
 
 use crate::AppState;
 use crate::models::SourceInfo;
-use crate::services::cursor_attribution::AttributionTokenStats;
+use crate::services::cursor_attribution::{AttributionTokenStats, CursorCsvPreviewPage};
 use crate::services::cursor_local_hook;
 use crate::services::cursor_sync::{self, SyncCursorResult};
 use crate::services::data_source::{create_source_entry, DbType};
@@ -183,6 +183,49 @@ pub fn cursor_sync(state: State<AppState>) -> Result<SyncCursorResult, String> {
 #[tauri::command]
 pub fn cursor_status(state: State<AppState>) -> Result<CursorStatus, String> {
     build_cursor_status(&state)
+}
+
+#[tauri::command]
+pub fn cursor_preview_csv(
+    page: Option<usize>,
+    page_size: Option<usize>,
+    filtered_only: Option<bool>,
+    state: State<AppState>,
+) -> Result<CursorCsvPreviewPage, String> {
+    let page = page.unwrap_or(1);
+    let page_size = page_size.unwrap_or(50);
+    let filtered_only = filtered_only.unwrap_or(false);
+
+    let csv_ready = utils::get_cursor_usage_csv_path()
+        .map(|p| p.exists())
+        .unwrap_or(false);
+    if !csv_ready {
+        return Ok(CursorCsvPreviewPage {
+            items: Vec::new(),
+            total: 0,
+            page: page.max(1),
+            page_size: page_size.clamp(1, 100),
+        });
+    }
+
+    ensure_cursor_source_registered(&state)?;
+
+    {
+        let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+        if let Some(entry) = sources
+            .iter_mut()
+            .find(|s| matches!(s.db_type, DbType::Cursor))
+        {
+            entry.source.refresh_cursor_local_events();
+        }
+    }
+
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    sources
+        .iter()
+        .find(|s| matches!(s.db_type, DbType::Cursor))
+        .and_then(|s| s.source.get_cursor_csv_preview(page, page_size, filtered_only))
+        .ok_or_else(|| "Cursor 数据源未加载".to_string())
 }
 
 #[tauri::command]
