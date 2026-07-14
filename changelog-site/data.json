@@ -4,6 +4,17 @@
     "date": "2026-07-14",
     "commits": [
       {
+        "hash": "3936372",
+        "subject": "feat(cursor): CSV同步支持可配置北京时间窗口",
+        "date": "2026-07-14"
+      }
+    ]
+  },
+  {
+    "version": "0.7.28",
+    "date": "2026-07-14",
+    "commits": [
+      {
         "hash": "4d2b398",
         "subject": "refactor(settings): 设置弹窗改为左右分栏布局",
         "date": "2026-07-14"
