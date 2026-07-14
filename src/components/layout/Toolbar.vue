@@ -8,7 +8,7 @@
         {{ dbStore.sources.length }} 个数据源 · {{ dbStore.recordCount }} 条记录
       </span>
     </div>
-    <DataSourceManager v-model:show="showManager" />
+    <SettingsDialog v-model:show="showManager" />
   </div>
 </template>
 
@@ -17,7 +17,7 @@ import { ref } from 'vue'
 import { NIcon } from 'naive-ui'
 import { SettingsOutline } from '@vicons/ionicons5'
 import { useDatabaseStore } from '@/stores/database'
-import DataSourceManager from './DataSourceManager.vue'
+import SettingsDialog from './SettingsDialog.vue'
 
 const dbStore = useDatabaseStore()
 const showManager = ref(false)
