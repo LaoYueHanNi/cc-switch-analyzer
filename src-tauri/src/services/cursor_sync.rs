@@ -572,6 +572,7 @@ pub fn sync_cursor_cache() -> SyncCursorResult {
                 row_count,
                 file_path.display()
             );
+            crate::services::cursor_hook_backup::maybe_backup_after_sync();
             SyncCursorResult {
                 synced: true,
                 rows: row_count,

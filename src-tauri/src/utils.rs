@@ -68,6 +68,12 @@ pub fn get_cursor_cache_dir() -> Result<std::path::PathBuf, String> {
     Ok(home.join(".cc-switch-analyzer").join("cursor-cache"))
 }
 
+/// Cursor Hook requests.jsonl 备份目录
+pub fn get_hook_backup_dir() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;
+    Ok(home.join(".cc-switch-analyzer").join("hook-backups"))
+}
+
 /// Cursor 用量 CSV 缓存文件
 pub fn get_cursor_usage_csv_path() -> Result<std::path::PathBuf, String> {
     Ok(get_cursor_cache_dir()?.join("usage.csv"))

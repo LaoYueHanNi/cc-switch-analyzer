@@ -3,7 +3,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import { check } from '@tauri-apps/plugin-updater'
-import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, CursorCsvPreviewPage, DefaultPaths, TmServiceStatus } from './types'
+import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, CursorCsvPreviewPage, HookBackupResult, DefaultPaths, TmServiceStatus } from './types'
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
 import type { PricingData, PricingFamily } from '@/types/pricing'
@@ -239,6 +239,12 @@ export const platformAdapter: PlatformAdapter = {
   },
   async cursorSetSyncLookback(lookback: string): Promise<CursorStatusInfo> {
     return invoke('cursor_set_sync_lookback', { lookback })
+  },
+  async cursorSetHookBackupPeriod(period: string): Promise<CursorStatusInfo> {
+    return invoke('cursor_set_hook_backup_period', { period })
+  },
+  async cursorBackupHooksNow(): Promise<HookBackupResult> {
+    return invoke('cursor_backup_hooks_now')
   },
   async cursorLogout(clearCache = false): Promise<SourceInfo[]> {
     return invoke<SourceInfo[]>('cursor_logout', { clearCache })

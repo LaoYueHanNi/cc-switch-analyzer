@@ -3,6 +3,7 @@ use tauri::State;
 use crate::AppState;
 use crate::models::SourceInfo;
 use crate::services::cursor_attribution::{AttributionTokenStats, CursorCsvPreviewPage};
+use crate::services::cursor_hook_backup::{self, HookBackupResult};
 use crate::services::cursor_local_hook;
 use crate::services::cursor_sync::{self, SyncCursorResult};
 use crate::services::data_source::{create_source_entry, DbType};
@@ -22,6 +23,9 @@ pub struct CursorStatus {
     pub attribution_hint: String,
     pub attribution_stats: AttributionTokenStats,
     pub sync_lookback: String,
+    pub hook_backup_period: String,
+    pub hook_backup_count: i64,
+    pub hook_last_backup_at: Option<i64>,
 }
 
 fn cursor_cache_dir_str() -> Result<String, String> {
@@ -79,6 +83,8 @@ fn build_cursor_status(state: &State<AppState>) -> Result<CursorStatus, String> 
             .unwrap_or_default()
     };
 
+    let hook_backup = cursor_hook_backup::backup_status();
+
     Ok(CursorStatus {
         logged_in,
         last_sync,
@@ -91,6 +97,9 @@ fn build_cursor_status(state: &State<AppState>) -> Result<CursorStatus, String> 
         attribution_hint,
         attribution_stats,
         sync_lookback: cursor_sync::get_sync_lookback().as_str().to_string(),
+        hook_backup_period: hook_backup.period,
+        hook_backup_count: hook_backup.backup_count,
+        hook_last_backup_at: hook_backup.last_backup_at,
     })
 }
 
@@ -268,6 +277,27 @@ pub fn cursor_set_sync_lookback(
     let parsed = cursor_sync::set_sync_lookback(&lookback)?;
     log::info!("[CURSOR] sync lookback set to {}", parsed.as_str());
     build_cursor_status(&state)
+}
+
+#[tauri::command]
+pub fn cursor_set_hook_backup_period(
+    period: String,
+    state: State<AppState>,
+) -> Result<CursorStatus, String> {
+    let parsed = cursor_hook_backup::set_hook_backup_period(&period)?;
+    log::info!("[CURSOR] hook backup period set to {}", parsed.as_str());
+    build_cursor_status(&state)
+}
+
+#[tauri::command]
+pub fn cursor_backup_hooks_now() -> Result<HookBackupResult, String> {
+    let result = cursor_hook_backup::backup_now()?;
+    log::info!(
+        "[CURSOR] hook backup now backed_up={} msg={}",
+        result.backed_up,
+        result.message
+    );
+    Ok(result)
 }
 
 #[tauri::command]

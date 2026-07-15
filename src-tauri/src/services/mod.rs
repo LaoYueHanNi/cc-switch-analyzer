@@ -4,6 +4,7 @@ pub mod cloud_pricing;
 pub mod codex_sessions;
 pub mod cursor_csv;
 pub mod cursor_attribution;
+pub mod cursor_hook_backup;
 pub mod cursor_local_hook;
 pub mod cursor_sync;
 pub mod data_source;

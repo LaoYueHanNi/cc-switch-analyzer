@@ -110,6 +110,27 @@
           />
           <span class="tm-hint">{{ cursorStatus.attributionHint || '按本机 Hook 过滤（分钟±5 + 模型家族）' }}</span>
         </div>
+        <div class="sync-lookback-row">
+          <span class="tm-label">Hook 备份</span>
+          <select
+            class="lookback-select"
+            :value="cursorStatus.hookBackupPeriod || 'daily'"
+            :disabled="hookBackupSaving"
+            @change="onHookBackupPeriodChange(($event.target as HTMLSelectElement).value)"
+          >
+            <option value="off">关</option>
+            <option value="daily">每天</option>
+          </select>
+          <n-button
+            size="tiny"
+            secondary
+            :loading="hookBackupNowLoading"
+            @click="onHookBackupNow"
+          >
+            立即备份
+          </n-button>
+          <span class="tm-hint">{{ hookBackupStatusText }}</span>
+        </div>
         <div class="attr-stats">
           <button type="button" class="attr-stats-row clickable" title="预览 CSV 全量" @click="openCsvPreview(false)">
             <span class="attr-stats-label">CSV 总计</span>
@@ -150,7 +171,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { NModal, NIcon, NButton, NSwitch, NInput } from 'naive-ui'
+import { NModal, NIcon, NButton, NSwitch, NInput, useMessage } from 'naive-ui'
 import { CloseOutline, CreateOutline, SyncOutline } from '@vicons/ionicons5'
 import CursorCsvPreviewDialog from '@/components/layout/CursorCsvPreviewDialog.vue'
 import { useDatabaseStore } from '@/stores/database'
@@ -160,6 +181,8 @@ import { formatNum } from '@/utils/format'
 import type { CursorStatusInfo, DefaultPaths, TokenQuad } from '@/platform/types'
 
 const props = defineProps<{ active: boolean }>()
+
+const message = useMessage()
 
 const emptyQuad = (): TokenQuad => ({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 })
 
@@ -179,6 +202,9 @@ const cursorStatus = ref<CursorStatusInfo>({
   attributionHint: '',
   attributionStats: { csvTotal: emptyQuad(), filteredOut: emptyQuad() },
   syncLookback: '7d',
+  hookBackupPeriod: 'daily',
+  hookBackupCount: 0,
+  hookLastBackupAt: null,
 })
 const showLoginDialog = ref(false)
 const sessionToken = ref('')
@@ -186,6 +212,8 @@ const loginLoading = ref(false)
 const cursorSyncing = ref(false)
 const attributionToggling = ref(false)
 const lookbackSaving = ref(false)
+const hookBackupSaving = ref(false)
+const hookBackupNowLoading = ref(false)
 const showCsvPreview = ref(false)
 const csvPreviewFilteredOnly = ref(false)
 
@@ -216,6 +244,17 @@ const cursorStatusText = computed(() => {
     parts.push(`同步于 ${d.toLocaleString()}`)
   }
   return parts.join(' · ') || '已登录'
+})
+
+const hookBackupStatusText = computed(() => {
+  const count = cursorStatus.value.hookBackupCount ?? 0
+  const last = cursorStatus.value.hookLastBackupAt
+  if (count <= 0 && !last) return '尚无备份 · 同步成功后顺带备份'
+  const parts: string[] = [`${count} 份`]
+  if (last) {
+    parts.push(`最近 ${new Date(last * 1000).toLocaleString()}`)
+  }
+  return parts.join(' · ')
 })
 
 async function loadCursorStatus(): Promise<void> {
@@ -290,6 +329,33 @@ async function onLookbackChange(lookback: string): Promise<void> {
     await loadCursorStatus()
   } finally {
     lookbackSaving.value = false
+  }
+}
+
+async function onHookBackupPeriodChange(period: string): Promise<void> {
+  hookBackupSaving.value = true
+  try {
+    cursorStatus.value = await platformAdapter.cursorSetHookBackupPeriod(period)
+  } catch (e) {
+    console.error('[cursor] set hook backup period failed:', e)
+    message.error(typeof e === 'string' ? e : String((e as any)?.message || e || '保存 Hook 备份周期失败'))
+    await loadCursorStatus()
+  } finally {
+    hookBackupSaving.value = false
+  }
+}
+
+async function onHookBackupNow(): Promise<void> {
+  hookBackupNowLoading.value = true
+  try {
+    const result = await platformAdapter.cursorBackupHooksNow()
+    message.success(result.message || '备份完成')
+    await loadCursorStatus()
+  } catch (e) {
+    console.error('[cursor] hook backup now failed:', e)
+    message.error(typeof e === 'string' ? e : String((e as any)?.message || e || '立即备份失败'))
+  } finally {
+    hookBackupNowLoading.value = false
   }
 }
 

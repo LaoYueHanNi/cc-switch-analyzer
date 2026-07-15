@@ -177,6 +177,18 @@ export interface CursorStatusInfo {
   attributionStats?: AttributionTokenStats
   /** Cursor CSV 同步范围：1d | 7d | 30d | all */
   syncLookback?: string
+  /** Hook 备份周期：off | daily */
+  hookBackupPeriod?: string
+  hookBackupCount?: number
+  /** 最近备份时刻（Unix 秒，来自文件名） */
+  hookLastBackupAt?: number | null
+}
+
+export interface HookBackupResult {
+  backedUp: boolean
+  path?: string | null
+  skippedReason?: string | null
+  message: string
 }
 
 export interface DefaultPaths {
@@ -253,6 +265,8 @@ export interface PlatformAdapter {
   cursorPreviewCsv(page?: number, pageSize?: number, filteredOnly?: boolean): Promise<CursorCsvPreviewPage>
   cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo>
   cursorSetSyncLookback(lookback: string): Promise<CursorStatusInfo>
+  cursorSetHookBackupPeriod(period: string): Promise<CursorStatusInfo>
+  cursorBackupHooksNow(): Promise<HookBackupResult>
   cursorLogout(clearCache?: boolean): Promise<SourceInfo[]>
   // 应用信息 / 系统交互
   getAppVersion(): Promise<string>
