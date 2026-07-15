@@ -1,7 +1,7 @@
 //! Cursor Hook `requests.jsonl` 备份：只读复制到应用目录，不改 Cursor 源文件。
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 use serde::Serialize;
@@ -235,6 +235,7 @@ pub fn prune_backups(backup_dir: &Path, max_keep: usize) -> Result<usize, String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn write_src(dir: &Path, content: &str) -> PathBuf {
         let p = dir.join("requests.jsonl");

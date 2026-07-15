@@ -1,6 +1,22 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-07-15",
+    "commits": [
+      {
+        "hash": "3c163ce",
+        "subject": "feat(cursor): 同步后备份 Hook requests.jsonl",
+        "date": "2026-07-15"
+      },
+      {
+        "hash": "ed5a653",
+        "subject": "fix(cursor): composer-2.5-fast 不再与 composer-2.5 归为同家族",
+        "date": "2026-07-15"
+      }
+    ]
+  },
+  {
+    "version": "0.7.29",
     "date": "2026-07-14",
     "commits": [
       {
