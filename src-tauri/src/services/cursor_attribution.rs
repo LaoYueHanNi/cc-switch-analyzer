@@ -101,12 +101,12 @@ pub fn normalize_model_family(name: &str) -> String {
     if let Some(rest) = n.strip_prefix("cursor-") {
         n = rest.to_string();
     }
+    // 注意：不剥 `-fast` / `-fast-high`。composer-2.5-fast 是独立 SKU（更快更贵），
+    // 不是 thinking/effort 档，不能与 composer-2.5 归为同一家族。
     const SUFFIXES: &[&str] = &[
         "-thinking-high",
         "-thinking-medium",
         "-thinking-low",
-        "-fast-high",
-        "-fast",
         "-high",
         "-medium",
         "-low",
@@ -187,9 +187,29 @@ mod tests {
             normalize_model_family("claude-sonnet-5-thinking-high"),
             "claude-sonnet-5"
         );
-        assert_eq!(normalize_model_family("composer-2.5-fast"), "composer-2.5");
+        assert_eq!(normalize_model_family("composer-2.5-fast"), "composer-2.5-fast");
+        assert_eq!(normalize_model_family("composer-2.5"), "composer-2.5");
         assert_eq!(normalize_model_family("glm-5.2-max"), "glm-5.2");
         assert_eq!(normalize_model_family("gpt-5.6-terra-medium"), "gpt-5.6-terra");
+    }
+
+    #[test]
+    fn test_composer_fast_not_same_family_as_composer() {
+        let events = vec![LocalHookEvent {
+            ts_epoch: 1_000_000,
+            model: "composer-2.5".into(),
+            family: "composer-2.5".into(),
+            hook_event_name: "beforeSubmitPrompt".into(),
+        }];
+        // 同秒级时间窗内：本机只有 composer-2.5，CSV 的 fast 应判模型不对
+        assert_eq!(
+            explain_filter_reason(1_000_000, "composer-2.5-fast", &events, 60),
+            Some(FilterReason::Model)
+        );
+        assert_eq!(
+            explain_filter_reason(1_000_000, "composer-2.5", &events, 60),
+            None
+        );
     }
 
     #[test]
