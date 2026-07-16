@@ -1,6 +1,27 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-07-16",
+    "commits": [
+      {
+        "hash": "154a094",
+        "subject": "feat(trend): 模型对比tip支持展开前十",
+        "date": "2026-07-16"
+      },
+      {
+        "hash": "c0ba1a9",
+        "subject": "feat(cursor): CSV预览支持按模型筛选",
+        "date": "2026-07-16"
+      },
+      {
+        "hash": "1ec4c33",
+        "subject": "fix(cursor): Hook覆盖subagent等模型相关事件",
+        "date": "2026-07-16"
+      }
+    ]
+  },
+  {
+    "version": "0.7.30",
     "date": "2026-07-15",
     "commits": [
       {
