@@ -163,6 +163,8 @@ export interface CursorCsvPreviewPage {
   total: number
   page: number
   pageSize: number
+  /** 当前过滤条件下可选模型（未应用模型筛选前） */
+  availableModels?: string[]
 }
 
 export interface CursorStatusInfo {
@@ -262,7 +264,12 @@ export interface PlatformAdapter {
   cursorLogin(sessionToken: string): Promise<SourceInfo[]>
   cursorSync(): Promise<CursorSyncResult>
   cursorStatus(): Promise<CursorStatusInfo>
-  cursorPreviewCsv(page?: number, pageSize?: number, filteredOnly?: boolean): Promise<CursorCsvPreviewPage>
+  cursorPreviewCsv(
+    page?: number,
+    pageSize?: number,
+    filteredOnly?: boolean,
+    model?: string | null,
+  ): Promise<CursorCsvPreviewPage>
   cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo>
   cursorSetSyncLookback(lookback: string): Promise<CursorStatusInfo>
   cursorSetHookBackupPeriod(period: string): Promise<CursorStatusInfo>

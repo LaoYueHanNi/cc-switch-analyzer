@@ -231,8 +231,13 @@ export const platformAdapter: PlatformAdapter = {
   async cursorStatus(): Promise<CursorStatusInfo> {
     return invoke('cursor_status')
   },
-  async cursorPreviewCsv(page = 1, pageSize = 50, filteredOnly = false): Promise<CursorCsvPreviewPage> {
-    return invoke('cursor_preview_csv', { page, pageSize, filteredOnly })
+  async cursorPreviewCsv(
+    page = 1,
+    pageSize = 50,
+    filteredOnly = false,
+    model: string | null = null,
+  ): Promise<CursorCsvPreviewPage> {
+    return invoke('cursor_preview_csv', { page, pageSize, filteredOnly, model })
   },
   async cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo> {
     return invoke('cursor_toggle_attribution', { enabled })

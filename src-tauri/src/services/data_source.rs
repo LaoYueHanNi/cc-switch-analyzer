@@ -84,6 +84,7 @@ pub trait DataSource: Send + Sync {
         _page: usize,
         _page_size: usize,
         _filtered_only: bool,
+        _model_filter: Option<&str>,
     ) -> Option<crate::services::cursor_attribution::CursorCsvPreviewPage> {
         None
     }

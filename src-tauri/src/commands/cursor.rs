@@ -201,11 +201,13 @@ pub fn cursor_preview_csv(
     page: Option<usize>,
     page_size: Option<usize>,
     filtered_only: Option<bool>,
+    model: Option<String>,
     state: State<AppState>,
 ) -> Result<CursorCsvPreviewPage, String> {
     let page = page.unwrap_or(1);
     let page_size = page_size.unwrap_or(50);
     let filtered_only = filtered_only.unwrap_or(false);
+    let model_filter = model.as_deref().map(str::trim).filter(|s| !s.is_empty());
 
     let csv_ready = utils::get_cursor_usage_csv_path()
         .map(|p| p.exists())
@@ -216,6 +218,7 @@ pub fn cursor_preview_csv(
             total: 0,
             page: page.max(1),
             page_size: page_size.clamp(1, 100),
+            available_models: Vec::new(),
         });
     }
 
@@ -235,7 +238,10 @@ pub fn cursor_preview_csv(
     sources
         .iter()
         .find(|s| matches!(s.db_type, DbType::Cursor))
-        .and_then(|s| s.source.get_cursor_csv_preview(page, page_size, filtered_only))
+        .and_then(|s| {
+            s.source
+                .get_cursor_csv_preview(page, page_size, filtered_only, model_filter)
+        })
         .ok_or_else(|| "Cursor 数据源未加载".to_string())
 }
 

@@ -84,6 +84,9 @@ pub struct CursorCsvPreviewPage {
     pub total: usize,
     pub page: usize,
     pub page_size: usize,
+    /// 当前过滤条件下可选模型列表（未应用 model 筛选前的 distinct）
+    #[serde(default)]
+    pub available_models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,7 +125,7 @@ pub fn normalize_model_family(name: &str) -> String {
 }
 
 /// 判断 CSV 行是否较像本机用量。
-/// `events` 应已筛过 beforeSubmitPrompt/stop，且带非空 model。
+/// `events` 应已筛过归因相关 hook（含 subagent / compact 等），且带非空 model。
 pub fn is_likely_local(csv_ts: i64, csv_model: &str, events: &[LocalHookEvent], slack_secs: i64) -> bool {
     explain_filter_reason(csv_ts, csv_model, events, slack_secs).is_none()
 }

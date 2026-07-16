@@ -3,6 +3,14 @@
     <div class="preview-toolbar">
       <n-switch size="small" :value="filteredOnly" @update:value="onToggleFiltered" />
       <span class="preview-toolbar-label">仅看归因过滤</span>
+      <span class="preview-toolbar-label">模型</span>
+      <CompactSelect
+        :model-value="modelFilter"
+        :options="modelOptions"
+        clearable
+        placeholder="全部"
+        @update:model-value="onModelChange"
+      />
       <span class="preview-toolbar-count">共 {{ total }} 条</span>
     </div>
 
@@ -25,7 +33,7 @@
           </tr>
           <tr v-else-if="items.length === 0">
             <td colspan="7" class="empty-cell">
-              {{ filteredOnly ? '没有被归因过滤的记录' : '暂无 CSV 数据' }}
+              {{ emptyHint }}
             </td>
           </tr>
           <tr v-for="(row, idx) in items" :key="`${row.createdAt}-${row.model}-${idx}`" :class="{ filtered: row.filtered }">
@@ -56,6 +64,7 @@
 import { ref, watch, computed } from 'vue'
 import { NSwitch } from 'naive-ui'
 import CompactDialog from '@/components/common/CompactDialog.vue'
+import CompactSelect from '@/components/common/CompactSelect.vue'
 import { platformAdapter } from '@/platform'
 import { formatNum } from '@/utils/format'
 import type { CursorCsvPreviewRow, CursorFilterReason } from '@/platform/types'
@@ -69,12 +78,27 @@ const emit = defineEmits<{ 'update:show': [value: boolean] }>()
 
 const PAGE_SIZE = 50
 const filteredOnly = ref(false)
+const modelFilter = ref('')
+const availableModels = ref<string[]>([])
 const page = ref(1)
 const total = ref(0)
 const items = ref<CursorCsvPreviewRow[]>([])
 const loading = ref(false)
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
+
+const modelOptions = computed(() =>
+  availableModels.value.map((m) => ({ label: m, value: m })),
+)
+
+const emptyHint = computed(() => {
+  if (filteredOnly.value && modelFilter.value) {
+    return `没有被归因过滤的「${modelFilter.value}」记录`
+  }
+  if (filteredOnly.value) return '没有被归因过滤的记录'
+  if (modelFilter.value) return `没有「${modelFilter.value}」的 CSV 数据`
+  return '暂无 CSV 数据'
+})
 
 function reasonLabel(reason: CursorFilterReason): string {
   if (reason === 'model') return '模型不对'
@@ -89,14 +113,21 @@ function formatTime(epoch: number): string {
 async function loadPage(): Promise<void> {
   loading.value = true
   try {
-    const res = await platformAdapter.cursorPreviewCsv(page.value, PAGE_SIZE, filteredOnly.value)
+    const res = await platformAdapter.cursorPreviewCsv(
+      page.value,
+      PAGE_SIZE,
+      filteredOnly.value,
+      modelFilter.value || null,
+    )
     items.value = res.items
     total.value = res.total
     page.value = res.page
+    availableModels.value = res.availableModels ?? []
   } catch (e) {
     console.error('[cursor] preview csv failed:', e)
     items.value = []
     total.value = 0
+    availableModels.value = []
   } finally {
     loading.value = false
   }
@@ -104,6 +135,12 @@ async function loadPage(): Promise<void> {
 
 function onToggleFiltered(v: boolean): void {
   filteredOnly.value = v
+  page.value = 1
+  loadPage()
+}
+
+function onModelChange(v: string): void {
+  modelFilter.value = v
   page.value = 1
   loadPage()
 }
@@ -118,6 +155,7 @@ watch(
   (visible) => {
     if (!visible) return
     filteredOnly.value = !!props.initialFilteredOnly
+    modelFilter.value = ''
     page.value = 1
     loadPage()
   },

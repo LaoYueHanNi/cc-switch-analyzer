@@ -133,12 +133,14 @@ impl CursorCsvService {
         }
     }
 
-    /// 分页预览 CSV。按时间降序；`filtered_only` 时仅返回被归因滤掉的行。
+    /// 分页预览 CSV。按时间降序；`filtered_only` 时仅返回被归因滤掉的行；
+    /// `model_filter` 非空时按模型精确匹配。
     pub fn preview_csv(
         &self,
         page: usize,
         page_size: usize,
         filtered_only: bool,
+        model_filter: Option<&str>,
     ) -> CursorCsvPreviewPage {
         let page = page.max(1);
         let page_size = page_size.clamp(1, 100);
@@ -147,6 +149,7 @@ impl CursorCsvService {
             total: 0,
             page,
             page_size,
+            available_models: Vec::new(),
         };
         let records = match self.records_read() {
             Ok(guard) => guard,
@@ -181,6 +184,21 @@ impl CursorCsvService {
             });
         }
 
+        // 模型下拉：在 model 筛选前收集 distinct
+        let mut available_models: Vec<String> = indices
+            .iter()
+            .map(|&i| records[i].model.clone())
+            .collect();
+        available_models.sort();
+        available_models.dedup();
+
+        let model_filter = model_filter
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        if let Some(model) = model_filter {
+            indices.retain(|&i| records[i].model == model);
+        }
+
         let total = indices.len();
         let start = (page - 1).saturating_mul(page_size);
         if start >= total {
@@ -189,6 +207,7 @@ impl CursorCsvService {
                 total,
                 page,
                 page_size,
+                available_models,
             };
         }
         let end = (start + page_size).min(total);
@@ -225,6 +244,7 @@ impl CursorCsvService {
             total,
             page,
             page_size,
+            available_models,
         }
     }
 
@@ -708,8 +728,9 @@ impl DataSource for CursorCsvService {
         page: usize,
         page_size: usize,
         filtered_only: bool,
+        model_filter: Option<&str>,
     ) -> Option<CursorCsvPreviewPage> {
-        Some(self.preview_csv(page, page_size, filtered_only))
+        Some(self.preview_csv(page, page_size, filtered_only, model_filter))
     }
 }
 
@@ -773,5 +794,29 @@ mod tests {
         let path = dir.path().join("usage.csv");
         std::fs::write(&path, "Date,Model,Input (w/ Cache Write)\n").unwrap();
         assert!(detect_cursor_cache(dir.path().to_str().unwrap()));
+    }
+
+    #[test]
+    fn test_preview_csv_model_filter() {
+        let csv = r#"Date,Kind,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost
+"2026-07-15T10:00:00.000Z","Included","composer-2.5","No","100","50","0","20","70","0.01"
+"2026-07-15T11:00:00.000Z","Included","cursor-grok-4.5-high","No","200","80","0","30","110","0.02"
+"2026-07-15T12:00:00.000Z","Included","composer-2.5","No","300","90","0","40","130","0.03""#;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("usage.csv"), csv).unwrap();
+        let mut source = CursorCsvService::new();
+        source.open(dir.path().to_str().unwrap()).unwrap();
+
+        let all = source.preview_csv(1, 50, false, None);
+        assert_eq!(all.total, 3);
+        assert_eq!(all.available_models, vec!["composer-2.5", "cursor-grok-4.5-high"]);
+
+        let filtered = source.preview_csv(1, 50, false, Some("composer-2.5"));
+        assert_eq!(filtered.total, 2);
+        assert!(filtered.items.iter().all(|r| r.model == "composer-2.5"));
+        assert_eq!(
+            filtered.available_models,
+            vec!["composer-2.5", "cursor-grok-4.5-high"]
+        );
     }
 }
