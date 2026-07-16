@@ -43,13 +43,26 @@ try {
       $keep = @(
         'hook_event_name', 'conversation_id', 'generation_id', 'session_id',
         'model', 'model_id', 'cursor_version', 'user_email', 'workspace_roots',
-        'transcript_path', 'tool_name', 'status',
-        'context_tokens', 'context_usage_percent', 'context_window_size'
+        'transcript_path', 'tool_name', 'tool_input', 'tool_output', 'status',
+        'context_tokens', 'context_usage_percent', 'context_window_size',
+        # subagent / Task
+        'subagent_id', 'subagent_type', 'subagent_model', 'parent_conversation_id',
+        'tool_call_id', 'is_parallel_worker', 'task', 'description', 'summary',
+        'duration_ms', 'message_count', 'tool_call_count', 'loop_count',
+        'modified_files', 'agent_transcript_path',
+        # session / compact / composer
+        'is_background_agent', 'composer_mode', 'reason', 'final_status',
+        'error_message', 'trigger', 'git_branch'
       )
       foreach ($k in $keep) {
         if ($null -ne $payload.$k -and "$($payload.$k)" -ne '') {
           $row[$k] = $payload.$k
         }
+      }
+      # Map subagent_model -> model when model is missing (for attribution)
+      $hasModel = $row.Contains('model') -and "$($row['model'])" -ne ''
+      if (-not $hasModel -and $row.Contains('subagent_model') -and "$($row['subagent_model'])" -ne '') {
+        $row['model'] = $row['subagent_model']
       }
       if ($payload.model_params) {
         $params = @()
@@ -65,6 +78,9 @@ try {
       }
       if ($payload.text -and "$($payload.text)".Length -gt 0) {
         $row['response_chars'] = ("$($payload.text)").Length
+      }
+      if ($payload.thought -and "$($payload.thought)".Length -gt 0) {
+        $row['thought_chars'] = ("$($payload.thought)").Length
       }
     }
   }
@@ -82,5 +98,8 @@ $eventName = ''
 if ($row.Contains('hook_event_name')) { $eventName = [string]$row['hook_event_name'] }
 if ($eventName -eq 'beforeSubmitPrompt' -or $row.Contains('prompt_chars')) {
   Write-Output '{"continue":true}'
+} elseif ($eventName -eq 'subagentStart') {
+  # Explicit allow; some Cursor builds treat empty stdout inconsistently
+  Write-Output '{"permission":"allow"}'
 }
 exit 0

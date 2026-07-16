@@ -14,7 +14,39 @@ use crate::services::cursor_attribution::{
 use crate::utils;
 
 const HOOK_MARKER: &str = "local-usage/run_log.ps1";
-const HOOK_EVENTS: &[&str] = &["beforeSubmitPrompt", "afterAgentResponse", "stop"];
+
+/// 安装到 hooks.json 的事件：覆盖所有可能触发模型调用的生命周期。
+/// 不含 beforeShellExecution / preToolUse 等纯工具钩子（会带父会话 model 刷屏，干扰归因）。
+const HOOK_EVENTS: &[&str] = &[
+    // 主 Agent / Cmd+K / Agent Review（独立 composer 会话）
+    "sessionStart",
+    "sessionEnd",
+    "beforeSubmitPrompt",
+    "afterAgentThought",
+    "afterAgentResponse",
+    "stop",
+    // Task / subagent（explore、shell、bugbot、generalPurpose 等）
+    "subagentStart",
+    "subagentStop",
+    // 上下文压缩也会调模型
+    "preCompact",
+    // Tab 补全
+    "beforeTabFileRead",
+    "afterTabFileEdit",
+];
+
+/// 可用于 CSV 本机归因的事件（需能解析出非空 model）。
+const ATTRIBUTION_HOOK_EVENTS: &[&str] = &[
+    "beforeSubmitPrompt",
+    "afterAgentThought",
+    "afterAgentResponse",
+    "stop",
+    "subagentStart",
+    "subagentStop",
+    "preCompact",
+    "sessionStart",
+    "beforeTabFileRead",
+];
 
 const RUN_LOG_PS1: &[u8] = include_bytes!("../../resources/cursor-local-usage/run_log.ps1");
 const LOG_REQUEST_PS1: &[u8] = include_bytes!("../../resources/cursor-local-usage/log_request.ps1");
@@ -231,7 +263,23 @@ fn parse_event_ts(row: &Value) -> Option<i64> {
     None
 }
 
-/// 读取可用于归因的本机事件（beforeSubmitPrompt / stop，且有 model）
+/// 从 hook 日志行解析模型：优先 `model`，其次 `subagent_model`（subagentStart）。
+fn extract_model(row: &Value) -> String {
+    for key in ["model", "subagent_model", "model_id"] {
+        if let Some(m) = row.get(key).and_then(|v| v.as_str()).map(str::trim) {
+            if !m.is_empty() {
+                return m.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+fn is_attribution_event(event_name: &str) -> bool {
+    ATTRIBUTION_HOOK_EVENTS.contains(&event_name)
+}
+
+/// 读取可用于归因的本机事件（模型相关 hook，且有 model / subagent_model）
 pub fn load_local_events() -> Result<Vec<LocalHookEvent>, String> {
     let path = requests_jsonl_path()?;
     if !path.exists() {
@@ -253,15 +301,10 @@ pub fn load_local_events() -> Result<Vec<LocalHookEvent>, String> {
             .get("hook_event_name")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if event_name != "beforeSubmitPrompt" && event_name != "stop" {
+        if !is_attribution_event(event_name) {
             continue;
         }
-        let model = row
-            .get("model")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
+        let model = extract_model(&row);
         if model.is_empty() {
             continue;
         }
@@ -381,6 +424,16 @@ mod tests {
             r#"{{"ts_utc":"2026-07-13T06:00:02+00:00","hook_event_name":"stop"}}"#
         )
         .unwrap();
+        writeln!(
+            f,
+            r#"{{"ts_utc":"2026-07-13T06:00:03+00:00","hook_event_name":"subagentStart","subagent_model":"composer-2.5","subagent_type":"explore"}}"#
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"ts_utc":"2026-07-13T06:00:04+00:00","hook_event_name":"sessionEnd","reason":"completed"}}"#
+        )
+        .unwrap();
 
         let file = fs::File::open(&path).unwrap();
         let reader = BufReader::new(file);
@@ -389,10 +442,10 @@ mod tests {
             let line = line.unwrap();
             let row: Value = serde_json::from_str(&line).unwrap();
             let event_name = row.get("hook_event_name").and_then(|v| v.as_str()).unwrap_or("");
-            if event_name != "beforeSubmitPrompt" && event_name != "stop" {
+            if !is_attribution_event(event_name) {
                 continue;
             }
-            let model = row.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let model = extract_model(&row);
             if model.is_empty() {
                 continue;
             }
@@ -404,7 +457,39 @@ mod tests {
                 hook_event_name: event_name.to_string(),
             });
         }
-        assert_eq!(events.len(), 1);
+        // beforeSubmitPrompt + afterAgentResponse + subagentStart（有 model）
+        // stop 无 model、sessionEnd 不在归因列表 → 排除
+        assert_eq!(events.len(), 3);
         assert_eq!(events[0].family, "grok-4.5");
+        assert_eq!(events[1].hook_event_name, "afterAgentResponse");
+        assert_eq!(events[2].family, "composer-2.5");
+        assert_eq!(events[2].hook_event_name, "subagentStart");
+    }
+
+    #[test]
+    fn test_extract_model_prefers_model_then_subagent() {
+        let with_both: Value = serde_json::json!({
+            "model": "cursor-grok-4.5-high",
+            "subagent_model": "composer-2.5"
+        });
+        assert_eq!(extract_model(&with_both), "cursor-grok-4.5-high");
+
+        let sub_only: Value = serde_json::json!({
+            "subagent_model": "composer-2.5"
+        });
+        assert_eq!(extract_model(&sub_only), "composer-2.5");
+
+        let empty: Value = serde_json::json!({"hook_event_name": "stop"});
+        assert!(extract_model(&empty).is_empty());
+    }
+
+    #[test]
+    fn test_hook_events_cover_subagent_and_compact() {
+        assert!(HOOK_EVENTS.contains(&"subagentStart"));
+        assert!(HOOK_EVENTS.contains(&"subagentStop"));
+        assert!(HOOK_EVENTS.contains(&"preCompact"));
+        assert!(HOOK_EVENTS.contains(&"afterAgentThought"));
+        assert!(HOOK_EVENTS.contains(&"sessionStart"));
+        assert!(ATTRIBUTION_HOOK_EVENTS.contains(&"subagentStart"));
     }
 }
