@@ -2,7 +2,9 @@ use tauri::State;
 
 use crate::AppState;
 use crate::models::SourceInfo;
-use crate::services::cursor_attribution::{AttributionTokenStats, CursorCsvPreviewPage};
+use crate::services::cursor_attribution::{
+    AttributionTokenStats, CursorCsvPreviewPage, OverrideAction,
+};
 use crate::services::cursor_hook_backup::{self, HookBackupResult};
 use crate::services::cursor_local_hook;
 use crate::services::cursor_sync::{self, SyncCursorResult};
@@ -243,6 +245,59 @@ pub fn cursor_preview_csv(
                 .get_cursor_csv_preview(page, page_size, filtered_only, model_filter)
         })
         .ok_or_else(|| "Cursor 数据源未加载".to_string())
+}
+
+#[tauri::command]
+pub fn cursor_set_attribution_override(
+    row_key: String,
+    action: String,
+    created_at: i64,
+    model: String,
+    state: State<AppState>,
+) -> Result<CursorStatus, String> {
+    let action = match action.trim().to_lowercase().as_str() {
+        "keep" => OverrideAction::Keep,
+        "filter" => OverrideAction::Filter,
+        other => return Err(format!("无效改判 action: {}", other)),
+    };
+    if row_key.trim().is_empty() {
+        return Err("rowKey 不能为空".to_string());
+    }
+
+    ensure_cursor_source_registered(&state)?;
+    {
+        let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+        let entry = sources
+            .iter_mut()
+            .find(|s| matches!(s.db_type, DbType::Cursor))
+            .ok_or_else(|| "Cursor 数据源未加载".to_string())?;
+        entry
+            .source
+            .set_cursor_attribution_override(&row_key, action, created_at, &model)?;
+    }
+    build_cursor_status(&state)
+}
+
+#[tauri::command]
+pub fn cursor_clear_attribution_override(
+    row_key: String,
+    state: State<AppState>,
+) -> Result<CursorStatus, String> {
+    if row_key.trim().is_empty() {
+        return Err("rowKey 不能为空".to_string());
+    }
+    ensure_cursor_source_registered(&state)?;
+    {
+        let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+        let entry = sources
+            .iter_mut()
+            .find(|s| matches!(s.db_type, DbType::Cursor))
+            .ok_or_else(|| "Cursor 数据源未加载".to_string())?;
+        entry
+            .source
+            .clear_cursor_attribution_override(&row_key)?;
+    }
+    build_cursor_status(&state)
 }
 
 #[tauri::command]

@@ -148,6 +148,7 @@
   <CursorCsvPreviewDialog
     v-model:show="showCsvPreview"
     :initial-filtered-only="csvPreviewFilteredOnly"
+    @stats-changed="onCsvPreviewStatsChanged"
   />
 
   <n-modal v-model:show="showLoginDialog" preset="card" title="登录 Cursor" size="small" style="max-width: 420px">
@@ -231,6 +232,14 @@ function tokenQuadTitle(q: TokenQuad): string {
 function openCsvPreview(filteredOnly: boolean): void {
   csvPreviewFilteredOnly.value = filteredOnly
   showCsvPreview.value = true
+}
+
+async function onCsvPreviewStatsChanged(): Promise<void> {
+  try {
+    cursorStatus.value = await platformAdapter.cursorStatus()
+  } catch (e) {
+    console.error('[cursor] refresh status after override failed:', e)
+  }
 }
 
 const cursorStatusText = computed(() => {

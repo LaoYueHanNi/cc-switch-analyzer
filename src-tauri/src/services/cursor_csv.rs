@@ -4,8 +4,10 @@ use std::sync::RwLock;
 
 use crate::models::*;
 use crate::services::cursor_attribution::{
-    explain_filter_reason, is_likely_local, should_apply_attribution_for_ts, AttributionTokenStats,
-    CursorCsvPreviewPage, CursorCsvPreviewRow, LocalHookEvent, TokenQuad, ATTRIBUTION_SLACK_SECS,
+    delete_override, explain_filter_reason, gc_overrides, load_overrides, resolve_effective,
+    row_key, should_apply_attribution_for_ts, upsert_override, AttributionTokenStats,
+    CursorCsvPreviewPage, CursorCsvPreviewRow, EffectiveAttribution, LocalHookEvent,
+    OverrideAction, OverrideEntry, TokenQuad, ATTRIBUTION_SLACK_SECS,
 };
 use crate::services::cursor_local_hook;
 use crate::services::data_source::DataSource;
@@ -25,6 +27,8 @@ pub struct CursorCsvService {
     latest_timestamp: Option<i64>,
     attribution_enabled: bool,
     local_events: Vec<LocalHookEvent>,
+    /// row_key → 手动改判
+    overrides: HashMap<String, OverrideEntry>,
 }
 
 impl CursorCsvService {
@@ -35,6 +39,7 @@ impl CursorCsvService {
             latest_timestamp: None,
             attribution_enabled: false,
             local_events: Vec::new(),
+            overrides: HashMap::new(),
         }
     }
 
@@ -55,6 +60,36 @@ impl CursorCsvService {
         );
     }
 
+    fn reload_overrides(&mut self) {
+        if self.cache_dir.is_empty() {
+            self.overrides.clear();
+            return;
+        }
+        let dir = Path::new(&self.cache_dir);
+        let mut map = load_overrides(dir).unwrap_or_else(|e| {
+            log::warn!("[CURSOR] 读取改判失败: {}", e);
+            HashMap::new()
+        });
+        let live_keys: HashSet<String> = match self.records_read() {
+            Ok(records) => records
+                .iter()
+                .map(|r| {
+                    row_key(
+                        r.created_at,
+                        &r.model,
+                        r.input_tokens,
+                        r.output_tokens,
+                        r.cache_read,
+                        r.cache_creation,
+                    )
+                })
+                .collect(),
+            Err(_) => HashSet::new(),
+        };
+        let _ = gc_overrides(dir, &mut map, &live_keys);
+        self.overrides = map;
+    }
+
     pub fn refresh_local_events(&mut self) {
         self.reload_attribution();
     }
@@ -70,6 +105,7 @@ impl CursorCsvService {
         *self.records.write().map_err(|e| format!("数据锁失败: {}", e))? = parsed;
         self.cache_dir = dir_path.to_string();
         self.reload_attribution();
+        self.reload_overrides();
         Ok(())
     }
 
@@ -81,6 +117,7 @@ impl CursorCsvService {
         self.latest_timestamp = None;
         self.attribution_enabled = false;
         self.local_events.clear();
+        self.overrides.clear();
     }
 
     pub fn is_open(&self) -> bool {
@@ -91,13 +128,40 @@ impl CursorCsvService {
         self.records.read().map_err(|e| format!("数据锁失败: {}", e))
     }
 
-    /// CSV 全量 token 与因本机归因被滤掉的 token。
+    fn algo_reason_for(&self, r: &RawRecord) -> Option<crate::services::cursor_attribution::FilterReason> {
+        let apply_attr = self.attribution_enabled && !self.local_events.is_empty();
+        if apply_attr && should_apply_attribution_for_ts(r.created_at) {
+            explain_filter_reason(
+                r.created_at,
+                &r.model,
+                &self.local_events,
+                ATTRIBUTION_SLACK_SECS,
+            )
+        } else {
+            None
+        }
+    }
+
+    fn effective_for(&self, r: &RawRecord) -> (String, EffectiveAttribution) {
+        let key = row_key(
+            r.created_at,
+            &r.model,
+            r.input_tokens,
+            r.output_tokens,
+            r.cache_read,
+            r.cache_creation,
+        );
+        let ov = self.overrides.get(&key).map(|e| e.action);
+        let eff = resolve_effective(self.algo_reason_for(r), ov);
+        (key, eff)
+    }
+
+    /// CSV 全量 token 与因本机归因被滤掉的 token（含手动过滤，排除申诉取回）。
     pub fn attribution_token_stats(&self) -> AttributionTokenStats {
         let records = match self.records_read() {
             Ok(guard) => guard,
             Err(_) => return AttributionTokenStats::default(),
         };
-        let apply_attr = self.attribution_enabled && !self.local_events.is_empty();
         let mut csv_total = TokenQuad::default();
         let mut filtered_out = TokenQuad::default();
         for r in records.iter() {
@@ -107,18 +171,8 @@ impl CursorCsvService {
                 r.cache_read,
                 r.cache_creation,
             );
-            if !apply_attr {
-                continue;
-            }
-            if !should_apply_attribution_for_ts(r.created_at) {
-                continue;
-            }
-            if !is_likely_local(
-                r.created_at,
-                &r.model,
-                &self.local_events,
-                ATTRIBUTION_SLACK_SECS,
-            ) {
+            let (_, eff) = self.effective_for(r);
+            if eff.filtered {
                 filtered_out.add_record_tokens(
                     r.input_tokens,
                     r.output_tokens,
@@ -133,7 +187,7 @@ impl CursorCsvService {
         }
     }
 
-    /// 分页预览 CSV。按时间降序；`filtered_only` 时仅返回被归因滤掉的行；
+    /// 分页预览 CSV。按时间降序；`filtered_only` 时仅返回最终被滤掉的行；
     /// `model_filter` 非空时按模型精确匹配。
     pub fn preview_csv(
         &self,
@@ -156,8 +210,6 @@ impl CursorCsvService {
             Err(_) => return empty,
         };
 
-        let apply_attr = self.attribution_enabled && !self.local_events.is_empty();
-
         // 收集索引：按 created_at 降序
         let mut indices: Vec<usize> = (0..records.len()).collect();
         indices.sort_by(|&a, &b| {
@@ -168,19 +220,9 @@ impl CursorCsvService {
         });
 
         if filtered_only {
-            if !apply_attr {
-                return empty;
-            }
             indices.retain(|&i| {
-                let r = &records[i];
-                should_apply_attribution_for_ts(r.created_at)
-                    && explain_filter_reason(
-                        r.created_at,
-                        &r.model,
-                        &self.local_events,
-                        ATTRIBUTION_SLACK_SECS,
-                    )
-                    .is_some()
+                let (_, eff) = self.effective_for(&records[i]);
+                eff.filtered
             });
         }
 
@@ -216,16 +258,7 @@ impl CursorCsvService {
             .iter()
             .map(|&i| {
                 let r = &records[i];
-                let reason = if apply_attr && should_apply_attribution_for_ts(r.created_at) {
-                    explain_filter_reason(
-                        r.created_at,
-                        &r.model,
-                        &self.local_events,
-                        ATTRIBUTION_SLACK_SECS,
-                    )
-                } else {
-                    None
-                };
+                let (key, eff) = self.effective_for(r);
                 CursorCsvPreviewRow {
                     created_at: r.created_at,
                     model: r.model.clone(),
@@ -233,8 +266,10 @@ impl CursorCsvService {
                     output: r.output_tokens,
                     cache_read: r.cache_read,
                     cache_creation: r.cache_creation,
-                    filtered: reason.is_some(),
-                    reason,
+                    filtered: eff.filtered,
+                    reason: eff.reason,
+                    row_key: key,
+                    override_action: eff.override_action,
                 }
             })
             .collect();
@@ -248,6 +283,33 @@ impl CursorCsvService {
         }
     }
 
+    pub fn set_attribution_override(
+        &mut self,
+        key: &str,
+        action: OverrideAction,
+        created_at: i64,
+        model: &str,
+    ) -> Result<(), String> {
+        if self.cache_dir.is_empty() {
+            return Err("Cursor 数据源未加载".to_string());
+        }
+        upsert_override(
+            Path::new(&self.cache_dir),
+            &mut self.overrides,
+            key,
+            action,
+            created_at,
+            model,
+        )
+    }
+
+    pub fn clear_attribution_override(&mut self, key: &str) -> Result<(), String> {
+        if self.cache_dir.is_empty() {
+            return Err("Cursor 数据源未加载".to_string());
+        }
+        delete_override(Path::new(&self.cache_dir), &mut self.overrides, key)
+    }
+
     fn filter_records(&self, params: &FilterParams) -> Vec<RawRecord> {
         let records = match self.records_read() {
             Ok(guard) => guard,
@@ -256,24 +318,12 @@ impl CursorCsvService {
                 return Vec::new();
             }
         };
-        let apply_attr = self.attribution_enabled && !self.local_events.is_empty();
         records
             .iter()
             .filter(|r| record_matches_params(r, params))
             .filter(|r| {
-                if !apply_attr {
-                    return true;
-                }
-                // 截止时刻之前：不过滤（CSV 为 UTC epoch，截止为东八区 15:30）
-                if !should_apply_attribution_for_ts(r.created_at) {
-                    return true;
-                }
-                is_likely_local(
-                    r.created_at,
-                    &r.model,
-                    &self.local_events,
-                    ATTRIBUTION_SLACK_SECS,
-                )
+                let (_, eff) = self.effective_for(r);
+                !eff.filtered
             })
             .cloned()
             .collect()
@@ -731,6 +781,20 @@ impl DataSource for CursorCsvService {
         model_filter: Option<&str>,
     ) -> Option<CursorCsvPreviewPage> {
         Some(self.preview_csv(page, page_size, filtered_only, model_filter))
+    }
+
+    fn set_cursor_attribution_override(
+        &mut self,
+        row_key: &str,
+        action: OverrideAction,
+        created_at: i64,
+        model: &str,
+    ) -> Result<(), String> {
+        self.set_attribution_override(row_key, action, created_at, model)
+    }
+
+    fn clear_cursor_attribution_override(&mut self, row_key: &str) -> Result<(), String> {
+        self.clear_attribution_override(row_key)
     }
 }
 

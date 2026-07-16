@@ -146,6 +146,7 @@ export interface AttributionTokenStats {
 }
 
 export type CursorFilterReason = 'model' | 'time' | 'none'
+export type CursorOverrideAction = 'keep' | 'filter'
 
 export interface CursorCsvPreviewRow {
   createdAt: number
@@ -156,6 +157,9 @@ export interface CursorCsvPreviewRow {
   cacheCreation: number
   filtered: boolean
   reason: CursorFilterReason | null
+  rowKey: string
+  /** 手动改判；无记录时为 undefined/null */
+  override?: CursorOverrideAction | null
 }
 
 export interface CursorCsvPreviewPage {
@@ -270,6 +274,13 @@ export interface PlatformAdapter {
     filteredOnly?: boolean,
     model?: string | null,
   ): Promise<CursorCsvPreviewPage>
+  cursorSetAttributionOverride(
+    rowKey: string,
+    action: CursorOverrideAction,
+    createdAt: number,
+    model: string,
+  ): Promise<CursorStatusInfo>
+  cursorClearAttributionOverride(rowKey: string): Promise<CursorStatusInfo>
   cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo>
   cursorSetSyncLookback(lookback: string): Promise<CursorStatusInfo>
   cursorSetHookBackupPeriod(period: string): Promise<CursorStatusInfo>

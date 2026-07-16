@@ -1,5 +1,5 @@
 <template>
-  <CompactDialog :show="show" title="Cursor CSV 预览" width="760px" @update:show="emit('update:show', $event)">
+  <CompactDialog :show="show" title="Cursor CSV 预览" width="860px" @update:show="emit('update:show', $event)">
     <div class="preview-toolbar">
       <n-switch size="small" :value="filteredOnly" @update:value="onToggleFiltered" />
       <span class="preview-toolbar-label">仅看归因过滤</span>
@@ -25,18 +25,23 @@
             <th class="col-num">缓存读</th>
             <th class="col-num">缓存写</th>
             <th class="col-reason">原因</th>
+            <th class="col-action">操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="loading">
-            <td colspan="7" class="empty-cell">加载中…</td>
+            <td colspan="8" class="empty-cell">加载中…</td>
           </tr>
           <tr v-else-if="items.length === 0">
-            <td colspan="7" class="empty-cell">
+            <td colspan="8" class="empty-cell">
               {{ emptyHint }}
             </td>
           </tr>
-          <tr v-for="(row, idx) in items" :key="`${row.createdAt}-${row.model}-${idx}`" :class="{ filtered: row.filtered }">
+          <tr
+            v-for="(row, idx) in items"
+            :key="row.rowKey || `${row.createdAt}-${row.model}-${idx}`"
+            :class="{ filtered: row.filtered }"
+          >
             <td class="col-time">{{ formatTime(row.createdAt) }}</td>
             <td class="col-model" :title="row.model">{{ row.model }}</td>
             <td class="col-num" :title="String(row.input)">{{ formatNum(row.input) }}</td>
@@ -44,8 +49,64 @@
             <td class="col-num" :title="String(row.cacheRead)">{{ formatNum(row.cacheRead) }}</td>
             <td class="col-num" :title="String(row.cacheCreation)">{{ formatNum(row.cacheCreation) }}</td>
             <td class="col-reason">
-              <span v-if="row.reason" class="reason-tag" :class="row.reason">{{ reasonLabel(row.reason) }}</span>
+              <span
+                v-if="row.override === 'keep'"
+                class="reason-tag keep"
+                :title="algoReasonTitle(row)"
+              >手动保留</span>
+              <span
+                v-else-if="row.override === 'filter'"
+                class="reason-tag filter-ov"
+                :title="algoReasonTitle(row)"
+              >手动过滤</span>
+              <span v-else-if="row.reason" class="reason-tag" :class="row.reason">{{ reasonLabel(row.reason) }}</span>
               <span v-else class="reason-dash">—</span>
+            </td>
+            <td class="col-action">
+              <template v-if="row.override === 'keep'">
+                <button
+                  type="button"
+                  class="act-btn"
+                  :disabled="actingKey === row.rowKey"
+                  @click="onSetOverride(row, 'filter')"
+                >改为过滤</button>
+                <button
+                  type="button"
+                  class="act-btn act-cancel"
+                  :disabled="actingKey === row.rowKey"
+                  @click="onClearOverride(row)"
+                >取消申诉</button>
+              </template>
+              <template v-else-if="row.override === 'filter'">
+                <button
+                  type="button"
+                  class="act-btn"
+                  :disabled="actingKey === row.rowKey"
+                  @click="onSetOverride(row, 'keep')"
+                >改为取回</button>
+                <button
+                  type="button"
+                  class="act-btn act-cancel"
+                  :disabled="actingKey === row.rowKey"
+                  @click="onClearOverride(row)"
+                >取消申诉</button>
+              </template>
+              <template v-else-if="row.filtered">
+                <button
+                  type="button"
+                  class="act-btn"
+                  :disabled="actingKey === row.rowKey"
+                  @click="onSetOverride(row, 'keep')"
+                >申诉</button>
+              </template>
+              <template v-else>
+                <button
+                  type="button"
+                  class="act-btn"
+                  :disabled="actingKey === row.rowKey"
+                  @click="onSetOverride(row, 'filter')"
+                >过滤</button>
+              </template>
             </td>
           </tr>
         </tbody>
@@ -67,14 +128,17 @@ import CompactDialog from '@/components/common/CompactDialog.vue'
 import CompactSelect from '@/components/common/CompactSelect.vue'
 import { platformAdapter } from '@/platform'
 import { formatNum } from '@/utils/format'
-import type { CursorCsvPreviewRow, CursorFilterReason } from '@/platform/types'
+import type { CursorCsvPreviewRow, CursorFilterReason, CursorOverrideAction } from '@/platform/types'
 
 const props = defineProps<{
   show: boolean
   initialFilteredOnly?: boolean
 }>()
 
-const emit = defineEmits<{ 'update:show': [value: boolean] }>()
+const emit = defineEmits<{
+  'update:show': [value: boolean]
+  'stats-changed': []
+}>()
 
 const PAGE_SIZE = 50
 const filteredOnly = ref(false)
@@ -84,6 +148,7 @@ const page = ref(1)
 const total = ref(0)
 const items = ref<CursorCsvPreviewRow[]>([])
 const loading = ref(false)
+const actingKey = ref('')
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
@@ -104,6 +169,11 @@ function reasonLabel(reason: CursorFilterReason): string {
   if (reason === 'model') return '模型不对'
   if (reason === 'time') return '时间不对'
   return '无本机匹配'
+}
+
+function algoReasonTitle(row: CursorCsvPreviewRow): string {
+  if (!row.reason) return '原：算法保留'
+  return `原：${reasonLabel(row.reason)}`
 }
 
 function formatTime(epoch: number): string {
@@ -130,6 +200,39 @@ async function loadPage(): Promise<void> {
     availableModels.value = []
   } finally {
     loading.value = false
+  }
+}
+
+async function onSetOverride(row: CursorCsvPreviewRow, action: CursorOverrideAction): Promise<void> {
+  if (!row.rowKey || actingKey.value) return
+  actingKey.value = row.rowKey
+  try {
+    await platformAdapter.cursorSetAttributionOverride(
+      row.rowKey,
+      action,
+      row.createdAt,
+      row.model,
+    )
+    emit('stats-changed')
+    await loadPage()
+  } catch (e) {
+    console.error('[cursor] set attribution override failed:', e)
+  } finally {
+    actingKey.value = ''
+  }
+}
+
+async function onClearOverride(row: CursorCsvPreviewRow): Promise<void> {
+  if (!row.rowKey || actingKey.value) return
+  actingKey.value = row.rowKey
+  try {
+    await platformAdapter.cursorClearAttributionOverride(row.rowKey)
+    emit('stats-changed')
+    await loadPage()
+  } catch (e) {
+    console.error('[cursor] clear attribution override failed:', e)
+  } finally {
+    actingKey.value = ''
   }
 }
 
@@ -234,7 +337,7 @@ watch(
 }
 
 .col-num {
-  width: 64px;
+  width: 58px;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -242,6 +345,11 @@ watch(
 .col-reason {
   width: 84px;
   text-align: center;
+}
+
+.col-action {
+  width: 118px;
+  white-space: nowrap;
 }
 
 .empty-cell {
@@ -276,6 +384,42 @@ watch(
 .reason-tag.none {
   color: var(--text-tertiary);
   background: var(--border-light);
+}
+
+.reason-tag.keep {
+  color: #00b894;
+  background: color-mix(in srgb, #00b894 14%, transparent);
+}
+
+.reason-tag.filter-ov {
+  color: #6c5ce7;
+  background: color-mix(in srgb, #6c5ce7 14%, transparent);
+}
+
+.act-btn {
+  font-size: 10px;
+  padding: 1px 5px;
+  margin-right: 4px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.act-btn:hover:not(:disabled) {
+  border-color: #6c5ce7;
+  color: #6c5ce7;
+}
+
+.act-btn.act-cancel:hover:not(:disabled) {
+  border-color: var(--text-tertiary);
+  color: var(--text-secondary);
+}
+
+.act-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .preview-pager {

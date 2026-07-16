@@ -88,6 +88,22 @@ pub trait DataSource: Send + Sync {
     ) -> Option<crate::services::cursor_attribution::CursorCsvPreviewPage> {
         None
     }
+
+    /// 设置 / 更新行级归因改判；非 Cursor 源返回 Err。
+    fn set_cursor_attribution_override(
+        &mut self,
+        _row_key: &str,
+        _action: crate::services::cursor_attribution::OverrideAction,
+        _created_at: i64,
+        _model: &str,
+    ) -> Result<(), String> {
+        Err("当前数据源不支持归因改判".to_string())
+    }
+
+    /// 取消行级归因改判；非 Cursor 源返回 Err。
+    fn clear_cursor_attribution_override(&mut self, _row_key: &str) -> Result<(), String> {
+        Err("当前数据源不支持归因改判".to_string())
+    }
 }
 
 #[derive(Debug)]
