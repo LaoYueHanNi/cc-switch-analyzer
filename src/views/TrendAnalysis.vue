@@ -27,7 +27,11 @@
           :model-series="byModelSeries"
           :dimmed-models="dimmedModels"
         />
-        <div v-if="mode === 'byModel' && modelTipRows.length > 0" class="model-tip">
+        <div
+          v-if="mode === 'byModel' && modelTipRows.length > 0"
+          class="model-tip"
+          :class="{ expandable: rankedModels.length > 5 }"
+        >
           <div
             v-for="r in modelTipRows"
             :key="r.model"
@@ -44,6 +48,12 @@
             <span class="model-tip-tokens">{{ formatNum(r.totalTokens) }}</span>
             <span class="model-tip-hit">缓存 {{ formatPercent(r.cacheHitRate) }}</span>
           </div>
+          <button
+            v-if="rankedModels.length > 5"
+            class="model-tip-expand"
+            :title="topModelLimit === 5 ? '展开前十模型' : '收起为前五'"
+            @click.stop="topModelLimit = topModelLimit === 5 ? 10 : 5"
+          >{{ topModelLimit === 5 ? '+' : '−' }}</button>
         </div>
       </div>
 
@@ -357,17 +367,28 @@ const allSeriesData = computed<SeriesData | null>(() => {
   }
 })
 
-// ===== 按模型对比:top5 模型 + 各自按 X 轴粒度的 token 序列 =====
+// ===== 按模型对比:topN 模型 + 各自按 X 轴粒度的 token 序列 =====
+
+const MODEL_SERIES_COLORS = [
+  '--color-cost', '--color-green', '--color-blue', '--color-purple', '--color-orange',
+  '--color-teal', '--color-indigo', '--color-dark-orange', '--color-cost', '--color-green',
+]
+const MODEL_TIP_COLORS = [
+  '#e74c3c', '#0d8c6f', '#2980b9', '#8e44ad', '#f39c12',
+  '#16a085', '#5b6abf', '#d35400', '#c0392b', '#27ae60',
+]
+
+/** tip 展示数量:默认前五,点 + 扩到前十 */
+const topModelLimit = ref(5)
 
 function rowTokens(r: DailyTrendRow): number {
   return r.inputTokens + r.outputTokens + r.cacheRead + r.cacheCreation
 }
 
-// 按 token 总量降序取 top5(覆盖按天/按小时/按星期三种粒度的数据源)
-const topModels = computed<string[]>(() => {
+// 按 token 总量降序完整排名(供 tip 判断是否还能展开)
+const rankedModels = computed<string[]>(() => {
   const totals = new Map<string, number>()
   const pre = queryStore.precomputed
-  // 统一用 dailyByModel(daily/weekday/hourly 三种粒度下都涵盖完整筛选范围,不会重复计数)
   if (pre?.dailyByModel) {
     for (const [model, rows] of Object.entries(pre.dailyByModel)) {
       let s = 0
@@ -377,9 +398,12 @@ const topModels = computed<string[]>(() => {
   }
   return [...totals.entries()]
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
     .map(([m]) => m)
 })
+
+const topModels = computed<string[]>(() =>
+  rankedModels.value.slice(0, topModelLimit.value),
+)
 
 // 模型显隐状态(由 tip 行点击切换;true=显示)
 const modelVisible = reactive<Record<string, boolean>>({})
@@ -393,15 +417,15 @@ const dimmedModels = computed<string[]>(() => {
   return topModels.value.filter(m => m !== hoveredModel.value && modelVisible[m] !== false)
 })
 watch(topModels, (models) => {
-  // 只新增不删除:保留用户的历史显隐选择,避免 model 暂时离开 top5 后选择被清零
-  // 渲染时按 topModels 过滤;modelVisible[m] 未定义(undefined)等同 true(因为 !== false 包含 undefined)
+  // 只新增不删除:保留用户的历史显隐选择,避免 model 暂时离开 topN 后选择被清零
   for (const m of models) if (modelVisible[m] === undefined) modelVisible[m] = true
 }, { immediate: true })
 
-// 切到 byModel 时全显(避免上次点关后再次进入时全空)
-// 同时清空 hover 状态,避免跨 mode + topModels 变化时首屏全 dim
+// 切回总览时重置为前五;切到 byModel 时全显并清空 hover
 watch(mode, (m) => {
-  if (m === 'byModel') {
+  if (m === 'overview') {
+    topModelLimit.value = 5
+  } else if (m === 'byModel') {
     for (const k of Object.keys(modelVisible)) modelVisible[k] = true
     hoveredModel.value = null
   }
@@ -440,14 +464,14 @@ const byModelSeries = computed<ModelSeries[]>(() => {
     }
     return models.map((m, i) => ({
       name: m,
-      colorVar: ['--color-cost', '--color-green', '--color-blue', '--color-purple', '--color-orange'][i] || '--color-cost',
+      colorVar: MODEL_SERIES_COLORS[i] || MODEL_SERIES_COLORS[0],
       data: acc.get(m) || new Array(W).fill(0),
       visible: modelVisible[m] !== false
     }))
   }
 
   if ((viewMode.value === 'hourly' || (mode.value === 'byModel' && isSingleDay.value)) && hourlyRows.value.length > 0) {
-    // hourly 粒度:24 小时桶(byModel 模式下单日筛选也走这条,避免 5 条线在 1 个点重合)
+    // hourly 粒度:24 小时桶(byModel 模式下单日筛选也走这条,避免多条线在 1 个点重合)
     // 守卫 hourlyRows 已就绪(对齐 allSeriesData line 309 的守卫),否则 fallback 到 daily 分支
     const acc = new Map<string, number[]>()
     for (const m of models) acc.set(m, new Array(24).fill(0))
@@ -460,7 +484,7 @@ const byModelSeries = computed<ModelSeries[]>(() => {
     }
     return models.map((m, i) => ({
       name: m,
-      colorVar: ['--color-cost', '--color-green', '--color-blue', '--color-purple', '--color-orange'][i] || '--color-cost',
+      colorVar: MODEL_SERIES_COLORS[i] || MODEL_SERIES_COLORS[0],
       data: acc.get(m) || new Array(24).fill(0),
       visible: modelVisible[m] !== false
     }))
@@ -478,15 +502,13 @@ const byModelSeries = computed<ModelSeries[]>(() => {
   }
   return models.map((m, i) => ({
     name: m,
-    colorVar: ['--color-cost', '--color-green', '--color-blue', '--color-purple', '--color-orange'][i] || '--color-cost',
+    colorVar: MODEL_SERIES_COLORS[i] || MODEL_SERIES_COLORS[0],
     data: dates.map(d => map.get(m)?.get(d) || 0),
     visible: modelVisible[m] !== false
   }))
 })
 
 // ===== 按模型对比:右上角汇总 tip =====
-const MODEL_TIP_COLORS = ['#e74c3c', '#0d8c6f', '#2980b9', '#8e44ad', '#f39c12']
-
 const modelTipRows = computed(() => {
   const pre = queryStore.precomputed
   if (!pre?.dailyByModel) return []
@@ -565,6 +587,32 @@ watch(allSeriesData, (v) => {
   pointer-events: auto;
   max-width: 240px;
   user-select: none;
+}
+.model-tip.expandable {
+  padding-bottom: 18px;
+}
+.model-tip-expand {
+  position: absolute;
+  right: 4px;
+  bottom: 2px;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #c8c8d8;
+  font-size: 11px;
+  line-height: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.model-tip-expand:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.35);
 }
 .model-tip-row {
   display: grid;
