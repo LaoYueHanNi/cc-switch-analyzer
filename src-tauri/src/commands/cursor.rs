@@ -7,6 +7,7 @@ use crate::services::cursor_attribution::{
 };
 use crate::services::cursor_hook_backup::{self, HookBackupResult};
 use crate::services::cursor_local_hook;
+use crate::services::cursor_local_hook::HookAlert;
 use crate::services::cursor_sync::{self, SyncCursorResult};
 use crate::services::data_source::{create_source_entry, DbType};
 use crate::utils;
@@ -28,6 +29,7 @@ pub struct CursorStatus {
     pub hook_backup_period: String,
     pub hook_backup_count: i64,
     pub hook_last_backup_at: Option<i64>,
+    pub hook_alert: Option<HookAlert>,
 }
 
 fn cursor_cache_dir_str() -> Result<String, String> {
@@ -75,6 +77,8 @@ fn build_cursor_status(state: &State<AppState>) -> Result<CursorStatus, String> 
     let hook_installed = cursor_local_hook::is_hook_installed();
     let local_event_count = cursor_local_hook::local_event_count() as i64;
     let attribution_hint = cursor_local_hook::attribution_hint(attribution_enabled);
+    let heartbeat = cursor_local_hook::read_hook_heartbeat();
+    let hook_alert = cursor_local_hook::hook_alert(attribution_enabled, hook_installed, heartbeat.as_ref());
 
     let attribution_stats = {
         let sources = state.data_sources.read().map_err(|e| e.to_string())?;
@@ -102,6 +106,7 @@ fn build_cursor_status(state: &State<AppState>) -> Result<CursorStatus, String> 
         hook_backup_period: hook_backup.period,
         hook_backup_count: hook_backup.backup_count,
         hook_last_backup_at: hook_backup.last_backup_at,
+        hook_alert,
     })
 }
 

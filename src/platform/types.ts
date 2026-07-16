@@ -188,6 +188,7 @@ export interface CursorStatusInfo {
   hookBackupCount?: number
   /** 最近备份时刻（Unix 秒，来自文件名） */
   hookLastBackupAt?: number | null
+  hookAlert?: { level: 'error'; message: string } | null
 }
 
 export interface HookBackupResult {

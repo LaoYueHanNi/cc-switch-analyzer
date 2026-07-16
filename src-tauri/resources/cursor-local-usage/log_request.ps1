@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = 'SilentlyContinue'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $logPath = Join-Path $here 'requests.jsonl'
+$heartbeatPath = Join-Path $here 'hook-heartbeat.json'
 
 function Get-IsoNow {
   return (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss+00:00')
@@ -19,12 +20,36 @@ function Get-IsoLocal {
   return (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss$sign$hh`:$mm")
 }
 
+function Now-Unix {
+  return [int64][Math]::Floor((Get-Date).ToUniversalTime().Subtract((Get-Date '1970-01-01')).TotalSeconds)
+}
+
+function Write-Heartbeat {
+  param($ok, $eventName, $errorMessage)
+  $hb = [ordered]@{
+    version     = 1
+    lastOkAt    = if ($ok) { Now-Unix } else { $null }
+    lastEvent   = if ($eventName) { $eventName } else { $null }
+    writeOk     = $ok
+    lastError   = if ($errorMessage) { $errorMessage } else { $null }
+    lastErrorAt = if ($errorMessage) { Now-Unix } else { $null }
+  }
+  try {
+    $json = ($hb | ConvertTo-Json -Compress -Depth 3)
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($heartbeatPath, $json, $utf8)
+  } catch {}
+}
+
 $row = [ordered]@{
   ts      = Get-IsoLocal
   ts_utc  = Get-IsoNow
   machine = $env:COMPUTERNAME
 }
 
+$eventName = ''
+
+# 1) parse stdin payload into $row
 try {
   if (-not (Test-Path -LiteralPath $PayloadFile)) {
     $row['_empty_stdin'] = $true
@@ -89,17 +114,21 @@ try {
   $row['_parse_msg'] = "$($_.Exception.Message)"
 }
 
+if ($row.Contains('hook_event_name')) { $eventName = [string]$row['hook_event_name'] }
+
+# 2) append requests.jsonl; on failure write heartbeat; always exit 0
 try {
   $line = ($row | ConvertTo-Json -Compress -Depth 6)
   Add-Content -LiteralPath $logPath -Value $line -Encoding UTF8
-} catch {}
+  Write-Heartbeat -ok $true -eventName $eventName
+} catch {
+  Write-Heartbeat -ok $false -eventName $eventName -errorMessage "$($_.Exception.Message)"
+}
 
-$eventName = ''
-if ($row.Contains('hook_event_name')) { $eventName = [string]$row['hook_event_name'] }
+# 3) minimal stdout JSON for Cursor
 if ($eventName -eq 'beforeSubmitPrompt' -or $row.Contains('prompt_chars')) {
   Write-Output '{"continue":true}'
 } elseif ($eventName -eq 'subagentStart') {
-  # Explicit allow; some Cursor builds treat empty stdout inconsistently
   Write-Output '{"permission":"allow"}'
 }
 exit 0

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, FixedOffset, Utc};
 use rusqlite::{Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::services::cursor_attribution::{
@@ -106,6 +107,67 @@ pub fn local_usage_dir() -> Result<PathBuf, String> {
 
 pub fn requests_jsonl_path() -> Result<PathBuf, String> {
     Ok(local_usage_dir()?.join("requests.jsonl"))
+}
+
+pub fn hook_heartbeat_path() -> Result<PathBuf, String> {
+    Ok(local_usage_dir()?.join("hook-heartbeat.json"))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookHeartbeat {
+    pub version: u32,
+    pub last_ok_at: Option<i64>,
+    pub last_event: Option<String>,
+    pub write_ok: bool,
+    pub last_error: Option<String>,
+    pub last_error_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookAlert {
+    pub level: String,
+    pub message: String,
+}
+
+pub fn read_hook_heartbeat() -> Option<HookHeartbeat> {
+    let path = hook_heartbeat_path().ok()?;
+    if !path.is_file() {
+        return None;
+    }
+    let text = fs::read_to_string(&path).ok()?;
+    // 兼容 PowerShell 旧版本可能写入的 UTF-8 BOM
+    let text = text.trim_start_matches('\u{FEFF}');
+    serde_json::from_str::<HookHeartbeat>(text).ok()
+}
+
+pub fn hook_alert(enabled: bool, installed: bool, heartbeat: Option<&HookHeartbeat>) -> Option<HookAlert> {
+    if enabled && !installed {
+        return Some(HookAlert {
+            level: "error".to_string(),
+            message: "Cursor Hook 未安装".to_string(),
+        });
+    }
+    if let Some(hb) = heartbeat {
+        if !hb.write_ok {
+            let base = "Hook 写入失败".to_string();
+            let msg = hb.last_error.as_ref().map(|e| {
+                let e = e.trim();
+                let short: String = e.chars().take(80).collect();
+                if e.chars().count() > 80 {
+                    format!("{}: {}...", base, short)
+                } else {
+                    format!("{}: {}", base, short)
+                }
+            }).unwrap_or(base);
+            return Some(HookAlert {
+                level: "error".to_string(),
+                message: msg,
+            });
+        }
+    }
+    None
 }
 
 pub fn is_hook_installed() -> bool {
