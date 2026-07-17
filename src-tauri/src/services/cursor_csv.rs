@@ -27,6 +27,8 @@ pub struct CursorCsvService {
     latest_timestamp: Option<i64>,
     attribution_enabled: bool,
     local_events: Vec<LocalHookEvent>,
+    /// 本机归因过滤起始时刻（Unix 秒），reload 时从配置读取
+    attribution_filter_start: i64,
     /// row_key → 手动改判
     overrides: HashMap<String, OverrideEntry>,
 }
@@ -39,12 +41,14 @@ impl CursorCsvService {
             latest_timestamp: None,
             attribution_enabled: false,
             local_events: Vec::new(),
+            attribution_filter_start: cursor_local_hook::get_attribution_filter_start(),
             overrides: HashMap::new(),
         }
     }
 
     fn reload_attribution(&mut self) {
         self.attribution_enabled = cursor_local_hook::is_attribution_enabled();
+        self.attribution_filter_start = cursor_local_hook::get_attribution_filter_start();
         if self.attribution_enabled {
             self.local_events = cursor_local_hook::load_local_events().unwrap_or_else(|e| {
                 log::warn!("[CURSOR] 读取本机 Hook 日志失败: {}", e);
@@ -54,8 +58,9 @@ impl CursorCsvService {
             self.local_events.clear();
         }
         log::info!(
-            "[CURSOR] 本机归因 enabled={} local_events={}",
+            "[CURSOR] 本机归因 enabled={} filter_start={} local_events={}",
             self.attribution_enabled,
+            self.attribution_filter_start,
             self.local_events.len()
         );
     }
@@ -130,7 +135,7 @@ impl CursorCsvService {
 
     fn algo_reason_for(&self, r: &RawRecord) -> Option<crate::services::cursor_attribution::FilterReason> {
         let apply_attr = self.attribution_enabled && !self.local_events.is_empty();
-        if apply_attr && should_apply_attribution_for_ts(r.created_at) {
+        if apply_attr && should_apply_attribution_for_ts(r.created_at, self.attribution_filter_start) {
             explain_filter_reason(
                 r.created_at,
                 &r.model,

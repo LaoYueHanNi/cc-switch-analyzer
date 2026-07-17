@@ -181,6 +181,8 @@ export interface CursorStatusInfo {
   localEventCount?: number
   attributionHint?: string
   attributionStats?: AttributionTokenStats
+  /** 本机归因过滤起始时刻（Unix 秒，东八区语义） */
+  attributionFilterStart?: number
   /** Cursor CSV 同步范围：1d | 7d | 30d | all */
   syncLookback?: string
   /** Hook 备份周期：off | daily */
@@ -283,6 +285,7 @@ export interface PlatformAdapter {
   ): Promise<CursorStatusInfo>
   cursorClearAttributionOverride(rowKey: string): Promise<CursorStatusInfo>
   cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo>
+  cursorSetAttributionFilterStart(epoch: number): Promise<CursorStatusInfo>
   cursorSetSyncLookback(lookback: string): Promise<CursorStatusInfo>
   cursorSetHookBackupPeriod(period: string): Promise<CursorStatusInfo>
   cursorBackupHooksNow(): Promise<HookBackupResult>

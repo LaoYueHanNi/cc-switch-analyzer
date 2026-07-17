@@ -111,6 +111,34 @@
           <span class="tm-hint">{{ cursorStatus.attributionHint || '按本机 Hook 过滤（分钟±5 + 模型家族）' }}</span>
         </div>
         <div class="sync-lookback-row">
+          <span class="tm-label">归因起始</span>
+          <input
+            class="lookback-select filter-start-date"
+            type="text"
+            inputmode="numeric"
+            placeholder="YYYY-MM-DD"
+            maxlength="10"
+            :value="filterStartDateDraft"
+            :disabled="filterStartSaving"
+            @input="filterStartDateDraft = ($event.target as HTMLInputElement).value"
+            @change="commitFilterStart"
+            @keydown.enter="($event.target as HTMLInputElement).blur()"
+          />
+          <input
+            class="lookback-select filter-start-time"
+            type="text"
+            inputmode="numeric"
+            placeholder="HH:mm"
+            maxlength="5"
+            :value="filterStartTimeDraft"
+            :disabled="filterStartSaving"
+            @input="filterStartTimeDraft = ($event.target as HTMLInputElement).value"
+            @change="commitFilterStart"
+            @keydown.enter="($event.target as HTMLInputElement).blur()"
+          />
+          <span class="tm-hint">北京时间 · 此前记录不过滤</span>
+        </div>
+        <div class="sync-lookback-row">
           <span class="tm-label">Hook 备份</span>
           <select
             class="lookback-select"
@@ -202,6 +230,7 @@ const cursorStatus = ref<CursorStatusInfo>({
   localEventCount: 0,
   attributionHint: '',
   attributionStats: { csvTotal: emptyQuad(), filteredOut: emptyQuad() },
+  attributionFilterStart: 1_783_927_800,
   syncLookback: '7d',
   hookBackupPeriod: 'daily',
   hookBackupCount: 0,
@@ -213,10 +242,46 @@ const loginLoading = ref(false)
 const cursorSyncing = ref(false)
 const attributionToggling = ref(false)
 const lookbackSaving = ref(false)
+const filterStartSaving = ref(false)
 const hookBackupSaving = ref(false)
 const hookBackupNowLoading = ref(false)
 const showCsvPreview = ref(false)
 const csvPreviewFilteredOnly = ref(false)
+
+const BJ_OFFSET_SEC = 8 * 3600
+
+function bjPartsFromEpoch(epochSec: number): { date: string; time: string } {
+  const d = new Date((epochSec + BJ_OFFSET_SEC) * 1000)
+  const y = d.getUTCFullYear()
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(d.getUTCDate()).padStart(2, '0')
+  const h = String(d.getUTCHours()).padStart(2, '0')
+  const min = String(d.getUTCMinutes()).padStart(2, '0')
+  return { date: `${y}-${m}-${day}`, time: `${h}:${min}` }
+}
+
+function bjPartsToEpoch(date: string, time: string): number | null {
+  const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim())
+  const tm = /^(\d{1,2}):(\d{2})$/.exec(time.trim())
+  if (!dm || !tm) return null
+  const hour = +tm[1]
+  const minute = +tm[2]
+  if (hour > 23 || minute > 59) return null
+  const month = +dm[2]
+  const day = +dm[3]
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null
+  const utcMs = Date.UTC(+dm[1], month - 1, day, hour, minute)
+  return Math.floor(utcMs / 1000) - BJ_OFFSET_SEC
+}
+
+const filterStartDateDraft = ref('2026-07-13')
+const filterStartTimeDraft = ref('15:30')
+
+function syncFilterStartDraftsFromStatus(): void {
+  const parts = bjPartsFromEpoch(cursorStatus.value.attributionFilterStart ?? 1_783_927_800)
+  filterStartDateDraft.value = parts.date
+  filterStartTimeDraft.value = parts.time
+}
 
 const csvTotal = computed(() => cursorStatus.value.attributionStats?.csvTotal ?? emptyQuad())
 const filteredOut = computed(() => cursorStatus.value.attributionStats?.filteredOut ?? emptyQuad())
@@ -269,6 +334,7 @@ const hookBackupStatusText = computed(() => {
 async function loadCursorStatus(): Promise<void> {
   try {
     cursorStatus.value = await platformAdapter.cursorStatus()
+    syncFilterStartDraftsFromStatus()
   } catch { /* ignore */ }
 }
 
@@ -326,6 +392,31 @@ async function onToggleAttribution(enabled: boolean): Promise<void> {
     await loadCursorStatus()
   } finally {
     attributionToggling.value = false
+  }
+}
+
+async function commitFilterStart(): Promise<void> {
+  const epoch = bjPartsToEpoch(filterStartDateDraft.value, filterStartTimeDraft.value)
+  if (epoch == null) {
+    message.error('格式：YYYY-MM-DD 与 HH:mm')
+    syncFilterStartDraftsFromStatus()
+    return
+  }
+  if (epoch === (cursorStatus.value.attributionFilterStart ?? 0)) {
+    syncFilterStartDraftsFromStatus()
+    return
+  }
+  filterStartSaving.value = true
+  try {
+    cursorStatus.value = await platformAdapter.cursorSetAttributionFilterStart(epoch)
+    syncFilterStartDraftsFromStatus()
+    await refreshAfterToggle()
+  } catch (e) {
+    console.error('[cursor] set attribution filter start failed:', e)
+    message.error(typeof e === 'string' ? e : String((e as any)?.message || e || '保存归因起始时间失败'))
+    await loadCursorStatus()
+  } finally {
+    filterStartSaving.value = false
   }
 }
 
@@ -604,6 +695,16 @@ async function onToggle(slot: { sourceId: string }): Promise<void> {
 .lookback-select:disabled {
   opacity: 0.5;
   cursor: wait;
+}
+
+.filter-start-date {
+  width: 96px;
+  cursor: text;
+}
+
+.filter-start-time {
+  width: 52px;
+  cursor: text;
 }
 
 .cursor-attr-row {

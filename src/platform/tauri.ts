@@ -253,6 +253,9 @@ export const platformAdapter: PlatformAdapter = {
   async cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo> {
     return invoke('cursor_toggle_attribution', { enabled })
   },
+  async cursorSetAttributionFilterStart(epoch: number): Promise<CursorStatusInfo> {
+    return invoke('cursor_set_attribution_filter_start', { epoch })
+  },
   async cursorSetSyncLookback(lookback: string): Promise<CursorStatusInfo> {
     return invoke('cursor_set_sync_lookback', { lookback })
   },

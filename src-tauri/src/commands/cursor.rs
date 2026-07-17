@@ -25,6 +25,8 @@ pub struct CursorStatus {
     pub local_event_count: i64,
     pub attribution_hint: String,
     pub attribution_stats: AttributionTokenStats,
+    /// 本机归因过滤起始时刻（Unix 秒，东八区语义）
+    pub attribution_filter_start: i64,
     pub sync_lookback: String,
     pub hook_backup_period: String,
     pub hook_backup_count: i64,
@@ -102,6 +104,7 @@ fn build_cursor_status(state: &State<AppState>) -> Result<CursorStatus, String> 
         local_event_count,
         attribution_hint,
         attribution_stats,
+        attribution_filter_start: cursor_local_hook::get_attribution_filter_start(),
         sync_lookback: cursor_sync::get_sync_lookback().as_str().to_string(),
         hook_backup_period: hook_backup.period,
         hook_backup_count: hook_backup.backup_count,
@@ -333,6 +336,34 @@ pub fn cursor_toggle_attribution(
         status.attribution_hint = hint;
     }
     Ok(status)
+}
+
+#[tauri::command]
+pub fn cursor_set_attribution_filter_start(
+    epoch: i64,
+    state: State<AppState>,
+) -> Result<CursorStatus, String> {
+    let parsed = cursor_local_hook::set_attribution_filter_start(epoch)?;
+    log::info!("[CURSOR] attribution filter start set to {}", parsed);
+
+    // 有 CSV 时刷新归因缓存以立即生效
+    if utils::get_cursor_usage_csv_path()
+        .map(|p| p.exists())
+        .unwrap_or(false)
+    {
+        let _ = ensure_cursor_source_registered(&state);
+        {
+            let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+            if let Some(entry) = sources
+                .iter_mut()
+                .find(|s| matches!(s.db_type, DbType::Cursor))
+            {
+                entry.source.refresh_cursor_local_events();
+            }
+        }
+    }
+
+    build_cursor_status(&state)
 }
 
 #[tauri::command]

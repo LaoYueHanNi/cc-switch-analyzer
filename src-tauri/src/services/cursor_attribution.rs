@@ -9,12 +9,14 @@ use chrono::{FixedOffset, TimeZone};
 use serde::{Deserialize, Serialize};
 
 pub const ATTRIBUTION_SETTING_KEY: &str = "cursor_local_attribution_enabled";
+/// 本机归因过滤起始时刻（Unix 秒）配置键；未设置时用默认值。
+pub const ATTRIBUTION_FILTER_START_SETTING_KEY: &str = "cursor_attribution_filter_start";
 pub const ATTRIBUTION_SLACK_SECS: i64 = 300;
 pub const OVERRIDES_FILE_NAME: &str = "attribution-overrides.json";
 
-/// 本机归因过滤起始时刻：2026-07-13 15:30:00（东八区）。
+/// 默认本机归因过滤起始时刻：2026-07-13 15:30:00（东八区）。
 /// CSV 的 `created_at` 为 Unix 秒（UTC）；此之前的行不过滤，保留账号全量。
-pub fn attribution_filter_start_epoch() -> i64 {
+pub fn default_attribution_filter_start_epoch() -> i64 {
     FixedOffset::east_opt(8 * 3600)
         .expect("UTC+8")
         .with_ymd_and_hms(2026, 7, 13, 15, 30, 0)
@@ -23,9 +25,9 @@ pub fn attribution_filter_start_epoch() -> i64 {
         .timestamp()
 }
 
-/// 该 CSV 时间戳是否需要做本机归因过滤。
-pub fn should_apply_attribution_for_ts(csv_ts: i64) -> bool {
-    csv_ts >= attribution_filter_start_epoch()
+/// 该 CSV 时间戳是否需要做本机归因过滤（`start_epoch` 为配置或默认起始点）。
+pub fn should_apply_attribution_for_ts(csv_ts: i64, start_epoch: i64) -> bool {
+    csv_ts >= start_epoch
 }
 
 /// 四项 token 合计（输入 / 输出 / 缓存读 / 缓存写）。
@@ -407,15 +409,15 @@ mod tests {
     #[test]
     fn test_attribution_cutoff_is_cst_1530() {
         // 2026-07-13 15:30:00 +08:00 == 2026-07-13 07:30:00 UTC
-        let start = attribution_filter_start_epoch();
+        let start = default_attribution_filter_start_epoch();
         assert_eq!(start, 1_783_927_800);
         let utc = chrono::DateTime::from_timestamp(start, 0).unwrap();
         assert_eq!(utc.format("%Y-%m-%d %H:%M:%S").to_string(), "2026-07-13 07:30:00");
 
         // 东八区 15:29:59 → 不过滤；15:30:00 → 过滤
-        assert!(!should_apply_attribution_for_ts(start - 1));
-        assert!(should_apply_attribution_for_ts(start));
-        assert!(should_apply_attribution_for_ts(start + 1));
+        assert!(!should_apply_attribution_for_ts(start - 1, start));
+        assert!(should_apply_attribution_for_ts(start, start));
+        assert!(should_apply_attribution_for_ts(start + 1, start));
     }
 
     #[test]

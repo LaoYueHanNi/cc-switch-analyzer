@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::services::cursor_attribution::{
-    normalize_model_family, LocalHookEvent, ATTRIBUTION_SETTING_KEY,
+    default_attribution_filter_start_epoch, normalize_model_family, LocalHookEvent,
+    ATTRIBUTION_FILTER_START_SETTING_KEY, ATTRIBUTION_SETTING_KEY,
 };
 use crate::utils;
 
@@ -99,6 +100,23 @@ pub fn is_attribution_enabled() -> bool {
 
 pub fn set_attribution_enabled(enabled: bool) -> Result<(), String> {
     write_setting_raw(ATTRIBUTION_SETTING_KEY, if enabled { "1" } else { "0" })
+}
+
+/// 本机归因过滤起始时刻（Unix 秒）；未配置时返回默认值。
+pub fn get_attribution_filter_start() -> i64 {
+    read_setting_raw(ATTRIBUTION_FILTER_START_SETTING_KEY)
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or_else(default_attribution_filter_start_epoch)
+}
+
+/// 设置本机归因过滤起始时刻（Unix 秒）。
+pub fn set_attribution_filter_start(epoch: i64) -> Result<i64, String> {
+    if epoch <= 0 {
+        return Err("归因起始时间无效".into());
+    }
+    write_setting_raw(ATTRIBUTION_FILTER_START_SETTING_KEY, &epoch.to_string())?;
+    Ok(epoch)
 }
 
 pub fn local_usage_dir() -> Result<PathBuf, String> {
