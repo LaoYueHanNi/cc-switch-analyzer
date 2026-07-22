@@ -193,11 +193,19 @@ export interface CursorStatusInfo {
   hookAlert?: { level: 'error'; message: string } | null
 }
 
+export interface HookMergeResult {
+  merged: boolean
+  rowsBefore: number
+  rowsAfter: number
+  message: string
+}
+
 export interface HookBackupResult {
   backedUp: boolean
   path?: string | null
   skippedReason?: string | null
   message: string
+  merge?: HookMergeResult | null
 }
 
 export interface DefaultPaths {

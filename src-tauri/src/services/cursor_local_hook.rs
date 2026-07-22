@@ -17,8 +17,8 @@ use crate::utils;
 
 const HOOK_MARKER: &str = "local-usage/run_log.ps1";
 
-/// 安装到 hooks.json 的事件：覆盖所有可能触发模型调用的生命周期。
-/// 不含 beforeShellExecution / preToolUse 等纯工具钩子（会带父会话 model 刷屏，干扰归因）。
+/// 安装到 hooks.json 的事件：覆盖 Agent 生命周期与工具调用。
+/// 工具链用通用 pre/postToolUse（已覆盖 Shell/MCP/Read/Write 等），不再单独挂 beforeShellExecution 以免重复触发。
 const HOOK_EVENTS: &[&str] = &[
     // 主 Agent / Cmd+K / Agent Review（独立 composer 会话）
     "sessionStart",
@@ -32,6 +32,13 @@ const HOOK_EVENTS: &[&str] = &[
     "subagentStop",
     // 上下文压缩也会调模型
     "preCompact",
+    // Agent 工具调用（长对话中空窗主要靠这类事件补锚点）
+    "preToolUse",
+    "postToolUse",
+    "postToolUseFailure",
+    // Agent 读改文件（与 preToolUse 部分重叠，保留以覆盖未走通用钩子的路径）
+    "beforeReadFile",
+    "afterFileEdit",
     // Tab 补全
     "beforeTabFileRead",
     "afterTabFileEdit",
@@ -47,6 +54,11 @@ const ATTRIBUTION_HOOK_EVENTS: &[&str] = &[
     "subagentStop",
     "preCompact",
     "sessionStart",
+    "preToolUse",
+    "postToolUse",
+    "postToolUseFailure",
+    "beforeReadFile",
+    "afterFileEdit",
     "beforeTabFileRead",
 ];
 
@@ -317,6 +329,16 @@ fn merge_hooks_json(dir: &Path, install: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// 供备份归整等模块解析 hook 行时间戳。
+pub(crate) fn hook_row_ts_epoch(row: &Value) -> Option<i64> {
+    parse_event_ts(row)
+}
+
+/// 供备份归整等模块解析 hook 行模型。
+pub(crate) fn hook_row_model(row: &Value) -> String {
+    extract_model(row)
+}
+
 fn parse_event_ts(row: &Value) -> Option<i64> {
     if let Some(s) = row.get("ts_utc").and_then(|v| v.as_str()) {
         if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
@@ -570,6 +592,47 @@ mod tests {
         assert!(HOOK_EVENTS.contains(&"preCompact"));
         assert!(HOOK_EVENTS.contains(&"afterAgentThought"));
         assert!(HOOK_EVENTS.contains(&"sessionStart"));
+        assert!(HOOK_EVENTS.contains(&"preToolUse"));
+        assert!(HOOK_EVENTS.contains(&"postToolUse"));
         assert!(ATTRIBUTION_HOOK_EVENTS.contains(&"subagentStart"));
+        assert!(ATTRIBUTION_HOOK_EVENTS.contains(&"postToolUse"));
+    }
+
+    #[test]
+    fn test_load_local_events_includes_tool_hooks() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("requests.jsonl");
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"ts_utc":"2026-07-13T06:00:05+00:00","hook_event_name":"postToolUse","model":"cursor-grok-4.5-high","tool_name":"Shell"}}"#
+        )
+        .unwrap();
+
+        let file = fs::File::open(&path).unwrap();
+        let reader = BufReader::new(file);
+        let mut events = Vec::new();
+        for line in reader.lines() {
+            let line = line.unwrap();
+            let row: Value = serde_json::from_str(&line).unwrap();
+            let event_name = row.get("hook_event_name").and_then(|v| v.as_str()).unwrap_or("");
+            if !is_attribution_event(event_name) {
+                continue;
+            }
+            let model = extract_model(&row);
+            if model.is_empty() {
+                continue;
+            }
+            let ts = parse_event_ts(&row).unwrap();
+            events.push(LocalHookEvent {
+                ts_epoch: ts,
+                family: normalize_model_family(&model),
+                model,
+                hook_event_name: event_name.to_string(),
+            });
+        }
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].hook_event_name, "postToolUse");
+        assert_eq!(events[0].family, "grok-4.5");
     }
 }

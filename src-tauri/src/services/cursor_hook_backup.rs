@@ -6,6 +6,7 @@ use std::path::Path;
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 use serde::Serialize;
 
+use crate::services::cursor_hook_merge::{self, HookMergeResult};
 use crate::services::cursor_local_hook::{
     read_setting_raw, requests_jsonl_path, write_setting_raw,
 };
@@ -54,6 +55,8 @@ pub struct HookBackupResult {
     pub path: Option<String>,
     pub skipped_reason: Option<String>,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge: Option<HookMergeResult>,
 }
 
 pub fn get_hook_backup_period() -> HookBackupPeriod {
@@ -131,6 +134,7 @@ pub fn backup_at_paths(
             path: None,
             skipped_reason: Some("source_missing".into()),
             message: "源文件不存在，已跳过".into(),
+            merge: None,
         });
     }
 
@@ -141,6 +145,7 @@ pub fn backup_at_paths(
             path: None,
             skipped_reason: Some("already_today".into()),
             message: "今日已备份，已跳过".into(),
+            merge: None,
         });
     }
 
@@ -155,14 +160,36 @@ pub fn backup_at_paths(
     fs::copy(source, &dest).map_err(|e| format!("复制 Hook 日志失败: {}", e))?;
     prune_backups(backup_dir, max_keep)?;
 
+    let merge = match cursor_hook_merge::merge_requests_jsonl(source) {
+        Ok(m) => {
+            if m.merged {
+                log::info!("[CURSOR] hook merge: {}", m.message);
+            } else {
+                log::debug!("[CURSOR] hook merge: {}", m.message);
+            }
+            Some(m)
+        }
+        Err(e) => {
+            log::warn!("[CURSOR] hook merge failed: {}", e);
+            return Err(format!("备份成功但归整失败: {}", e));
+        }
+    };
+
+    let backup_msg = format!(
+        "已备份到 {}",
+        dest.file_name().unwrap_or_default().to_string_lossy()
+    );
+    let message = merge
+        .as_ref()
+        .map(|m| format!("{}；{}", backup_msg, m.message))
+        .unwrap_or(backup_msg);
+
     Ok(HookBackupResult {
         backed_up: true,
         path: Some(dest.to_string_lossy().to_string()),
         skipped_reason: None,
-        message: format!(
-            "已备份到 {}",
-            dest.file_name().unwrap_or_default().to_string_lossy()
-        ),
+        message,
+        merge,
     })
 }
 
@@ -268,7 +295,7 @@ mod tests {
         let dest = bak_dir.join("requests-20260715-143045.jsonl");
         assert!(dest.exists());
         assert_eq!(fs::read_to_string(&dest).unwrap(), "{\"model\":\"grok\"}\n");
-        // 源未被改写
+        // 备份后源文件会经归整（最小字段）；无时间戳行原样保留模型
         assert_eq!(fs::read_to_string(&src).unwrap(), "{\"model\":\"grok\"}\n");
     }
 
