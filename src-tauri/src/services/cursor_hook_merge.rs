@@ -1,10 +1,25 @@
 //! 备份后归整 `requests.jsonl`：最小字段 + 同模型短窗内可折叠事件合并为一条。
 
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::thread;
+use std::time::Duration;
 
 use serde_json::{json, Value};
+
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
+
+#[cfg(windows)]
+const FILE_SHARE_READ: u32 = 0x0000_0001;
+#[cfg(windows)]
+const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+#[cfg(windows)]
+const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+
+const RENAME_RETRIES: u32 = 8;
+const RENAME_RETRY_BASE_MS: u64 = 50;
 
 use crate::services::cursor_attribution::normalize_model_family;
 use crate::services::cursor_local_hook::{hook_row_model, hook_row_ts_epoch};
@@ -82,6 +97,92 @@ fn normalize_row(row: &Value) -> Value {
 struct CollapseState {
     family: String,
     anchor_ts: i64,
+}
+
+fn serialize_rows(rows: &[Value]) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    for row in rows {
+        let line = serde_json::to_string(row).map_err(|e| e.to_string())?;
+        body.extend_from_slice(line.as_bytes());
+        body.push(b'\n');
+    }
+    Ok(body)
+}
+
+/// rename 覆盖目标；Windows 上 Hook 可能正追加，故带退避重试。
+fn try_rename_with_retry(from: &Path, to: &Path) -> Result<(), std::io::Error> {
+    let mut last_err = None;
+    for attempt in 0..RENAME_RETRIES {
+        match fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = Some(e);
+                if attempt + 1 < RENAME_RETRIES {
+                    thread::sleep(Duration::from_millis(
+                        RENAME_RETRY_BASE_MS * u64::from(attempt + 1),
+                    ));
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap())
+}
+
+/// 保留原 inode / ACL，避免 Windows 上 rename 替换导致 Hook 后续追加失败。
+fn in_place_rewrite(path: &Path, body: &[u8]) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(path)
+            .map_err(|e| format!("原地写回归整结果失败: {}", e))?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|e| format!("原地写回归整结果失败: {}", e))?;
+        file.write_all(body)
+            .map_err(|e| format!("原地写回归整结果失败: {}", e))?;
+        file.set_len(body.len() as u64)
+            .map_err(|e| format!("原地写回归整结果失败: {}", e))?;
+        file.sync_all()
+            .map_err(|e| format!("原地写回归整结果失败: {}", e))?;
+    }
+
+    #[cfg(not(windows))]
+    {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(path)
+            .map_err(|e| format!("原地写回归整结果失败: {}", e))?;
+        file.write_all(body)
+            .map_err(|e| format!("原地写回归整结果失败: {}", e))?;
+        file.sync_all()
+            .map_err(|e| format!("原地写回归整结果失败: {}", e))?;
+    }
+
+    Ok(())
+}
+
+fn commit_merged_contents(path: &Path, tmp: &Path, body: &[u8]) -> Result<(), String> {
+    if try_rename_with_retry(tmp, path).is_ok() {
+        return Ok(());
+    }
+    in_place_rewrite(path, body)?;
+    let _ = fs::remove_file(tmp);
+    Ok(())
+}
+
+/// 模拟 Hook 侧 Add-Content 的追加打开，确认归整后仍可写。
+fn verify_hook_log_writable(path: &Path) -> Result<(), String> {
+    let mut opts = OpenOptions::new();
+    opts.append(true).create(true);
+    #[cfg(windows)]
+    opts.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+    opts.open(path)
+        .map_err(|e| format!("归整后日志不可写: {}", e))?;
+    Ok(())
 }
 
 /// 读取 jsonl → 归一化 → 折叠 → 原子写回。须在备份完成后对源文件调用。
@@ -169,15 +270,17 @@ pub fn merge_requests_jsonl(path: &Path) -> Result<HookMergeResult, String> {
     }
 
     let rows_after = out_rows.len();
+    let body = serialize_rows(&out_rows)?;
     let tmp = path.with_extension("jsonl.merge.tmp");
     {
         let mut f = File::create(&tmp).map_err(|e| format!("创建归整临时文件失败: {}", e))?;
-        for row in &out_rows {
-            let line = serde_json::to_string(row).map_err(|e| e.to_string())?;
-            writeln!(f, "{}", line).map_err(|e| e.to_string())?;
-        }
+        f.write_all(&body)
+            .map_err(|e| format!("写入归整临时文件失败: {}", e))?;
+        f.sync_all()
+            .map_err(|e| format!("写入归整临时文件失败: {}", e))?;
     }
-    fs::rename(&tmp, path).map_err(|e| format!("提交归整结果失败: {}", e))?;
+    commit_merged_contents(path, &tmp, &body)?;
+    verify_hook_log_writable(path)?;
 
     let removed = rows_before.saturating_sub(rows_after);
     let merged = removed > 0;
@@ -248,5 +351,30 @@ mod tests {
         assert_eq!(n.get("conversation_id"), None);
         assert_eq!(n.get("tool_name"), None);
         assert_eq!(n.get("model").and_then(|v| v.as_str()), Some("composer-2.5"));
+    }
+
+    #[test]
+    fn test_merge_result_still_writable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("requests.jsonl");
+        fs::write(
+            &path,
+            r#"{"ts_utc":"2026-07-22T03:00:00+00:00","hook_event_name":"stop","model":"composer-2.5"}
+"#,
+        )
+        .unwrap();
+        merge_requests_jsonl(&path).unwrap();
+        verify_hook_log_writable(&path).unwrap();
+        let mut opts = OpenOptions::new();
+        opts.append(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            opts.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+        }
+        let mut f = opts.open(&path).unwrap();
+        writeln!(f, r#"{{"ts_utc":"2026-07-22T03:01:00+00:00","hook_event_name":"stop","model":"composer-2.5"}}"#)
+            .unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 2);
     }
 }
