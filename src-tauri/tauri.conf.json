@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "CC-Switch Analyzer",
-  "version": "0.7.34",
+  "version": "0.7.35",
   "identifier": "com.cc-switch-analyzer",
   "build": {
     "frontendDist": "../dist",
