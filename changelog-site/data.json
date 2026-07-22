@@ -4,6 +4,17 @@
     "date": "2026-07-22",
     "commits": [
       {
+        "hash": "f0228de",
+        "subject": "fix(cursor): 修复备份归整后Hook写入失败",
+        "date": "2026-07-22"
+      }
+    ]
+  },
+  {
+    "version": "0.7.35",
+    "date": "2026-07-22",
+    "commits": [
+      {
         "hash": "535cdc8",
         "subject": "feat(cursor): 工具Hook与jsonl备份后归整",
         "date": "2026-07-22"
