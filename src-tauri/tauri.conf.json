@@ -1,11 +1,11 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "CC-Switch Analyzer",
-  "version": "0.7.36",
+  "version": "0.7.37",
   "identifier": "com.cc-switch-analyzer",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:1430",
     "beforeDevCommand": "pnpm dev:tauri-frontend",
     "beforeBuildCommand": "pnpm build:tauri-frontend"
   },

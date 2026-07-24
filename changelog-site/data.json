@@ -1,6 +1,17 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-07-24",
+    "commits": [
+      {
+        "hash": "fe84313",
+        "subject": "feat(cursor): 多账号缓存隔离与设置页账号列表",
+        "date": "2026-07-24"
+      }
+    ]
+  },
+  {
+    "version": "0.7.36",
     "date": "2026-07-22",
     "commits": [
       {
