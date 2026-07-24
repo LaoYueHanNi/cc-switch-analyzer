@@ -6,6 +6,7 @@
     title="设置"
     :style="{ width: '780px', maxWidth: '92vw' }"
     :content-style="{ padding: 0 }"
+    :trap-focus="false"
   >
     <div class="settings-layout">
       <nav class="settings-nav">

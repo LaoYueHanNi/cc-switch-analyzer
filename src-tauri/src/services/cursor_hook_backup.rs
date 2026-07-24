@@ -84,13 +84,13 @@ pub fn backup_status() -> HookBackupInfo {
     }
 }
 
-/// 同步 CSV 成功后顺带触发：周期关 / 源不存在 / 今日已备 → 静默跳过。
+/// 同步 CSV 成功后顺带触发：周期关 / 源不存在 / 今日已备 → 静默跳过；成功备份后归整源日志。
 pub fn maybe_backup_after_sync() {
     if get_hook_backup_period() == HookBackupPeriod::Off {
         log::debug!("[CURSOR] hook backup skip after sync: period=off");
         return;
     }
-    match backup_with_policy(false) {
+    match backup_with_policy(false, true) {
         Ok(r) => {
             if r.backed_up {
                 log::info!("[CURSOR] hook backup after sync: {}", r.message);
@@ -105,25 +105,36 @@ pub fn maybe_backup_after_sync() {
     }
 }
 
-/// 立即备份：不受「每天一次」限制；源不存在返回明确错误。
+/// 立即备份：不受「每天一次」限制；**不**归整源文件。源不存在返回明确错误。
 pub fn backup_now() -> Result<HookBackupResult, String> {
-    backup_with_policy(true)
+    backup_with_policy(true, false)
 }
 
-fn backup_with_policy(force: bool) -> Result<HookBackupResult, String> {
+/// 仅归整本机 `requests.jsonl`（不备份）。
+pub fn merge_hooks_now() -> Result<HookMergeResult, String> {
+    let source = requests_jsonl_path()?;
+    if !source.exists() {
+        return Err("本机 Hook 日志不存在（requests.jsonl），无法归整".to_string());
+    }
+    cursor_hook_merge::merge_requests_jsonl(&source)
+}
+
+fn backup_with_policy(force: bool, merge_after: bool) -> Result<HookBackupResult, String> {
     let source = requests_jsonl_path()?;
     let backup_dir = utils::get_hook_backup_dir()?;
     let now = Local::now();
-    backup_at_paths(&source, &backup_dir, now, force, MAX_HOOK_BACKUPS)
+    backup_at_paths(&source, &backup_dir, now, force, MAX_HOOK_BACKUPS, merge_after)
 }
 
 /// 可测核心：只读复制 source → backup_dir/requests-YYYYMMDD-HHMMSS.jsonl，并裁剪份数。
+/// `merge_after` 为 true 时，备份成功后归整源文件。
 pub fn backup_at_paths(
     source: &Path,
     backup_dir: &Path,
     now: DateTime<Local>,
     force: bool,
     max_keep: usize,
+    merge_after: bool,
 ) -> Result<HookBackupResult, String> {
     if !source.exists() {
         if force {
@@ -160,19 +171,23 @@ pub fn backup_at_paths(
     fs::copy(source, &dest).map_err(|e| format!("复制 Hook 日志失败: {}", e))?;
     prune_backups(backup_dir, max_keep)?;
 
-    let merge = match cursor_hook_merge::merge_requests_jsonl(source) {
-        Ok(m) => {
-            if m.merged {
-                log::info!("[CURSOR] hook merge: {}", m.message);
-            } else {
-                log::debug!("[CURSOR] hook merge: {}", m.message);
+    let merge = if merge_after {
+        match cursor_hook_merge::merge_requests_jsonl(source) {
+            Ok(m) => {
+                if m.merged {
+                    log::info!("[CURSOR] hook merge: {}", m.message);
+                } else {
+                    log::debug!("[CURSOR] hook merge: {}", m.message);
+                }
+                Some(m)
             }
-            Some(m)
+            Err(e) => {
+                log::warn!("[CURSOR] hook merge failed: {}", e);
+                return Err(format!("备份成功但归整失败: {}", e));
+            }
         }
-        Err(e) => {
-            log::warn!("[CURSOR] hook merge failed: {}", e);
-            return Err(format!("备份成功但归整失败: {}", e));
-        }
+    } else {
+        None
     };
 
     let backup_msg = format!(
@@ -290,13 +305,42 @@ mod tests {
             .with_ymd_and_hms(2026, 7, 15, 14, 30, 45)
             .single()
             .unwrap();
-        let r = backup_at_paths(&src, &bak_dir, now, true, 50).unwrap();
+        let r = backup_at_paths(&src, &bak_dir, now, true, 50, false).unwrap();
         assert!(r.backed_up);
         let dest = bak_dir.join("requests-20260715-143045.jsonl");
         assert!(dest.exists());
         assert_eq!(fs::read_to_string(&dest).unwrap(), "{\"model\":\"grok\"}\n");
-        // 备份后源文件会经归整（最小字段）；无时间戳行原样保留模型
+        // 立即备份不归整，源文件保持原样
         assert_eq!(fs::read_to_string(&src).unwrap(), "{\"model\":\"grok\"}\n");
+        assert!(r.merge.is_none());
+    }
+
+    #[test]
+    fn test_auto_backup_merges_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        let bak_dir = tmp.path().join("bak");
+        fs::create_dir_all(&src_dir).unwrap();
+        // 同模型短窗内可折叠事件，归整后应变少
+        let src = write_src(
+            &src_dir,
+            concat!(
+                r#"{"ts_utc":"2026-07-15T06:00:00.000Z","hook_event_name":"preToolUse","model":"grok"}"#,
+                "\n",
+                r#"{"ts_utc":"2026-07-15T06:00:02.000Z","hook_event_name":"preToolUse","model":"grok"}"#,
+                "\n",
+            ),
+        );
+        let now = Local
+            .with_ymd_and_hms(2026, 7, 15, 14, 30, 45)
+            .single()
+            .unwrap();
+        let r = backup_at_paths(&src, &bak_dir, now, false, 50, true).unwrap();
+        assert!(r.backed_up);
+        assert!(r.merge.is_some());
+        // 备份副本是归整前的全文
+        let bak = fs::read_to_string(bak_dir.join("requests-20260715-143045.jsonl")).unwrap();
+        assert_eq!(bak.lines().count(), 2);
     }
 
     #[test]
@@ -316,14 +360,14 @@ mod tests {
             .single()
             .unwrap();
 
-        let r1 = backup_at_paths(&src, &bak_dir, morning, false, 50).unwrap();
+        let r1 = backup_at_paths(&src, &bak_dir, morning, false, 50, false).unwrap();
         assert!(r1.backed_up);
 
-        let r2 = backup_at_paths(&src, &bak_dir, afternoon, false, 50).unwrap();
+        let r2 = backup_at_paths(&src, &bak_dir, afternoon, false, 50, false).unwrap();
         assert!(!r2.backed_up);
         assert_eq!(r2.skipped_reason.as_deref(), Some("already_today"));
 
-        let r3 = backup_at_paths(&src, &bak_dir, afternoon, true, 50).unwrap();
+        let r3 = backup_at_paths(&src, &bak_dir, afternoon, true, 50, false).unwrap();
         assert!(r3.backed_up);
         assert_eq!(list_backup_names(&bak_dir).len(), 2);
     }
@@ -335,11 +379,11 @@ mod tests {
         let bak = tmp.path().join("bak");
         let now = Local::now();
 
-        let soft = backup_at_paths(&missing, &bak, now, false, 50).unwrap();
+        let soft = backup_at_paths(&missing, &bak, now, false, 50, false).unwrap();
         assert!(!soft.backed_up);
         assert_eq!(soft.skipped_reason.as_deref(), Some("source_missing"));
 
-        let hard = backup_at_paths(&missing, &bak, now, true, 50);
+        let hard = backup_at_paths(&missing, &bak, now, true, 50, false);
         assert!(hard.is_err());
         assert!(hard.unwrap_err().contains("不存在"));
     }

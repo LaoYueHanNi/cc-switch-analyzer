@@ -160,6 +160,10 @@ export interface CursorCsvPreviewRow {
   rowKey: string
   /** 手动改判；无记录时为 undefined/null */
   override?: CursorOverrideAction | null
+  /** 所属 Cursor 账号 */
+  userId?: string | null
+  /** 账号缓存目录（改判路由） */
+  cachePath?: string | null
 }
 
 export interface CursorCsvPreviewPage {
@@ -171,8 +175,21 @@ export interface CursorCsvPreviewPage {
   availableModels?: string[]
 }
 
+export interface CursorAccountInfo {
+  userId: string
+  path: string
+  recordCount: number
+  lastSync: number | null
+  isSyncAccount: boolean
+  enabled: boolean
+  sourceId: string
+  attributionStats?: AttributionTokenStats
+}
+
 export interface CursorStatusInfo {
   loggedIn: boolean
+  /** 当前可同步账号 userId */
+  userId?: string | null
   lastSync: number | null
   recordCount: number
   cachePath: string | null
@@ -191,6 +208,7 @@ export interface CursorStatusInfo {
   /** 最近备份时刻（Unix 秒，来自文件名） */
   hookLastBackupAt?: number | null
   hookAlert?: { level: 'error'; message: string } | null
+  accounts?: CursorAccountInfo[]
 }
 
 export interface HookMergeResult {
@@ -284,19 +302,28 @@ export interface PlatformAdapter {
     pageSize?: number,
     filteredOnly?: boolean,
     model?: string | null,
+    cachePath?: string | null,
+    userId?: string | null,
   ): Promise<CursorCsvPreviewPage>
   cursorSetAttributionOverride(
     rowKey: string,
     action: CursorOverrideAction,
     createdAt: number,
     model: string,
+    cachePath?: string | null,
+    userId?: string | null,
   ): Promise<CursorStatusInfo>
-  cursorClearAttributionOverride(rowKey: string): Promise<CursorStatusInfo>
+  cursorClearAttributionOverride(
+    rowKey: string,
+    cachePath?: string | null,
+    userId?: string | null,
+  ): Promise<CursorStatusInfo>
   cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo>
   cursorSetAttributionFilterStart(epoch: number): Promise<CursorStatusInfo>
   cursorSetSyncLookback(lookback: string): Promise<CursorStatusInfo>
   cursorSetHookBackupPeriod(period: string): Promise<CursorStatusInfo>
   cursorBackupHooksNow(): Promise<HookBackupResult>
+  cursorMergeHooksNow(): Promise<HookMergeResult>
   cursorLogout(clearCache?: boolean): Promise<SourceInfo[]>
   // 应用信息 / 系统交互
   getAppVersion(): Promise<string>

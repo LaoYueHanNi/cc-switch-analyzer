@@ -23,6 +23,8 @@ const PROVIDER_ID: &str = "cursor";
 
 pub struct CursorCsvService {
     cache_dir: String,
+    /// 账号 userId（来自 account.json / 目录名）
+    user_id: String,
     records: RwLock<Vec<RawRecord>>,
     latest_timestamp: Option<i64>,
     attribution_enabled: bool,
@@ -37,6 +39,7 @@ impl CursorCsvService {
     pub fn new() -> Self {
         Self {
             cache_dir: String::new(),
+            user_id: String::new(),
             records: RwLock::new(Vec::new()),
             latest_timestamp: None,
             attribution_enabled: false,
@@ -44,6 +47,16 @@ impl CursorCsvService {
             attribution_filter_start: cursor_local_hook::get_attribution_filter_start(),
             overrides: HashMap::new(),
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn user_id(&self) -> &str {
+        &self.user_id
+    }
+
+    #[allow(dead_code)]
+    pub fn cache_dir(&self) -> &str {
+        &self.cache_dir
     }
 
     fn reload_attribution(&mut self) {
@@ -105,10 +118,12 @@ impl CursorCsvService {
         if !csv_path.is_file() {
             return Err(format!("Cursor 缓存文件不存在: {}", csv_path.display()));
         }
-        let parsed = parse_cursor_csv_file(&csv_path)?;
+        let user_id = utils::resolve_account_user_id(Path::new(dir_path));
+        let parsed = parse_cursor_csv_file(&csv_path, &user_id)?;
         self.latest_timestamp = parsed.iter().map(|r| r.created_at).max();
         *self.records.write().map_err(|e| format!("数据锁失败: {}", e))? = parsed;
         self.cache_dir = dir_path.to_string();
+        self.user_id = user_id;
         self.reload_attribution();
         self.reload_overrides();
         Ok(())
@@ -116,13 +131,14 @@ impl CursorCsvService {
 
     pub fn close(&mut self) {
         self.cache_dir.clear();
+        self.user_id.clear();
         if let Ok(mut guard) = self.records.write() {
             guard.clear();
         }
         self.latest_timestamp = None;
-        self.attribution_enabled = false;
         self.local_events.clear();
         self.overrides.clear();
+        self.attribution_enabled = false;
     }
 
     pub fn is_open(&self) -> bool {
@@ -275,6 +291,16 @@ impl CursorCsvService {
                     reason: eff.reason,
                     row_key: key,
                     override_action: eff.override_action,
+                    user_id: if self.user_id.is_empty() {
+                        None
+                    } else {
+                        Some(self.user_id.clone())
+                    },
+                    cache_path: if self.cache_dir.is_empty() {
+                        None
+                    } else {
+                        Some(self.cache_dir.clone())
+                    },
                 }
             })
             .collect();
@@ -363,8 +389,8 @@ fn record_matches_params(record: &RawRecord, params: &FilterParams) -> bool {
     true
 }
 
-/// 解析 Cursor usage.csv 为 RawRecord 列表
-pub fn parse_cursor_csv_file(path: &Path) -> Result<Vec<RawRecord>, String> {
+/// 解析 Cursor usage.csv 为 RawRecord 列表；`user_id` 写入 session_id 以避免跨账号去重冲突
+pub fn parse_cursor_csv_file(path: &Path, user_id: &str) -> Result<Vec<RawRecord>, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("读取 Cursor CSV 失败: {}", e))?;
 
@@ -390,6 +416,12 @@ pub fn parse_cursor_csv_file(path: &Path) -> Result<Vec<RawRecord>, String> {
         (2, 4, 5, 6, 7, 9)
     } else {
         (1, 2, 3, 4, 5, 7)
+    };
+
+    let uid = if user_id.trim().is_empty() {
+        "_unknown"
+    } else {
+        user_id.trim()
     };
 
     let mut records = Vec::new();
@@ -438,7 +470,7 @@ pub fn parse_cursor_csv_file(path: &Path) -> Result<Vec<RawRecord>, String> {
         let cache_creation = (input_with_cache_write - input_without_cache_write).max(0);
         let day_key = date_str.get(..10).unwrap_or(date_str);
         records.push(RawRecord {
-            session_id: format!("cursor-{}", day_key),
+            session_id: format!("cursor-{}-{}", uid, day_key),
             model: model.to_string(),
             provider_id: PROVIDER_ID.to_string(),
             created_at,
@@ -821,14 +853,14 @@ mod tests {
         let csv = "Date,Model,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost,Cost to you
 2025-02-01,gpt-4o,10,5,0,15,30,$0.10,$0.10";
         let (_dir, path) = write_temp_csv(csv);
-        let records = parse_cursor_csv_file(&path).unwrap();
+        let records = parse_cursor_csv_file(&path, "userA").unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].model, "gpt-4o");
         assert_eq!(records[0].provider_id, "cursor");
         assert_eq!(records[0].input_tokens, 5);
         assert_eq!(records[0].output_tokens, 15);
         assert_eq!(records[0].cache_creation, 5);
-        assert_eq!(records[0].session_id, "cursor-2025-02-01");
+        assert_eq!(records[0].session_id, "cursor-userA-2025-02-01");
     }
 
     #[test]
@@ -836,13 +868,13 @@ mod tests {
         let csv = r#"Date,Kind,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost
 "2025-11-13T18:36:05.846Z","Included","auto","No","28342","775","105891","21282","156290","0.19""#;
         let (_dir, path) = write_temp_csv(csv);
-        let records = parse_cursor_csv_file(&path).unwrap();
+        let records = parse_cursor_csv_file(&path, "userB").unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].model, "auto");
         assert_eq!(records[0].input_tokens, 775);
         assert_eq!(records[0].cache_read, 105891);
         assert_eq!(records[0].cache_creation, 28342 - 775);
-        assert_eq!(records[0].session_id, "cursor-2025-11-13");
+        assert_eq!(records[0].session_id, "cursor-userB-2025-11-13");
     }
 
     #[test]
@@ -850,10 +882,36 @@ mod tests {
         let csv = r#"Date,Cloud Agent ID,Automation ID,Kind,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost
 "2026-04-09T20:01:10.528Z","bc-a380fb49-e1a5-414e-817d-6a85b6cdc51c","cc30782e-26cc-4359-bc22-7567efe282be","Included","composer-2","Yes","0","343446","29045760","915201","30304407","Included""#;
         let (_dir, path) = write_temp_csv(csv);
-        let records = parse_cursor_csv_file(&path).unwrap();
+        let records = parse_cursor_csv_file(&path, "u1").unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].model, "composer-2");
         assert_eq!(records[0].cache_read, 29045760);
+        assert_eq!(records[0].session_id, "cursor-u1-2026-04-09");
+    }
+
+    #[test]
+    fn test_session_id_differs_by_user() {
+        let csv = "Date,Model,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost
+2025-02-01,gpt-4o,10,5,0,15,30,$0.10";
+        let (_dir, path) = write_temp_csv(csv);
+        let a = parse_cursor_csv_file(&path, "accA").unwrap();
+        let b = parse_cursor_csv_file(&path, "accB").unwrap();
+        assert_ne!(a[0].session_id, b[0].session_id);
+        assert_eq!(a[0].session_id, "cursor-accA-2025-02-01");
+        assert_eq!(b[0].session_id, "cursor-accB-2025-02-01");
+    }
+
+    #[test]
+    fn test_multi_account_records_survive_dedup() {
+        use crate::services::dedup::dedup_records;
+        let csv = "Date,Model,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost
+2025-02-01,gpt-4o,10,5,0,15,30,$0.10";
+        let (_dir, path) = write_temp_csv(csv);
+        let mut a = parse_cursor_csv_file(&path, "accA").unwrap();
+        let b = parse_cursor_csv_file(&path, "accB").unwrap();
+        a.extend(b);
+        let deduped = dedup_records(a);
+        assert_eq!(deduped.len(), 2, "同日同模型同 token 的不同账号不应被去重");
     }
 
     #[test]

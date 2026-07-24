@@ -1,5 +1,11 @@
 <template>
-  <CompactDialog :show="show" title="Cursor CSV 预览" width="860px" @update:show="emit('update:show', $event)">
+  <CompactDialog
+    :show="show"
+    :title="dialogTitle"
+    width="900px"
+    :z-index="11000"
+    @update:show="emit('update:show', $event)"
+  >
     <div class="preview-toolbar">
       <n-switch size="small" :value="filteredOnly" @update:value="onToggleFiltered" />
       <span class="preview-toolbar-label">仅看归因过滤</span>
@@ -19,6 +25,7 @@
         <thead>
           <tr>
             <th class="col-time">时间</th>
+            <th class="col-account">账号</th>
             <th class="col-model">模型</th>
             <th class="col-num">输入</th>
             <th class="col-num">输出</th>
@@ -30,19 +37,20 @@
         </thead>
         <tbody>
           <tr v-if="loading">
-            <td colspan="8" class="empty-cell">加载中…</td>
+            <td colspan="9" class="empty-cell">加载中…</td>
           </tr>
           <tr v-else-if="items.length === 0">
-            <td colspan="8" class="empty-cell">
+            <td colspan="9" class="empty-cell">
               {{ emptyHint }}
             </td>
           </tr>
           <tr
             v-for="(row, idx) in items"
-            :key="row.rowKey || `${row.createdAt}-${row.model}-${idx}`"
+            :key="`${row.cachePath || ''}-${row.rowKey || `${row.createdAt}-${row.model}-${idx}`}`"
             :class="{ filtered: row.filtered }"
           >
             <td class="col-time">{{ formatTime(row.createdAt) }}</td>
+            <td class="col-account" :title="row.userId || ''">{{ maskUserId(row.userId) }}</td>
             <td class="col-model" :title="row.model">{{ row.model }}</td>
             <td class="col-num" :title="String(row.input)">{{ formatNum(row.input) }}</td>
             <td class="col-num" :title="String(row.output)">{{ formatNum(row.output) }}</td>
@@ -67,13 +75,13 @@
                 <button
                   type="button"
                   class="act-btn"
-                  :disabled="actingKey === row.rowKey"
+                  :disabled="actingKey === actingId(row)"
                   @click="onSetOverride(row, 'filter')"
                 >改为过滤</button>
                 <button
                   type="button"
                   class="act-btn act-cancel"
-                  :disabled="actingKey === row.rowKey"
+                  :disabled="actingKey === actingId(row)"
                   @click="onClearOverride(row)"
                 >取消申诉</button>
               </template>
@@ -81,13 +89,13 @@
                 <button
                   type="button"
                   class="act-btn"
-                  :disabled="actingKey === row.rowKey"
+                  :disabled="actingKey === actingId(row)"
                   @click="onSetOverride(row, 'keep')"
                 >改为取回</button>
                 <button
                   type="button"
                   class="act-btn act-cancel"
-                  :disabled="actingKey === row.rowKey"
+                  :disabled="actingKey === actingId(row)"
                   @click="onClearOverride(row)"
                 >取消申诉</button>
               </template>
@@ -95,7 +103,7 @@
                 <button
                   type="button"
                   class="act-btn"
-                  :disabled="actingKey === row.rowKey"
+                  :disabled="actingKey === actingId(row)"
                   @click="onSetOverride(row, 'keep')"
                 >申诉</button>
               </template>
@@ -103,7 +111,7 @@
                 <button
                   type="button"
                   class="act-btn"
-                  :disabled="actingKey === row.rowKey"
+                  :disabled="actingKey === actingId(row)"
                   @click="onSetOverride(row, 'filter')"
                 >过滤</button>
               </template>
@@ -133,6 +141,9 @@ import type { CursorCsvPreviewRow, CursorFilterReason, CursorOverrideAction } fr
 const props = defineProps<{
   show: boolean
   initialFilteredOnly?: boolean
+  /** 仅预览指定账号缓存 */
+  cachePath?: string | null
+  userId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -149,6 +160,13 @@ const total = ref(0)
 const items = ref<CursorCsvPreviewRow[]>([])
 const loading = ref(false)
 const actingKey = ref('')
+
+const dialogTitle = computed(() => {
+  const uid = (props.userId || '').trim()
+  if (!uid) return 'Cursor CSV 预览'
+  const short = uid.length <= 12 ? uid : `${uid.slice(0, 6)}…${uid.slice(-4)}`
+  return `Cursor CSV · ${short}`
+})
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
@@ -188,6 +206,8 @@ async function loadPage(): Promise<void> {
       PAGE_SIZE,
       filteredOnly.value,
       modelFilter.value || null,
+      props.cachePath ?? null,
+      props.userId ?? null,
     )
     items.value = res.items
     total.value = res.total
@@ -205,13 +225,15 @@ async function loadPage(): Promise<void> {
 
 async function onSetOverride(row: CursorCsvPreviewRow, action: CursorOverrideAction): Promise<void> {
   if (!row.rowKey || actingKey.value) return
-  actingKey.value = row.rowKey
+  actingKey.value = actingId(row)
   try {
     await platformAdapter.cursorSetAttributionOverride(
       row.rowKey,
       action,
       row.createdAt,
       row.model,
+      row.cachePath ?? null,
+      row.userId ?? null,
     )
     emit('stats-changed')
     await loadPage()
@@ -224,9 +246,13 @@ async function onSetOverride(row: CursorCsvPreviewRow, action: CursorOverrideAct
 
 async function onClearOverride(row: CursorCsvPreviewRow): Promise<void> {
   if (!row.rowKey || actingKey.value) return
-  actingKey.value = row.rowKey
+  actingKey.value = actingId(row)
   try {
-    await platformAdapter.cursorClearAttributionOverride(row.rowKey)
+    await platformAdapter.cursorClearAttributionOverride(
+      row.rowKey,
+      row.cachePath ?? null,
+      row.userId ?? null,
+    )
     emit('stats-changed')
     await loadPage()
   } catch (e) {
@@ -234,6 +260,17 @@ async function onClearOverride(row: CursorCsvPreviewRow): Promise<void> {
   } finally {
     actingKey.value = ''
   }
+}
+
+function actingId(row: CursorCsvPreviewRow): string {
+  return `${row.cachePath || row.userId || ''}|${row.rowKey}`
+}
+
+function maskUserId(userId?: string | null): string {
+  const s = (userId || '').trim()
+  if (!s) return '—'
+  if (s.length <= 10) return s
+  return `${s.slice(0, 6)}…${s.slice(-4)}`
 }
 
 function onToggleFiltered(v: boolean): void {
@@ -328,6 +365,15 @@ watch(
 .col-time {
   width: 148px;
   white-space: nowrap;
+}
+
+.col-account {
+  width: 88px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
 }
 
 .col-model {

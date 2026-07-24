@@ -1,6 +1,6 @@
 <template>
   <n-config-provider :locale="zhCN" :date-locale="dateZhCN" :theme="themeStore.isDark ? darkTheme : undefined" :theme-overrides="themeOverrides">
-    <n-message-provider>
+    <n-message-provider :container-style="{ zIndex: '20000' }">
       <AppLayout />
     </n-message-provider>
   </n-config-provider>

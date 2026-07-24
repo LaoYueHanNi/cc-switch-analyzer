@@ -185,6 +185,7 @@ pub fn run() {
             commands::cursor::cursor_set_sync_lookback,
             commands::cursor::cursor_set_hook_backup_period,
             commands::cursor::cursor_backup_hooks_now,
+            commands::cursor::cursor_merge_hooks_now,
             commands::cursor::cursor_logout,
             // 数据查询
             commands::query::query_summary,

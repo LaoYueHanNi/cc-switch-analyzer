@@ -212,6 +212,63 @@ fn extract_user_id_from_session_token(token: &str) -> Option<String> {
     }
 }
 
+/// 解析凭证对应的账号目录键：优先 userId，否则 token 哈希
+pub fn account_dir_key_from_creds(creds: &CursorCredentials) -> String {
+    if let Some(ref uid) = creds.user_id {
+        if !uid.trim().is_empty() {
+            return uid.clone();
+        }
+    }
+    utils::token_fallback_dir_id(&creds.session_token)
+}
+
+/// 当前登录账号的缓存目录；未登录返回 Err
+pub fn active_cursor_cache_dir() -> Result<std::path::PathBuf, String> {
+    let creds = load_credentials().ok_or_else(|| "未登录 Cursor".to_string())?;
+    let key = account_dir_key_from_creds(&creds);
+    utils::get_cursor_account_cache_dir(&key)
+}
+
+pub fn try_active_cursor_cache_dir() -> Option<std::path::PathBuf> {
+    active_cursor_cache_dir().ok()
+}
+
+pub fn active_usage_csv_path() -> Result<std::path::PathBuf, String> {
+    Ok(active_cursor_cache_dir()?.join("usage.csv"))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorAccountMeta {
+    pub user_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_synced_at: Option<i64>,
+}
+
+pub fn write_account_meta(cache_dir: &Path, user_id: &str, last_synced_at: Option<i64>) -> Result<(), String> {
+    let path = cache_dir.join("account.json");
+    let existing = fs::read_to_string(&path)
+        .ok()
+        .and_then(|c| serde_json::from_str::<CursorAccountMeta>(&c).ok());
+    let meta = CursorAccountMeta {
+        user_id: user_id.to_string(),
+        created_at: existing
+            .as_ref()
+            .and_then(|m| m.created_at.clone())
+            .or_else(|| Some(chrono::Utc::now().to_rfc3339())),
+        last_synced_at: last_synced_at.or_else(|| existing.and_then(|m| m.last_synced_at)),
+    };
+    let json = serde_json::to_string_pretty(&meta).map_err(|e| format!("序列化 account.json 失败: {}", e))?;
+    atomic_write_file(&path, &json)
+}
+
+pub fn read_account_meta(cache_dir: &Path) -> Option<CursorAccountMeta> {
+    let content = fs::read_to_string(cache_dir.join("account.json")).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
 fn atomic_write_file(path: &Path, contents: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
@@ -261,6 +318,10 @@ pub fn save_credentials(session_token: &str) -> Result<CursorCredentials, String
     let json = serde_json::to_string_pretty(&creds)
         .map_err(|e| format!("序列化凭证失败: {}", e))?;
     atomic_write_file(&path, &json)?;
+
+    // 登录时把遗留扁平缓存迁入本账号目录
+    let key = account_dir_key_from_creds(&creds);
+    let _ = utils::migrate_legacy_cursor_cache(Some(&key));
     Ok(creds)
 }
 
@@ -475,7 +536,7 @@ pub fn count_cursor_csv_rows(csv_text: &str) -> usize {
 }
 
 pub fn cache_is_fresh() -> bool {
-    let Ok(path) = utils::get_cursor_usage_csv_path() else {
+    let Ok(path) = active_usage_csv_path() else {
         return false;
     };
     let Ok(meta) = fs::metadata(&path) else {
@@ -491,8 +552,13 @@ pub fn cache_is_fresh() -> bool {
 }
 
 pub fn cache_last_modified() -> Option<SystemTime> {
-    let path = utils::get_cursor_usage_csv_path().ok()?;
+    let path = active_usage_csv_path().ok()?;
     fs::metadata(&path).ok()?.modified().ok()
+}
+
+/// 指定账号目录下 usage.csv 的修改时间
+pub fn account_cache_last_modified(cache_dir: &Path) -> Option<SystemTime> {
+    fs::metadata(cache_dir.join("usage.csv")).ok()?.modified().ok()
 }
 
 pub fn sync_cursor_cache() -> SyncCursorResult {
@@ -507,19 +573,23 @@ pub fn sync_cursor_cache() -> SyncCursorResult {
             };
         }
     };
+    let account_key = account_dir_key_from_creds(&creds);
     log::info!(
-        "[CURSOR] sync start user_id={:?} creds_created_at={} token={}",
+        "[CURSOR] sync start user_id={:?} account_key={} creds_created_at={} token={}",
         creds.user_id,
+        account_key,
         creds.created_at,
         mask_token(&creds.session_token)
     );
 
+    let _ = utils::migrate_legacy_cursor_cache(Some(&account_key));
+
     match fetch_cursor_usage_csv(&creds.session_token) {
         Ok((csv_text, start_epoch)) => {
-            let cache_dir = match utils::get_cursor_cache_dir() {
+            let cache_dir = match utils::get_cursor_account_cache_dir(&account_key) {
                 Ok(dir) => dir,
                 Err(e) => {
-                    log::warn!("[CURSOR] sync get cache dir failed: {}", e);
+                    log::warn!("[CURSOR] sync get account cache dir failed: {}", e);
                     return SyncCursorResult {
                         synced: false,
                         rows: 0,
@@ -537,6 +607,7 @@ pub fn sync_cursor_cache() -> SyncCursorResult {
                 };
             }
             let file_path = cache_dir.join("usage.csv");
+            // 只 merge 本账号目录内的已有 CSV，绝不跨账号
             let existing = fs::read_to_string(&file_path).ok();
             let merged = match start_epoch {
                 Some(start) => {
@@ -566,6 +637,10 @@ pub fn sync_cursor_cache() -> SyncCursorResult {
                     rows: 0,
                     error: Some(e),
                 };
+            }
+            let now = utils::now_epoch_seconds();
+            if let Err(e) = write_account_meta(&cache_dir, &account_key, Some(now)) {
+                log::warn!("[CURSOR] write account.json failed: {}", e);
             }
             log::info!(
                 "[CURSOR] sync OK rows={} path={}",
@@ -697,5 +772,36 @@ mod tests {
         let merged = merge_usage_csv(None, fetched, 0);
         assert_eq!(merged.lines().next().unwrap(), "Date,Model");
         assert!(merged.contains("composer-2.5"));
+    }
+
+    #[test]
+    fn account_dir_key_prefers_user_id() {
+        let creds = CursorCredentials {
+            session_token: "userX::secret".into(),
+            user_id: Some("userX".into()),
+            created_at: "t".into(),
+        };
+        assert_eq!(account_dir_key_from_creds(&creds), "userX");
+    }
+
+    #[test]
+    fn account_dir_key_falls_back_to_token_hash() {
+        let creds = CursorCredentials {
+            session_token: "raw-token-without-separator".into(),
+            user_id: None,
+            created_at: "t".into(),
+        };
+        let key = account_dir_key_from_creds(&creds);
+        assert_eq!(key.len(), 16);
+        assert_eq!(key, utils::token_fallback_dir_id("raw-token-without-separator"));
+    }
+
+    #[test]
+    fn write_account_meta_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        write_account_meta(dir.path(), "uid-1", Some(12345)).unwrap();
+        let meta = read_account_meta(dir.path()).unwrap();
+        assert_eq!(meta.user_id, "uid-1");
+        assert_eq!(meta.last_synced_at, Some(12345));
     }
 }

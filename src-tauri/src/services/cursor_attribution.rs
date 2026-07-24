@@ -119,6 +119,12 @@ pub struct CursorCsvPreviewRow {
     /// 手动改判；无记录时为 null（取消申诉后回归算法）。
     #[serde(rename = "override", default, skip_serializing_if = "Option::is_none")]
     pub override_action: Option<OverrideAction>,
+    /// 所属 Cursor 账号
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    /// 账号缓存目录路径（改判路由用）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_path: Option<String>,
 }
 
 /// CSV 预览分页结果。

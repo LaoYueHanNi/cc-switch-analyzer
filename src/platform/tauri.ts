@@ -3,7 +3,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import { check } from '@tauri-apps/plugin-updater'
-import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, CursorCsvPreviewPage, CursorOverrideAction, HookBackupResult, DefaultPaths, TmServiceStatus } from './types'
+import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, CursorCsvPreviewPage, CursorOverrideAction, HookBackupResult, HookMergeResult, DefaultPaths, TmServiceStatus } from './types'
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
 import type { PricingData, PricingFamily } from '@/types/pricing'
@@ -236,19 +236,34 @@ export const platformAdapter: PlatformAdapter = {
     pageSize = 50,
     filteredOnly = false,
     model: string | null = null,
+    cachePath: string | null = null,
+    userId: string | null = null,
   ): Promise<CursorCsvPreviewPage> {
-    return invoke('cursor_preview_csv', { page, pageSize, filteredOnly, model })
+    return invoke('cursor_preview_csv', { page, pageSize, filteredOnly, model, cachePath, userId })
   },
   async cursorSetAttributionOverride(
     rowKey: string,
     action: CursorOverrideAction,
     createdAt: number,
     model: string,
+    cachePath: string | null = null,
+    userId: string | null = null,
   ): Promise<CursorStatusInfo> {
-    return invoke('cursor_set_attribution_override', { rowKey, action, createdAt, model })
+    return invoke('cursor_set_attribution_override', {
+      rowKey,
+      action,
+      createdAt,
+      model,
+      cachePath,
+      userId,
+    })
   },
-  async cursorClearAttributionOverride(rowKey: string): Promise<CursorStatusInfo> {
-    return invoke('cursor_clear_attribution_override', { rowKey })
+  async cursorClearAttributionOverride(
+    rowKey: string,
+    cachePath: string | null = null,
+    userId: string | null = null,
+  ): Promise<CursorStatusInfo> {
+    return invoke('cursor_clear_attribution_override', { rowKey, cachePath, userId })
   },
   async cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo> {
     return invoke('cursor_toggle_attribution', { enabled })
@@ -264,6 +279,9 @@ export const platformAdapter: PlatformAdapter = {
   },
   async cursorBackupHooksNow(): Promise<HookBackupResult> {
     return invoke('cursor_backup_hooks_now')
+  },
+  async cursorMergeHooksNow(): Promise<HookMergeResult> {
+    return invoke('cursor_merge_hooks_now')
   },
   async cursorLogout(clearCache = false): Promise<SourceInfo[]> {
     return invoke<SourceInfo[]>('cursor_logout', { clearCache })

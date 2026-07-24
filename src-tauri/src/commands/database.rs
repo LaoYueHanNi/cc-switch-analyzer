@@ -48,8 +48,10 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
             defaults.push(p);
         }
         if cursor_should_auto_load() {
-            if let Ok(dir) = crate::utils::get_cursor_cache_dir() {
-                defaults.push(dir.to_string_lossy().to_string());
+            if let Ok(caches) = crate::utils::list_cursor_account_caches() {
+                for acc in caches {
+                    defaults.push(acc.path.to_string_lossy().to_string());
+                }
             }
         }
         if !defaults.is_empty() {
@@ -72,7 +74,21 @@ fn auto_load_paths(state: &State<AppState>, paths: Vec<String>) -> Result<Vec<So
     let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
     sources.clear();
 
+    let cache_root = crate::utils::get_cursor_cache_root()
+        .ok()
+        .map(|p| p.to_string_lossy().to_string());
+
     for path in &paths {
+        // 丢弃无效旧根路径（扁平 cursor-cache 且无 usage.csv）
+        if let Some(ref root) = cache_root {
+            if path == root || path_equals_ignore_slash(path, root) {
+                let csv = std::path::Path::new(path).join("usage.csv");
+                if !csv.is_file() {
+                    log::info!("[DB] 跳过旧 Cursor 根路径: {}", path);
+                    continue;
+                }
+            }
+        }
         match create_source_entry(path) {
             Ok(entry) => {
                 log::info!("[DB] 自动加载: {} ({})", path, entry.db_type.label());
@@ -82,17 +98,32 @@ fn auto_load_paths(state: &State<AppState>, paths: Vec<String>) -> Result<Vec<So
         }
     }
 
-    if cursor_should_auto_load()
-        && !sources.iter().any(|s| matches!(s.db_type, crate::services::data_source::DbType::Cursor))
-    {
-        if let Ok(dir) = crate::utils::get_cursor_cache_dir() {
-            let cache_str = dir.to_string_lossy().to_string();
+    // 扫描磁盘上全部账号缓存并补注册
+    let _ = crate::utils::migrate_legacy_cursor_cache(
+        crate::services::cursor_sync::load_credentials()
+            .map(|c| crate::services::cursor_sync::account_dir_key_from_creds(&c))
+            .as_deref(),
+    );
+    if let Ok(caches) = crate::utils::list_cursor_account_caches() {
+        for acc in caches {
+            let cache_str = acc.path.to_string_lossy().to_string();
+            let already = sources.iter().any(|s| {
+                matches!(s.db_type, crate::services::data_source::DbType::Cursor)
+                    && path_equals_ignore_slash(&s.path, &cache_str)
+            });
+            if already {
+                continue;
+            }
             match create_source_entry(&cache_str) {
                 Ok(entry) => {
-                    log::info!("[DB] 自动加载 Cursor: {}", cache_str);
+                    log::info!(
+                        "[DB] 自动加载 Cursor 账号: {} ({})",
+                        cache_str,
+                        acc.user_id
+                    );
                     sources.push(entry);
                 }
-                Err(e) => log::error!("[DB] Cursor 加载失败: {}", e),
+                Err(e) => log::error!("[DB] Cursor 账号加载失败 {}: {}", cache_str, e),
             }
         }
     }
@@ -115,6 +146,12 @@ fn auto_load_paths(state: &State<AppState>, paths: Vec<String>) -> Result<Vec<So
     let info: Vec<SourceInfo> = sources.iter().map(|s| s.to_info()).collect();
     save_paths(&state, &info);
     Ok(info)
+}
+
+fn path_equals_ignore_slash(a: &str, b: &str) -> bool {
+    let na = a.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let nb = b.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    na == nb
 }
 
 #[tauri::command]
@@ -398,10 +435,7 @@ pub fn get_default_paths() -> Result<DefaultPaths, String> {
 }
 
 fn cursor_should_auto_load() -> bool {
-    crate::services::cursor_sync::is_logged_in()
-        && crate::utils::get_cursor_usage_csv_path()
-            .map(|p| p.exists())
-            .unwrap_or(false)
+    crate::utils::any_cursor_usage_csv_exists()
 }
 
 fn source_mtime(path: &str, db_type: &crate::services::data_source::DbType) -> Option<std::fs::Metadata> {
