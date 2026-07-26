@@ -165,12 +165,12 @@ function onOpen(taskId: number) {
   router.push({ name: 'task-detail', params: { id: String(taskId) } })
 }
 
-async function onLaunchAgent(agent: 'claude' | 'opencode' | 'codex') {
+async function onLaunchAgent(agent: 'claude' | 'opencode' | 'codex' | 'grokbuild') {
   await pickFolderAndLaunch(agent, undefined)
 }
 
 async function onContextLaunchAgent(
-  agent: 'claude' | 'opencode' | 'codex',
+  agent: 'claude' | 'opencode' | 'codex' | 'grokbuild',
   event: MouseEvent
 ) {
   if (agent !== 'claude') {
@@ -209,7 +209,7 @@ async function onOpenAllSessions(t: TaskWithStats) {
 }
 
 async function pickFolderAndLaunch(
-  agent: 'claude' | 'opencode' | 'codex',
+  agent: 'claude' | 'opencode' | 'codex' | 'grokbuild',
   providerId: string | undefined
 ) {
   let dir: string | null = null

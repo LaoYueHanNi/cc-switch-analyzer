@@ -21,6 +21,7 @@ pub fn get_session_titles(
     let mut result = HashMap::new();
 
     // 1. 查 app_db 缓存（旧格式 project 视为未命中，强制重新解析以获取真实 cwd）
+    //    grokbuild / 已知 source：有 title 且（有合法 project 或 source 已知）即可命中，避免反复扫盘
     let uncached = {
         let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
         let cached = app_db.get_session_titles(&session_ids)?;
@@ -30,7 +31,11 @@ pub fn get_session_titles(
             let project = parts.get(1).unwrap_or(&"").to_string();
             let project_valid = !project.is_empty()
                 && (project.contains('/') || project.contains('\\'));
-            if project_valid {
+            let known_source = matches!(
+                source.as_str(),
+                "claudecode" | "opencode" | "codex" | "grokbuild"
+            );
+            if project_valid || (known_source && !title.is_empty()) {
                 result.insert(sid.clone(), SessionTitleInfo {
                     title, project, source: source.clone(),
                 });
@@ -63,7 +68,18 @@ pub fn get_session_titles(
         }
     }
 
-    // 3. Codex JSONL 兜底（先按 session_id 匹配，再按时间戳匹配）
+    // 3. Grok Build summary.json（精确目录匹配，须在 Codex 时间戳匹配之前）
+    let remaining_for_grok: Vec<String> = uncached.iter()
+        .filter(|id| !resolved.contains_key(*id))
+        .cloned()
+        .collect();
+    if !remaining_for_grok.is_empty() {
+        for (id, (title, project)) in crate::services::grok_sessions::resolve_grok_titles(&remaining_for_grok) {
+            resolved.insert(id, (title, project, "grokbuild".to_string()));
+        }
+    }
+
+    // 4. Codex JSONL 兜底（先按 session_id 匹配，再按时间戳匹配）
     let remaining_for_codex: Vec<String> = uncached.iter()
         .filter(|id| !resolved.contains_key(*id))
         .cloned()
@@ -91,7 +107,7 @@ pub fn get_session_titles(
         }
     }
 
-    // 4. Claude JSONL 兜底
+    // 5. Claude JSONL 兜底
     let jsonl_provider = ClaudeJsonlTitleProvider;
     let remaining_for_jsonl: Vec<String> = uncached.iter()
         .filter(|id| !resolved.contains_key(*id))
@@ -104,7 +120,7 @@ pub fn get_session_titles(
         }
     }
 
-    // 4. 缓存写入 + short_session 最终兜底
+    // 6. 缓存写入 + short_session 最终兜底
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     for id in &uncached {
         let (title, project, source) = resolved.remove(id)

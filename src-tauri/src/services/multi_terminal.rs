@@ -12,6 +12,7 @@ pub enum AgentKind {
     Claude,
     OpenCode,
     Codex,
+    GrokBuild,
 }
 
 /// 单个 pane 的描述。`session_id` 为 None 表示"开新会话"(本轮未使用)。
@@ -31,10 +32,12 @@ pub fn build_pane_command(spec: &PaneSpec) -> String {
         (AgentKind::Claude, Some(sid)) => format!("claude --resume {}", sid),
         (AgentKind::OpenCode, Some(sid)) => format!("opencode -s {}", sid),
         (AgentKind::Codex, Some(sid)) => format!("codex resume {}", sid),
+        (AgentKind::GrokBuild, Some(sid)) => format!("grok --resume {}", sid),
         // 兜底:开新会话(本轮不用,但保留能力)
         (AgentKind::Claude, None) => "claude".to_string(),
         (AgentKind::OpenCode, None) => "opencode".to_string(),
         (AgentKind::Codex, None) => "codex".to_string(),
+        (AgentKind::GrokBuild, None) => "grok".to_string(),
     }
 }
 
@@ -48,6 +51,7 @@ pub fn agent_kind_from_source(source: &str) -> Option<AgentKind> {
         "claudecode" => Some(AgentKind::Claude),
         "opencode" => Some(AgentKind::OpenCode),
         "codex" => Some(AgentKind::Codex),
+        "grokbuild" => Some(AgentKind::GrokBuild),
         _ => None,
     }
 }
@@ -503,6 +507,13 @@ mod tests {
             project_dir: None,
         };
         assert!(build_pane_command(&cx).starts_with("codex"));
+
+        let grok = PaneSpec {
+            agent: AgentKind::GrokBuild,
+            session_id: Some("abc".to_string()),
+            project_dir: None,
+        };
+        assert_eq!(build_pane_command(&grok), "grok --resume abc");
     }
 
     /// 回归测试:确保数据库存的 source 字符串(是 "claudecode" 不是 "claude")
@@ -514,6 +525,7 @@ mod tests {
         assert_eq!(agent_kind_from_source("claudecode"), Some(AgentKind::Claude));
         assert_eq!(agent_kind_from_source("opencode"), Some(AgentKind::OpenCode));
         assert_eq!(agent_kind_from_source("codex"), Some(AgentKind::Codex));
+        assert_eq!(agent_kind_from_source("grokbuild"), Some(AgentKind::GrokBuild));
         assert_eq!(agent_kind_from_source("claude"), None); // 故意拒绝短写
         assert_eq!(agent_kind_from_source(""), None);
         assert_eq!(agent_kind_from_source("unknown"), None);

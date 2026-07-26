@@ -217,6 +217,8 @@ pub fn run() {
             commands::session_manager::resume_claude_session_with_provider,
             commands::session_manager::open_codex_terminal,
             commands::session_manager::resume_codex_session,
+            commands::session_manager::open_grok_terminal,
+            commands::session_manager::resume_grok_session,
             // 定价操作
             commands::pricing::get_all_pricing,
             commands::pricing::get_pricing_families,

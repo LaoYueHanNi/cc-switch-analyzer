@@ -203,6 +203,9 @@ pub fn open_task_agent(
         "codex" => {
             crate::commands::session_manager::open_codex_terminal(project_dir)
         }
+        "grokbuild" | "grok" => {
+            crate::commands::session_manager::open_grok_terminal(project_dir)
+        }
         other => Err(format!("不支持的 agent 类型: {}", other)),
     }
 }

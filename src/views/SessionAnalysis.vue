@@ -31,6 +31,7 @@
           @contextTerminal="onContextTerminal"
           @openCodeTerminal="onOpenCodeTerminal"
           @codexTerminal="onOpenCodexTerminal"
+          @grokTerminal="onOpenGrokTerminal"
         />
       </div>
 
@@ -72,6 +73,7 @@
             <div class="wrap-actions">
               <span v-if="s.sourceType === 'codex'" class="action-terminal action-codex" @click="onResumeCodex(s.sessionId, s.projectDir)" title="恢复 Codex 会话"><span v-html="codexSvg"></span></span>
               <span v-else-if="s.sourceType === 'opencode'" class="action-terminal action-opencode" @click="onResumeOpenCode(s.sessionId, s.projectDir)" title="恢复 OpenCode 会话"><span v-html="opencodeSvg"></span></span>
+              <span v-else-if="s.sourceType === 'grokbuild'" class="action-terminal action-grok" @click="onResumeGrok(s.sessionId, s.projectDir)" title="恢复 Grok Build 会话"><span v-html="grokSvg"></span></span>
               <span v-else class="action-terminal" @click="onResume(s.sessionId, s.projectDir)" @contextmenu.prevent="onContextTerminalForSession(s.sessionId, s.projectDir, $event)" title="恢复 Claude 会话（右键选择供应商配置）"><span v-html="claudeSvg"></span></span>
               <!-- TODO: 会话删除功能暂未开放，待 UI 确认后恢复 -->
               <!-- <span v-if="s.sourcePath" class="action-delete" @click="confirmDelete(s)" title="删除会话">删除</span> -->
@@ -120,6 +122,7 @@ import ProviderContextMenu from '@/components/common/ProviderContextMenu.vue'
 import claudeSvg from '@/assets/claude.svg?raw'
 import opencodeSvg from '@/assets/opencode.svg?raw'
 import codexSvg from '@/assets/codex.svg?raw'
+import grokSvg from '@/assets/grok.svg?raw'
 import type { ProjectGroupStats, ProjectSessionDetail } from '@/platform/types'
 
 const dbStore = useDatabaseStore()
@@ -204,6 +207,10 @@ async function onResumeCodex(sessionId: string, projectDir?: string) {
   await resumeSession('codex', sessionId, projectDir)
 }
 
+async function onResumeGrok(sessionId: string, projectDir?: string) {
+  await resumeSession('grokbuild', sessionId, projectDir)
+}
+
 async function onOpenTerminal(projectDir: string) {
   try { await platformAdapter.openClaudeTerminal(projectDir) }
   catch (err: any) { console.error('[SessionAnalysis] 打开终端失败:', err.message || err) }
@@ -217,6 +224,11 @@ async function onOpenCodeTerminal(projectDir: string) {
 async function onOpenCodexTerminal(projectDir: string) {
   try { await platformAdapter.openCodexTerminal(projectDir) }
   catch (err: any) { console.error('[SessionAnalysis] 打开 Codex 终端失败:', err.message || err) }
+}
+
+async function onOpenGrokTerminal(projectDir: string) {
+  try { await platformAdapter.openGrokTerminal(projectDir) }
+  catch (err: any) { console.error('[SessionAnalysis] 打开 Grok 终端失败:', err.message || err) }
 }
 
 async function onContextTerminal(projectDir: string, event: MouseEvent) {

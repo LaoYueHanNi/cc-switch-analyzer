@@ -279,7 +279,7 @@ export interface PlatformAdapter {
   // 用户别名
   addUserAlias(modelId: string, alias: string): Promise<void>
   removeUserAlias(modelId: string, alias: string): Promise<void>
-  getSessionTitles(sessionIds: string[]): Promise<Record<string, { title: string; project: string }>>
+  getSessionTitles(sessionIds: string[]): Promise<Record<string, { title: string; project: string; source?: string }>>
   // 会话管理
   querySessionProjectGroups(params: FilterParams): Promise<ProjectGroupStats[]>
   queryProjectSessionDetails(params: FilterParams, sessionIds: string[]): Promise<ProjectSessionDetail[]>
@@ -293,6 +293,8 @@ export interface PlatformAdapter {
   resumeOpenCodeSession(sessionId: string, projectDir?: string): Promise<void>
   openCodexTerminal(projectDir: string): Promise<void>
   resumeCodexSession(sessionId: string, projectDir?: string): Promise<void>
+  openGrokTerminal(projectDir: string): Promise<void>
+  resumeGrokSession(sessionId: string, projectDir?: string): Promise<void>
   // Cursor 数据源
   cursorLogin(sessionToken: string): Promise<SourceInfo[]>
   cursorSync(): Promise<CursorSyncResult>

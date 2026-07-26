@@ -76,6 +76,12 @@
               title="恢复 OpenCode 会话"
             ><span v-html="opencodeSvg"></span></span>
             <span
+              v-else-if="s.sourceType === 'grokbuild'"
+              class="action-terminal action-grok"
+              @click="onResumeGrok(s.sessionId, s.projectDir)"
+              title="恢复 Grok Build 会话"
+            ><span v-html="grokSvg"></span></span>
+            <span
               v-else
               class="action-terminal"
               @click="onResumeClaude(s.sessionId, s.projectDir)"
@@ -128,6 +134,7 @@ import ProviderContextMenu from '@/components/common/ProviderContextMenu.vue'
 import claudeSvg from '@/assets/claude.svg?raw'
 import opencodeSvg from '@/assets/opencode.svg?raw'
 import codexSvg from '@/assets/codex.svg?raw'
+import grokSvg from '@/assets/grok.svg?raw'
 
 defineOptions({ name: 'TaskDetail' })
 
@@ -259,6 +266,10 @@ async function onResumeOpenCode(sessionId: string, projectDir?: string) {
 
 async function onResumeCodex(sessionId: string, projectDir?: string) {
   await resumeSession('codex', sessionId, projectDir)
+}
+
+async function onResumeGrok(sessionId: string, projectDir?: string) {
+  await resumeSession('grokbuild', sessionId, projectDir)
 }
 
 async function onContextResumeClaude(sessionId: string, projectDir: string | undefined, event: MouseEvent) {

@@ -182,7 +182,7 @@ export const platformAdapter: PlatformAdapter = {
     return invoke<void>('remove_user_alias', { modelId, alias })
   },
   async getSessionTitles(sessionIds: string[]) {
-    return invoke<Record<string, { title: string; project: string }>>('get_session_titles', { sessionIds })
+    return invoke<Record<string, { title: string; project: string; source: string }>>('get_session_titles', { sessionIds })
   },
   // 会话管理
   async querySessionProjectGroups(params: FilterParams): Promise<ProjectGroupStats[]> {
@@ -220,6 +220,12 @@ export const platformAdapter: PlatformAdapter = {
   },
   async resumeCodexSession(sessionId: string, projectDir?: string): Promise<void> {
     return invoke<void>('resume_codex_session', { sessionId, projectDir: projectDir || null })
+  },
+  async openGrokTerminal(projectDir: string): Promise<void> {
+    return invoke<void>('open_grok_terminal', { projectDir })
+  },
+  async resumeGrokSession(sessionId: string, projectDir?: string): Promise<void> {
+    return invoke<void>('resume_grok_session', { sessionId, projectDir: projectDir || null })
   },
   // Cursor 数据源
   async cursorLogin(sessionToken: string): Promise<SourceInfo[]> {

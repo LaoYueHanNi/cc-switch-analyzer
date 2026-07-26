@@ -54,6 +54,9 @@
           <button class="agent-btn" @click.stop="$emit('launchAgent', 'codex')" title="新建 Codex 会话">
             <span v-html="codexSvg"></span>
           </button>
+          <button class="agent-btn" @click.stop="$emit('launchAgent', 'grokbuild')" title="新建 Grok Build 会话">
+            <span v-html="grokSvg"></span>
+          </button>
         </div>
       </div>
       <div class="card-actions">
@@ -71,6 +74,7 @@ import { TASK_STATUS_OPTIONS, type TaskStatus } from '@/types/task'
 import claudeSvg from '@/assets/claude.svg?raw'
 import opencodeSvg from '@/assets/opencode.svg?raw'
 import codexSvg from '@/assets/codex.svg?raw'
+import grokSvg from '@/assets/grok.svg?raw'
 
 const props = defineProps<{
   id: number
@@ -88,8 +92,8 @@ defineEmits<{
   click: []
   edit: []
   delete: []
-  launchAgent: [agent: 'claude' | 'opencode' | 'codex']
-  contextLaunchAgent: [agent: 'claude' | 'opencode' | 'codex', event: MouseEvent]
+  launchAgent: [agent: 'claude' | 'opencode' | 'codex' | 'grokbuild']
+  contextLaunchAgent: [agent: 'claude' | 'opencode' | 'codex' | 'grokbuild', event: MouseEvent]
   openAllSessions: []
 }>()
 

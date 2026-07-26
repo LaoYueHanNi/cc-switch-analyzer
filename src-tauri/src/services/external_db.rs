@@ -6,6 +6,20 @@ use std::sync::Mutex;
 use crate::models::*;
 use crate::utils::*;
 
+/// 与 CC-Switch `CACHE_INCLUSIVE_APP_TYPES` 对齐：这些 app 的 `input_tokens` 已含 cache_read。
+fn is_cache_inclusive_app(app_type: &str) -> bool {
+    matches!(app_type, "codex" | "gemini" | "grokbuild")
+}
+
+/// 将 cache-inclusive 口径的 input 归一化为 fresh input（不含 cache_read）。
+fn normalize_input_tokens(app_type: &str, raw_input: i64, cache_read: i64) -> i64 {
+    if is_cache_inclusive_app(app_type) {
+        raw_input.saturating_sub(cache_read)
+    } else {
+        raw_input
+    }
+}
+
 // 外部 CC-Switch 数据库服务（只读）
 pub struct ExternalDbService {
     db: Option<Mutex<Connection>>,
@@ -523,7 +537,7 @@ impl ExternalDbService {
         let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
         let sql = format!(
             "SELECT session_id,
-                    MAX(CASE WHEN app_type = 'codex' THEN input_tokens
+                    MAX(CASE WHEN app_type IN ('codex', 'gemini', 'grokbuild') THEN input_tokens
                              ELSE input_tokens + cache_read_tokens END) AS max_ctx
              FROM proxy_request_logs
              WHERE session_id IN ({})
@@ -677,7 +691,7 @@ impl ExternalDbService {
                 let app_type: String = row.get::<_, Option<String>>(8)?.unwrap_or_default();
                 let raw_input: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
                 let cache_read: i64 = row.get::<_, Option<i64>>(6)?.unwrap_or(0);
-                let input_tokens = if app_type == "codex" { raw_input.saturating_sub(cache_read) } else { raw_input };
+                let input_tokens = normalize_input_tokens(&app_type, raw_input, cache_read);
                 Ok(SessionRequestToken {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
@@ -728,7 +742,7 @@ impl ExternalDbService {
                 let app_type: String = row.get::<_, Option<String>>(6)?.unwrap_or_default();
                 let raw_input: i64 = row.get::<_, Option<i64>>(2)?.unwrap_or(0);
                 let cache_read: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
-                let input_tokens = if app_type == "codex" { raw_input.saturating_sub(cache_read) } else { raw_input };
+                let input_tokens = normalize_input_tokens(&app_type, raw_input, cache_read);
                 Ok(SessionModelToken {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
@@ -891,7 +905,7 @@ impl ExternalDbService {
             let is_codex = app_type == "codex";
             let raw_input: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
             let cache_read: i64 = row.get::<_, Option<i64>>(6)?.unwrap_or(0);
-            let input_tokens = if is_codex { raw_input.saturating_sub(cache_read) } else { raw_input };
+            let input_tokens = normalize_input_tokens(&app_type, raw_input, cache_read);
             Ok((
                 row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 row.get::<_, Option<String>>(1)?.unwrap_or_default(),
@@ -943,7 +957,7 @@ impl ExternalDbService {
             let is_codex = app_type == "codex";
             let raw_input: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
             let cache_read: i64 = row.get::<_, Option<i64>>(6)?.unwrap_or(0);
-            let input_tokens = if is_codex { raw_input.saturating_sub(cache_read) } else { raw_input };
+            let input_tokens = normalize_input_tokens(&app_type, raw_input, cache_read);
             Ok((
                 row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 row.get::<_, Option<String>>(1)?.unwrap_or_default(),
@@ -986,8 +1000,8 @@ impl ExternalDbService {
             let is_codex = app_type == "codex";
             let raw_input: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
             let cache_read: i64 = row.get::<_, Option<i64>>(6)?.unwrap_or(0);
-            // Codex (OpenAI API) 的 input_tokens 已含 cache_read，需转换为独立口径
-            let input_tokens = if is_codex { raw_input.saturating_sub(cache_read) } else { raw_input };
+            // Codex / Gemini / GrokBuild：input 已含 cache_read，归一为 fresh input
+            let input_tokens = normalize_input_tokens(&app_type, raw_input, cache_read);
             Ok(RawRecord {
                 session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
@@ -1034,4 +1048,19 @@ impl super::data_source::DataSource for ExternalDbService {
     fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)>, String> { self.get_recent_request_logs_raw(since) }
     fn stream_records(&self, since: Option<i64>, on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64, bool))) -> Result<(), String> { self.stream_records(since, on_record) }
     fn get_filtered_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> { self.get_filtered_raw_records(params) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_inclusive_apps_normalize_fresh_input() {
+        assert_eq!(normalize_input_tokens("grokbuild", 700, 250), 450);
+        assert_eq!(normalize_input_tokens("codex", 1000, 600), 400);
+        assert_eq!(normalize_input_tokens("gemini", 800, 300), 500);
+        assert_eq!(normalize_input_tokens("claude", 200, 5000), 200);
+        assert!(is_cache_inclusive_app("grokbuild"));
+        assert!(!is_cache_inclusive_app("claude"));
+    }
 }

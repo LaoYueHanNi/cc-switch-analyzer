@@ -12,6 +12,9 @@
         <button class="terminal-btn" @click.stop="$emit('codexTerminal', projectDir)" title="Codex">
           <span v-html="codexSvg"></span>
         </button>
+        <button class="terminal-btn" @click.stop="$emit('grokTerminal', projectDir)" title="Grok Build">
+          <span v-html="grokSvg"></span>
+        </button>
       </div>
     </div>
 
@@ -43,6 +46,7 @@ import { formatNum, formatCost } from '@/utils/format'
 import claudeSvg from '@/assets/claude.svg?raw'
 import opencodeSvg from '@/assets/opencode.svg?raw'
 import codexSvg from '@/assets/codex.svg?raw'
+import grokSvg from '@/assets/grok.svg?raw'
 
 const props = defineProps<{
   displayName: string
@@ -54,7 +58,7 @@ const props = defineProps<{
   terminalActive?: boolean
 }>()
 
-defineEmits<{ click: []; terminal: [dir: string]; contextTerminal: [dir: string, event: MouseEvent]; openCodeTerminal: [dir: string]; codexTerminal: [dir: string] }>()
+defineEmits<{ click: []; terminal: [dir: string]; contextTerminal: [dir: string, event: MouseEvent]; openCodeTerminal: [dir: string]; codexTerminal: [dir: string]; grokTerminal: [dir: string] }>()
 
 const copied = ref(false)
 

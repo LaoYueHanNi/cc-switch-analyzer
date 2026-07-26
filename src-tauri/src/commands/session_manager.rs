@@ -406,3 +406,65 @@ pub fn resume_codex_session(session_id: String, project_dir: Option<String>) -> 
 
     Ok(())
 }
+
+/// 打开 Grok Build 终端
+#[tauri::command]
+pub fn open_grok_terminal(project_dir: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("wt")
+            .args(["-w", "0", "-d", &project_dir, "powershell", "-NoExit", "-Command", "grok"])
+            .spawn()
+            .map_err(|e| format!("启动终端失败: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        macos_open_terminal("grok", &project_dir)?;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = project_dir;
+        return Err("当前仅支持 Windows / macOS".to_string());
+    }
+
+    Ok(())
+}
+
+/// 恢复 Grok Build 会话
+#[tauri::command]
+pub fn resume_grok_session(session_id: String, project_dir: Option<String>) -> Result<(), String> {
+    validate_session_id(&session_id)?;
+
+    #[cfg(target_os = "windows")]
+    {
+        let grok_cmd = format!("grok --resume {}", session_id);
+        let mut cmd = std::process::Command::new("wt");
+        cmd.arg("-w").arg("0");
+        if let Some(dir) = &project_dir {
+            if !dir.is_empty() {
+                cmd.arg("-d").arg(dir);
+            }
+        }
+        cmd.args(["powershell", "-NoExit", "-Command", &grok_cmd])
+            .spawn()
+            .map_err(|e| format!("启动终端失败: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let grok_cmd = format!("grok --resume {}", session_id);
+        let dir = project_dir.as_deref().unwrap_or("");
+        macos_open_terminal(&grok_cmd, dir)?;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = session_id;
+        let _ = project_dir;
+        return Err("当前仅支持 Windows / macOS".to_string());
+    }
+
+    Ok(())
+}

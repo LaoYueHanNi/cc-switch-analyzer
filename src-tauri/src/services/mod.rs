@@ -11,6 +11,7 @@ pub mod cursor_sync;
 pub mod data_source;
 pub mod dedup;
 pub mod external_db;
+pub mod grok_sessions;
 #[cfg(target_os = "windows")]
 pub mod http_server;
 pub mod multi_terminal;

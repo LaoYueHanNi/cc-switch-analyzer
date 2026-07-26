@@ -62,6 +62,7 @@
           <div class="session-icon">
             <span v-if="s.sourceType === 'codex'" v-html="codexSvg" class="agent-svg" />
             <span v-else-if="s.sourceType === 'opencode'" v-html="opencodeSvg" class="agent-svg" />
+            <span v-else-if="s.sourceType === 'grokbuild'" v-html="grokSvg" class="agent-svg" />
             <span v-else v-html="claudeSvg" class="agent-svg" />
           </div>
           <div class="session-info">
@@ -110,6 +111,7 @@ import type { TaskSessionInput } from '@/types/task'
 import claudeSvg from '@/assets/claude.svg?raw'
 import opencodeSvg from '@/assets/opencode.svg?raw'
 import codexSvg from '@/assets/codex.svg?raw'
+import grokSvg from '@/assets/grok.svg?raw'
 
 const props = defineProps<{
   show: boolean

@@ -169,15 +169,24 @@ pub fn resolve_session_projects(
     let mut project_map: HashMap<String, String> = HashMap::new();
     let mut title_map: HashMap<String, String> = HashMap::new();
 
-    // 1. 查 sessions 表
+    // 1. 查 sessions 表（not_found 视为未命中，允许新 TitleProvider 如 grokbuild 补齐）
     let cached = app_db.get_sessions(session_ids)?;
-    for (sid, (project_dir, title, _source)) in &cached {
+    for (sid, (project_dir, title, source)) in &cached {
+        if source == "not_found" {
+            continue;
+        }
         if !title.is_empty() { title_map.insert(sid.clone(), title.clone()); }
         if !project_dir.is_empty() { project_map.insert(sid.clone(), project_dir.clone()); }
     }
 
     let uncached: Vec<String> = session_ids.iter()
-        .filter(|id| !cached.contains_key(*id))
+        .filter(|id| {
+            match cached.get(*id) {
+                None => true,
+                Some((_, _, source)) if source == "not_found" => true,
+                Some(_) => false,
+            }
+        })
         .cloned()
         .collect();
     if uncached.is_empty() {
@@ -202,7 +211,18 @@ pub fn resolve_session_projects(
         }
     }
 
-    // 3. Codex JSONL 兜底（先按 session_id 匹配，再按时间戳匹配）
+    // 3. Grok Build summary.json（精确目录匹配，须在 Codex 时间戳匹配之前）
+    let remaining_for_grok: Vec<String> = uncached.iter()
+        .filter(|id| !resolved.contains_key(*id))
+        .cloned()
+        .collect();
+    if !remaining_for_grok.is_empty() {
+        for (id, (title, project)) in crate::services::grok_sessions::resolve_grok_titles(&remaining_for_grok) {
+            resolved.insert(id, (title, project, "grokbuild".to_string()));
+        }
+    }
+
+    // 4. Codex JSONL 兜底（先按 session_id 匹配，再按时间戳匹配）
     let remaining_for_codex: Vec<String> = uncached.iter()
         .filter(|id| !resolved.contains_key(*id))
         .cloned()
@@ -227,7 +247,7 @@ pub fn resolve_session_projects(
         }
     }
 
-    // 4. Claude JSONL 兜底
+    // 5. Claude JSONL 兜底
     let remaining_for_jsonl: Vec<String> = uncached.iter()
         .filter(|id| !resolved.contains_key(*id))
         .cloned()
@@ -240,7 +260,7 @@ pub fn resolve_session_projects(
         }
     }
 
-    // 5. 合并结果 + 写入 sessions 表（包括未找到的，标记 not_found 避免重复扫描）
+    // 6. 合并结果 + 写入 sessions 表（包括未找到的，标记 not_found 避免重复扫描）
     for id in &uncached {
         if let Some((title, project, source)) = resolved.remove(id) {
             if !title.is_empty() { title_map.insert(id.clone(), title.clone()); }
