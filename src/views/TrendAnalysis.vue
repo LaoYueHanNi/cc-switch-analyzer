@@ -34,24 +34,24 @@
         >
           <div
             v-for="r in modelTipRows"
-            :key="r.model"
+            :key="r.key"
             class="model-tip-row"
-            :class="{ off: !modelVisible[r.model] }"
-            :title="modelVisible[r.model] ? '点击隐藏该模型' : '点击显示该模型'"
-            @click="modelVisible[r.model] = !modelVisible[r.model]"
-            @mouseenter="hoveredModel = r.model"
+            :class="{ off: !modelVisible[r.key] }"
+            :title="modelVisible[r.key] ? (groupByFamily ? '点击隐藏该家族' : '点击隐藏该模型') : (groupByFamily ? '点击显示该家族' : '点击显示该模型')"
+            @click="modelVisible[r.key] = !modelVisible[r.key]"
+            @mouseenter="hoveredModel = r.key"
             @mouseleave="hoveredModel = null"
           >
             <span class="model-tip-rank">{{ r.rank }}</span>
             <span class="model-tip-dot" :style="{ background: r.color }" />
-            <span class="model-tip-model" :title="r.model">{{ r.model }}</span>
+            <span class="model-tip-model" :title="r.label">{{ r.label }}</span>
             <span class="model-tip-tokens">{{ formatNum(r.totalTokens) }}</span>
             <span class="model-tip-hit">缓存 {{ formatPercent(r.cacheHitRate) }}</span>
           </div>
           <button
             v-if="rankedModels.length > 5"
             class="model-tip-expand"
-            :title="topModelLimit === 5 ? '展开前十模型' : '收起为前五'"
+            :title="topModelLimit === 5 ? (groupByFamily ? '展开前十家族' : '展开前十模型') : '收起为前五'"
             @click.stop="topModelLimit = topModelLimit === 5 ? 10 : 5"
           >{{ topModelLimit === 5 ? '+' : '−' }}</button>
         </div>
@@ -80,11 +80,19 @@
             @click="visibleSeries.detail = !visibleSeries.detail"
           >Token明细</button>
         </div>
-        <button
-          class="toggle-btn mode-toggle"
-          :class="{ active: mode === 'byModel' }"
-          @click="toggleMode"
-        >{{ mode === 'overview' ? '模型' : '总览' }}</button>
+        <div class="toggle-bar-right">
+          <button
+            v-if="mode === 'byModel'"
+            class="toggle-btn"
+            :class="{ active: groupByFamily }"
+            @click="groupByFamily = !groupByFamily"
+          >家族</button>
+          <button
+            class="toggle-btn mode-toggle"
+            :class="{ active: mode === 'byModel' }"
+            @click="toggleMode"
+          >{{ mode === 'overview' ? '模型' : '总览' }}</button>
+        </div>
       </div>
     </template>
   </div>
@@ -102,6 +110,12 @@ import type { DailyTrendRow } from '@/types/database'
 import type { PricingData } from '@/types/pricing'
 import type { PrecomputedResult } from '@/types/common'
 import { formatNum, formatPercent } from '@/utils/format'
+import {
+  buildModelFamilyMap,
+  familyLabel,
+  getEffectiveFamilies,
+  lookupModelFamily
+} from '@/utils/family'
 import type { ModelSeries } from '@/components/charts/TrendChart.vue'
 
 defineOptions({ name: 'TrendAnalysis' })
@@ -119,6 +133,8 @@ const viewMode = ref<ViewMode>('daily')
 // ===== 图表模式:总览 vs 按模型对比 =====
 type ChartMode = 'overview' | 'byModel'
 const mode = ref<ChartMode>('overview')
+/** 按模型模式下的二次分组：按定价 family 聚合 */
+const groupByFamily = ref(false)
 
 // 进入"按模型对比"时,自动清空顶栏的模型/供应商筛选(对比本身就要求全量)
 // 只清 modelId/providerId 两个字段,日期保留(避免影响用户的日期范围选择)
@@ -129,10 +145,29 @@ watch(mode, (m) => {
   }
   // 按模型对比下按天/按小时/按星期已隐藏,强制锁定为按天
   if (m === 'byModel') viewMode.value = 'daily'
+  // 切回总览时关闭家族分组
+  if (m === 'overview') groupByFamily.value = false
 })
 
 function toggleMode() {
   mode.value = mode.value === 'overview' ? 'byModel' : 'overview'
+}
+
+const effectiveFamilies = computed(() => getEffectiveFamilies(pricingStore.families))
+const modelFamilyMap = computed(() =>
+  buildModelFamilyMap(pricingStore.pricingData, effectiveFamilies.value)
+)
+
+function entityKeyForModel(model: string): string {
+  return groupByFamily.value
+    ? lookupModelFamily(model, modelFamilyMap.value)
+    : model
+}
+
+function entityDisplayName(key: string): string {
+  return groupByFamily.value
+    ? familyLabel(key, effectiveFamilies.value)
+    : key
 }
 
 // ===== 单日检测（用本地时间比较，避免 toISOString 的 UTC 偏移） =====
@@ -367,7 +402,7 @@ const allSeriesData = computed<SeriesData | null>(() => {
   }
 })
 
-// ===== 按模型对比:topN 模型 + 各自按 X 轴粒度的 token 序列 =====
+// ===== 按模型/家族对比:topN 实体 + 各自按 X 轴粒度的 token 序列 =====
 
 const MODEL_SERIES_COLORS = [
   '--color-cost', '--color-green', '--color-blue', '--color-purple', '--color-orange',
@@ -385,7 +420,7 @@ function rowTokens(r: DailyTrendRow): number {
   return r.inputTokens + r.outputTokens + r.cacheRead + r.cacheCreation
 }
 
-// 按 token 总量降序完整排名(供 tip 判断是否还能展开)
+// 按 token 总量降序完整排名（模型 id 或 family id；随 precomputed / groupByFamily 重算）
 const rankedModels = computed<string[]>(() => {
   const totals = new Map<string, number>()
   const pre = queryStore.precomputed
@@ -393,7 +428,9 @@ const rankedModels = computed<string[]>(() => {
     for (const [model, rows] of Object.entries(pre.dailyByModel)) {
       let s = 0
       for (const r of rows) s += rowTokens(r)
-      if (s > 0) totals.set(model, s)
+      if (s <= 0) continue
+      const key = entityKeyForModel(model)
+      totals.set(key, (totals.get(key) || 0) + s)
     }
   }
   return [...totals.entries()]
@@ -405,21 +442,31 @@ const topModels = computed<string[]>(() =>
   rankedModels.value.slice(0, topModelLimit.value),
 )
 
-// 模型显隐状态(由 tip 行点击切换;true=显示)
+// 显隐状态 key = series.name（模型 id 或家族 label），与图表 dimming 对齐
 const modelVisible = reactive<Record<string, boolean>>({})
 
-// 鼠标 hover 的模型(tip 行 mouseenter/leave 切换;null=无 hover)
 const hoveredModel = ref<string | null>(null)
 
-// 压暗列表:hover 某 model 时,把其他所有"显示中"的 model 加进去
 const dimmedModels = computed<string[]>(() => {
   if (!hoveredModel.value) return []
-  return topModels.value.filter(m => m !== hoveredModel.value && modelVisible[m] !== false)
+  return topModels.value
+    .map(k => entityDisplayName(k))
+    .filter(name => name !== hoveredModel.value && modelVisible[name] !== false)
 })
-watch(topModels, (models) => {
-  // 只新增不删除:保留用户的历史显隐选择,避免 model 暂时离开 topN 后选择被清零
-  for (const m of models) if (modelVisible[m] === undefined) modelVisible[m] = true
+watch(topModels, (keys) => {
+  for (const k of keys) {
+    const name = entityDisplayName(k)
+    if (modelVisible[name] === undefined) modelVisible[name] = true
+  }
 }, { immediate: true })
+
+watch(groupByFamily, () => {
+  // 切换分组维度时重置显隐，避免模型 id 与家族 label 混用
+  for (const k of Object.keys(modelVisible)) delete modelVisible[k]
+  for (const k of topModels.value) modelVisible[entityDisplayName(k)] = true
+  hoveredModel.value = null
+  topModelLimit.value = 5
+})
 
 // 切回总览时重置为前五;切到 byModel 时全显并清空 hover
 watch(mode, (m) => {
@@ -431,108 +478,121 @@ watch(mode, (m) => {
   }
 })
 
-// 按 X 轴粒度聚合:每个 model 一条 series(对齐到 display.dates)
+function accumulateEntityTokens(
+  dayMap: Record<string, DailyTrendRow[]>,
+  entityKeys: string[],
+  onRow: (entityKey: string, row: DailyTrendRow) => void
+): void {
+  const allow = new Set(entityKeys)
+  for (const [model, rows] of Object.entries(dayMap)) {
+    const ek = entityKeyForModel(model)
+    if (!allow.has(ek)) continue
+    for (const r of rows) onRow(ek, r)
+  }
+}
+
+// 按 X 轴粒度聚合:每个实体一条 series(对齐到 display.dates)
 const byModelSeries = computed<ModelSeries[]>(() => {
-  const models = topModels.value
-  if (models.length === 0) return []
-  // 用 day -> { model -> token } map
-  const map = new Map<string, Map<string, number>>()
+  const entities = topModels.value
+  if (entities.length === 0) return []
   const pre = queryStore.precomputed
   const dates = display.dates
+  const dayMap = pre?.dailyByModel || {}
 
   if (viewMode.value === 'weekday' && pre) {
-    // weekday 粒度:dailyByModel 按 weekday(0..6,Mon..Sun)聚合
     const f = filterStore.fromDate
     const toD = filterStore.toDate
     if (!f || !toD) return []
     const W = 7
-    const acc = new Map<string, number[]>() // model -> 7 桶
-    for (const m of models) acc.set(m, new Array(W).fill(0))
+    const acc = new Map<string, number[]>()
+    for (const m of entities) acc.set(m, new Array(W).fill(0))
     const d = new Date(f.getFullYear(), f.getMonth(), f.getDate())
     const end = new Date(toD.getFullYear(), toD.getMonth(), toD.getDate())
     while (d <= end) {
-      const key = localDateStr(d)
+      const dayKey = localDateStr(d)
       const w = (d.getDay() + 6) % 7
-      const dayMap = pre.dailyByModel || {}
-      for (const m of models) {
-        const rows = dayMap[m] || []
-        for (const r of rows) {
-          if (r.day === key) acc.get(m)![w] += rowTokens(r)
-        }
-      }
+      accumulateEntityTokens(dayMap, entities, (ek, r) => {
+        if (r.day === dayKey) acc.get(ek)![w] += rowTokens(r)
+      })
       d.setDate(d.getDate() + 1)
     }
-    return models.map((m, i) => ({
-      name: m,
-      colorVar: MODEL_SERIES_COLORS[i] || MODEL_SERIES_COLORS[0],
-      data: acc.get(m) || new Array(W).fill(0),
-      visible: modelVisible[m] !== false
-    }))
+    return entities.map((m, i) => {
+      const name = entityDisplayName(m)
+      return {
+        name,
+        colorVar: MODEL_SERIES_COLORS[i] || MODEL_SERIES_COLORS[0],
+        data: acc.get(m) || new Array(W).fill(0),
+        visible: modelVisible[name] !== false
+      }
+    })
   }
 
   if ((viewMode.value === 'hourly' || (mode.value === 'byModel' && isSingleDay.value)) && hourlyRows.value.length > 0) {
-    // hourly 粒度:24 小时桶(byModel 模式下单日筛选也走这条,避免多条线在 1 个点重合)
-    // 守卫 hourlyRows 已就绪(对齐 allSeriesData line 309 的守卫),否则 fallback 到 daily 分支
+    const allow = new Set(entities)
     const acc = new Map<string, number[]>()
-    for (const m of models) acc.set(m, new Array(24).fill(0))
+    for (const m of entities) acc.set(m, new Array(24).fill(0))
     for (const r of hourlyRows.value) {
-      if (!models.includes(r.model)) continue
+      const ek = entityKeyForModel(r.model)
+      if (!allow.has(ek)) continue
       const hh = Number(r.day.split(':')[0])
       if (Number.isFinite(hh) && hh >= 0 && hh < 24) {
-        acc.get(r.model)![hh] += rowTokens(r)
+        acc.get(ek)![hh] += rowTokens(r)
       }
     }
-    return models.map((m, i) => ({
-      name: m,
-      colorVar: MODEL_SERIES_COLORS[i] || MODEL_SERIES_COLORS[0],
-      data: acc.get(m) || new Array(24).fill(0),
-      visible: modelVisible[m] !== false
-    }))
+    return entities.map((m, i) => {
+      const name = entityDisplayName(m)
+      return {
+        name,
+        colorVar: MODEL_SERIES_COLORS[i] || MODEL_SERIES_COLORS[0],
+        data: acc.get(m) || new Array(24).fill(0),
+        visible: modelVisible[name] !== false
+      }
+    })
   }
 
-  // daily 粒度:对齐到 display.dates(已经是日期范围序列)
-  // 守卫下移到这里:hourly/weekday 分支用固定 24/7 桶,不读 dates
   if (dates.length === 0) return []
-  for (const m of models) map.set(m, new Map())
-  const dayMap = pre?.dailyByModel || {}
-  for (const m of models) {
-    const rows = dayMap[m] || []
-    const inner = map.get(m)!
-    for (const r of rows) inner.set(r.day, (inner.get(r.day) || 0) + rowTokens(r))
-  }
-  return models.map((m, i) => ({
-    name: m,
-    colorVar: MODEL_SERIES_COLORS[i] || MODEL_SERIES_COLORS[0],
-    data: dates.map(d => map.get(m)?.get(d) || 0),
-    visible: modelVisible[m] !== false
-  }))
+  const map = new Map<string, Map<string, number>>()
+  for (const m of entities) map.set(m, new Map())
+  accumulateEntityTokens(dayMap, entities, (ek, r) => {
+    const inner = map.get(ek)!
+    inner.set(r.day, (inner.get(r.day) || 0) + rowTokens(r))
+  })
+  return entities.map((m, i) => {
+    const name = entityDisplayName(m)
+    return {
+      name,
+      colorVar: MODEL_SERIES_COLORS[i] || MODEL_SERIES_COLORS[0],
+      data: dates.map(d => map.get(m)?.get(d) || 0),
+      visible: modelVisible[name] !== false
+    }
+  })
 })
 
-// ===== 按模型对比:右上角汇总 tip =====
+// ===== 按模型/家族对比:右上角汇总 tip =====
 const modelTipRows = computed(() => {
   const pre = queryStore.precomputed
   if (!pre?.dailyByModel) return []
-  const rows = topModels.value.map((m, i) => {
-    const dayRows = pre.dailyByModel[m] || []
+  const dayMap = pre.dailyByModel
+  return topModels.value.map((ek, i) => {
     let input = 0, output = 0, cacheR = 0, cacheW = 0
-    for (const r of dayRows) {
+    accumulateEntityTokens(dayMap, [ek], (_key, r) => {
       input += r.inputTokens
       output += r.outputTokens
       cacheR += r.cacheRead
       cacheW += r.cacheCreation
-    }
+    })
     const total = input + output + cacheR + cacheW
-    // 缓存命中率 = cacheRead / (input + cacheRead + cacheWrite)
     const hit = (input + cacheR + cacheW) > 0 ? cacheR / (input + cacheR + cacheW) : 0
+    const name = entityDisplayName(ek)
     return {
       rank: i + 1,
-      model: m,
+      key: name,
+      label: name,
       color: MODEL_TIP_COLORS[i] || MODEL_TIP_COLORS[0],
       totalTokens: total,
       cacheHitRate: hit
     }
   })
-  return rows
 })
 
 // ===== 持久化有效数据，刷新期间保持图表显示 =====
@@ -678,8 +738,13 @@ watch(allSeriesData, (v) => {
   transform: translateX(-50%);
 }
 
-.mode-toggle {
+.toggle-bar-right {
   margin-left: auto;
+  align-items: center;
+}
+
+.mode-toggle {
+  margin-left: 0;
 }
 
 .toggle-btn {

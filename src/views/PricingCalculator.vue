@@ -159,6 +159,11 @@ import PricingEditDialog from '@/components/pricing/PricingEditDialog.vue'
 import TimePricingDialog from '@/components/pricing/TimePricingDialog.vue'
 import AliasDialog from '@/components/pricing/AliasDialog.vue'
 import { getActiveRate, dailySlotsWindowsOverlap } from '@/utils/pricing'
+import {
+  DEPRECATED_FAMILY_IDS,
+  getEffectiveFamilies,
+  resolveFamilyId as resolveFamilyIdFromRaw
+} from '@/utils/family'
 import type { PricingData, PricingFamily, TimePricingRule, CloudPricingTimeRule, ContextTier, DailySlot } from '@/types/pricing'
 import { epochToDateStr } from '@/utils/format'
 
@@ -173,15 +178,6 @@ const simCacheRead = ref(70)
 const simOutput = ref(1)
 const simCacheCreation = ref(0)
 const expandedUnusedFamilies = ref<Set<string>>(new Set())
-
-const OTHER_FAMILY: PricingFamily = { id: 'other', label: '其他' }
-/** 已合并/废弃的 family id，不再出现在筛选与分组列表 */
-const DEPRECATED_FAMILY_IDS = new Set(['cursor', 'grok', 'composer'])
-const LEGACY_FAMILY_MAP: Record<string, string> = {
-  grok: 'spacex-ai',
-  composer: 'spacex-ai',
-  cursor: 'gpt'
-}
 
 // 编辑定价弹窗
 const showEditDialog = ref(false)
@@ -275,13 +271,9 @@ const simTokens = computed(() => ({
   cacheCreation: debouncedCacheCreation.value * 1000
 }))
 
-// 家族列表（含兜底「其他」，过滤已废弃 id）
-const effectiveFamilies = computed<PricingFamily[]>(() => {
-  const raw = pricingStore.families.length > 0 ? pricingStore.families : [OTHER_FAMILY]
-  const list = raw.filter(f => !DEPRECATED_FAMILY_IDS.has(f.id))
-  if (list.some(f => f.id === 'other')) return list
-  return [...list, OTHER_FAMILY]
-})
+const effectiveFamilies = computed<PricingFamily[]>(() =>
+  getEffectiveFamilies(pricingStore.families)
+)
 
 watch(effectiveFamilies, () => {
   if (searchFamily.value && DEPRECATED_FAMILY_IDS.has(searchFamily.value)) {
@@ -297,10 +289,7 @@ const familyOptions = computed(() =>
 )
 
 function resolveFamilyId(p: PricingData): string {
-  const fam = p.family?.trim()
-  if (!fam) return 'other'
-  const mapped = LEGACY_FAMILY_MAP[fam] ?? fam
-  return effectiveFamilies.value.some(f => f.id === mapped) ? mapped : 'other'
+  return resolveFamilyIdFromRaw(p.family, effectiveFamilies.value)
 }
 
 function matchesModelFilter(p: PricingData): boolean {
