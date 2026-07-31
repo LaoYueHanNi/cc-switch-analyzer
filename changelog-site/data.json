@@ -4,6 +4,17 @@
     "date": "2026-07-31",
     "commits": [
       {
+        "hash": "18fb953",
+        "subject": "feat(trend): 按模型对比支持按家族分组",
+        "date": "2026-07-31"
+      }
+    ]
+  },
+  {
+    "version": "0.7.39",
+    "date": "2026-07-31",
+    "commits": [
+      {
         "hash": "8721ba7",
         "subject": "feat(pricing): 支持日内峰谷定价与常驻价对照展示",
         "date": "2026-07-31"
