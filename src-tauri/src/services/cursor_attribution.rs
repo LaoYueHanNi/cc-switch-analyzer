@@ -366,6 +366,10 @@ pub fn explain_filter_reason(
         return None;
     }
     if any_in_slack {
+        // Cursor Auto：CSV 记 auto、Hook 记 default，家族对不上时仍视为本机
+        if fam == "auto" || fam == "default" {
+            return None;
+        }
         return Some(FilterReason::Model);
     }
     if family_outside_slack {
@@ -481,6 +485,25 @@ mod tests {
         assert_eq!(
             explain_filter_reason(1_000_000, "gpt-5.6-terra-medium", &events, 60),
             Some(FilterReason::Model)
+        );
+    }
+
+    #[test]
+    fn test_explain_filter_reason_auto_passes() {
+        // CSV=auto / Hook=default：时间窗内有本机事件，不因家族名不同而滤掉
+        let events = vec![LocalHookEvent {
+            ts_epoch: 1_000_000,
+            model: "default".into(),
+            family: "default".into(),
+            hook_event_name: "sessionStart".into(),
+        }];
+        assert_eq!(
+            explain_filter_reason(1_000_000, "auto", &events, 60),
+            None
+        );
+        assert_eq!(
+            explain_filter_reason(1_000_000, "default", &events, 60),
+            None
         );
     }
 
