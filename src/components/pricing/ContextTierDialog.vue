@@ -21,6 +21,7 @@
         <span class="form-label">缓存写入单价 /M</span>
         <CompactNumber v-model:model-value="cacheCreation" :min="0" :step="0.01" width="130px" />
       </div>
+      <DailySlotsEditor v-model="dailySlots" />
     </div>
     <template #footer>
       <button class="cd-btn" @click="emit('update:show', false)">取消</button>
@@ -33,6 +34,8 @@
 import { ref, watch } from 'vue'
 import CompactDialog from '@/components/common/CompactDialog.vue'
 import CompactNumber from '@/components/common/CompactNumber.vue'
+import DailySlotsEditor from './DailySlotsEditor.vue'
+import type { DailySlot } from '@/types/pricing'
 
 const props = defineProps<{
   show: boolean
@@ -43,6 +46,7 @@ const props = defineProps<{
     output: number
     cacheRead: number
     cacheCreation: number
+    dailySlots?: DailySlot[]
   }
 }>()
 
@@ -54,6 +58,7 @@ const emit = defineEmits<{
     output: number
     cacheRead: number
     cacheCreation: number
+    dailySlots: DailySlot[]
   }]
 }>()
 
@@ -62,6 +67,7 @@ const input = ref(0)
 const output = ref(0)
 const cacheRead = ref(0)
 const cacheCreation = ref(0)
+const dailySlots = ref<DailySlot[]>([])
 
 watch(() => props.show, (val) => {
   if (val && props.initialData) {
@@ -70,12 +76,14 @@ watch(() => props.show, (val) => {
     output.value = props.initialData.output
     cacheRead.value = props.initialData.cacheRead
     cacheCreation.value = props.initialData.cacheCreation
+    dailySlots.value = props.initialData.dailySlots ? [...props.initialData.dailySlots] : []
   } else if (val) {
     threshold.value = 128
     input.value = 0
     output.value = 0
     cacheRead.value = 0
     cacheCreation.value = 0
+    dailySlots.value = []
   }
 })
 
@@ -85,7 +93,8 @@ function onConfirm(): void {
     input: input.value,
     output: output.value,
     cacheRead: cacheRead.value,
-    cacheCreation: cacheCreation.value
+    cacheCreation: cacheCreation.value,
+    dailySlots: [...dailySlots.value]
   })
   emit('update:show', false)
 }

@@ -127,6 +127,7 @@
       :readonly="isTimeDialogReadonly"
       :initial-data="timeDialogData"
       :context-tiers="editingTimeRule?.contextTiers || viewingCloudRule?.contextTiers || []"
+      :daily-slots="editingTimeRule?.dailySlots || viewingCloudRule?.dailySlots || []"
       @confirm="onConfirmTimeRule"
     />
 
@@ -137,6 +138,7 @@
       :current-pricing="editCurrentPricing"
       :show-restore="editShowRestore"
       :context-tiers="editContextTiers"
+      :daily-slots="editDailySlots"
       @save="onSavePricing"
       @restore="onRestorePricing(editModelId!)"
     />
@@ -156,8 +158,8 @@ import PricingCard from '@/components/pricing/PricingCard.vue'
 import PricingEditDialog from '@/components/pricing/PricingEditDialog.vue'
 import TimePricingDialog from '@/components/pricing/TimePricingDialog.vue'
 import AliasDialog from '@/components/pricing/AliasDialog.vue'
-import { getActiveRate } from '@/utils/pricing'
-import type { PricingData, PricingFamily, TimePricingRule, CloudPricingTimeRule, ContextTier } from '@/types/pricing'
+import { getActiveRate, dailySlotsWindowsOverlap } from '@/utils/pricing'
+import type { PricingData, PricingFamily, TimePricingRule, CloudPricingTimeRule, ContextTier, DailySlot } from '@/types/pricing'
 import { epochToDateStr } from '@/utils/format'
 
 const dbStore = useDatabaseStore()
@@ -188,6 +190,7 @@ const editModelName = ref('')
 const editCurrentPricing = ref({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 })
 const editShowRestore = ref(false)
 const editContextTiers = ref<ContextTier[]>([])
+const editDailySlots = ref<DailySlot[]>([])
 
 // 时间定价弹窗
 const showTimeDialog = ref(false)
@@ -389,6 +392,7 @@ function onOpenEditDialog(card: CardEntry): void {
   }
   editShowRestore.value = card.isOverride || false
   editContextTiers.value = card.contextTiers ? [...card.contextTiers.map(t => ({ ...t }))] : []
+  editDailySlots.value = card.dailySlots ? [...card.dailySlots] : []
   showEditDialog.value = true
 }
 
@@ -405,14 +409,25 @@ async function loadPricingData(): Promise<void> {
 }
 
 // 保存定价覆盖
-async function onSavePricing(data: { input: number; output: number; cacheRead: number; cacheCreation: number }, tiers: ContextTier[]): Promise<void> {
+async function onSavePricing(data: { input: number; output: number; cacheRead: number; cacheCreation: number; dailySlots: DailySlot[] }, tiers: ContextTier[]): Promise<void> {
   const modelId = editModelId.value!
+  if (dailySlotsWindowsOverlap(data.dailySlots || [])) {
+    message.warning('模型根峰谷时段窗口存在重叠，请调整')
+    return
+  }
+  for (const tier of tiers) {
+    if (dailySlotsWindowsOverlap(tier.dailySlots || [])) {
+      message.warning(`档位 >= ${Math.round(tier.threshold / 1000)}K 的峰谷时段窗口存在重叠，请调整`)
+      return
+    }
+  }
   await platformAdapter.setPricingOverride({
     modelId,
     input: data.input,
     output: data.output,
     cacheRead: data.cacheRead,
-    cacheCreation: data.cacheCreation
+    cacheCreation: data.cacheCreation,
+    dailySlots: data.dailySlots || []
   })
 
   // 同步上下文档位：对比旧档位，删除不再存在的，新增或更新保留的
@@ -433,7 +448,8 @@ async function onSavePricing(data: { input: number; output: number; cacheRead: n
       input: tier.inputCostPerMillion,
       output: tier.outputCostPerMillion,
       cacheRead: tier.cacheReadCostPerMillion,
-      cacheCreation: tier.cacheCreationCostPerMillion
+      cacheCreation: tier.cacheCreationCostPerMillion,
+      dailySlots: tier.dailySlots || []
     })
   }
 
@@ -463,7 +479,7 @@ function onEditTimeRule(rule: TimePricingRule): void {
   showTimeDialog.value = true
 }
 
-function onViewTimeRule(rule: { label: string; startTime: number; endTime: number; inputCostPerMillion: number; outputCostPerMillion: number; cacheReadCostPerMillion: number; cacheCreationCostPerMillion: number; contextTiers: ContextTier[] }): void {
+function onViewTimeRule(rule: CloudPricingTimeRule & { dailySlots?: DailySlot[] }): void {
   editingTimeRule.value = null
   viewingCloudRule.value = {
     label: rule.label,
@@ -473,12 +489,13 @@ function onViewTimeRule(rule: { label: string; startTime: number; endTime: numbe
     outputCostPerMillion: rule.outputCostPerMillion,
     cacheReadCostPerMillion: rule.cacheReadCostPerMillion,
     cacheCreationCostPerMillion: rule.cacheCreationCostPerMillion,
-    contextTiers: rule.contextTiers
+    contextTiers: rule.contextTiers || [],
+    dailySlots: rule.dailySlots ? rule.dailySlots.map(s => ({ ...s, windows: [...(s.windows || [])] })) : []
   }
   showTimeDialog.value = true
 }
 
-async function onConfirmTimeRule(data: { label: string; startTime: number; endTime: number; input: number; output: number; cacheRead: number; cacheCreation: number }, tiers: ContextTier[]): Promise<void> {
+async function onConfirmTimeRule(data: { label: string; startTime: number; endTime: number; input: number; output: number; cacheRead: number; cacheCreation: number; dailySlots: DailySlot[] }, tiers: ContextTier[]): Promise<void> {
   if (isTimeDialogReadonly.value) {
     showTimeDialog.value = false
     viewingCloudRule.value = null
@@ -486,6 +503,17 @@ async function onConfirmTimeRule(data: { label: string; startTime: number; endTi
   }
 
   const modelId = currentTimeRuleModelId.value
+
+  if (dailySlotsWindowsOverlap(data.dailySlots || [])) {
+    message.warning('规则根峰谷时段窗口存在重叠，请调整')
+    return
+  }
+  for (const tier of tiers) {
+    if (dailySlotsWindowsOverlap(tier.dailySlots || [])) {
+      message.warning(`档位 ${Math.round(tier.threshold / 1000)}K 的峰谷时段窗口存在重叠，请调整`)
+      return
+    }
+  }
 
   // 检查时间冲突：云端规则 + 其他用户规则
   const cloudRules = pricingStore.pricingData.find(p => p.modelId === modelId)?.cloudTimeRules || []
@@ -499,7 +527,7 @@ async function onConfirmTimeRule(data: { label: string; startTime: number; endTi
 
   // 编辑时排除自身，新增时检查全部
   const otherUserRules = editingTimeRule.value
-    ? userRules.filter(r => r.id !== editingTimeRule.value.id)
+    ? userRules.filter(r => r.id !== editingTimeRule.value!.id)
     : userRules
   const userConflict = otherUserRules.find(r => data.startTime < r.endTime && data.endTime > r.startTime)
   if (userConflict) {
@@ -516,7 +544,8 @@ async function onConfirmTimeRule(data: { label: string; startTime: number; endTi
       output: data.output,
       cacheRead: data.cacheRead,
       cacheCreation: data.cacheCreation,
-      label: data.label
+      label: data.label,
+      dailySlots: data.dailySlots || []
     })
 
     // 同步上下文档位：对比旧档位，删除不再存在的，新增或更新保留的
@@ -534,7 +563,8 @@ async function onConfirmTimeRule(data: { label: string; startTime: number; endTi
           input: tier.inputCostPerMillion,
           output: tier.outputCostPerMillion,
           cacheRead: tier.cacheReadCostPerMillion,
-          cacheCreation: tier.cacheCreationCostPerMillion
+          cacheCreation: tier.cacheCreationCostPerMillion,
+          dailySlots: tier.dailySlots || []
         })
       } else {
         await platformAdapter.saveTimeRuleContextTier({
@@ -545,7 +575,8 @@ async function onConfirmTimeRule(data: { label: string; startTime: number; endTi
           input: tier.inputCostPerMillion,
           output: tier.outputCostPerMillion,
           cacheRead: tier.cacheReadCostPerMillion,
-          cacheCreation: tier.cacheCreationCostPerMillion
+          cacheCreation: tier.cacheCreationCostPerMillion,
+          dailySlots: tier.dailySlots || []
         })
       }
     }
@@ -558,7 +589,8 @@ async function onConfirmTimeRule(data: { label: string; startTime: number; endTi
       output: data.output,
       cacheRead: data.cacheRead,
       cacheCreation: data.cacheCreation,
-      label: data.label
+      label: data.label,
+      dailySlots: data.dailySlots || []
     })
     // 保存新增规则的上下文档位
     for (const tier of tiers) {
@@ -570,7 +602,8 @@ async function onConfirmTimeRule(data: { label: string; startTime: number; endTi
         input: tier.inputCostPerMillion,
         output: tier.outputCostPerMillion,
         cacheRead: tier.cacheReadCostPerMillion,
-        cacheCreation: tier.cacheCreationCostPerMillion
+        cacheCreation: tier.cacheCreationCostPerMillion,
+        dailySlots: tier.dailySlots || []
       })
     }
   }

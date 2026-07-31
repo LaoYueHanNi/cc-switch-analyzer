@@ -5,6 +5,18 @@ use std::path::Path;
 use crate::models::*;
 use crate::utils::*;
 
+fn serialize_daily_slots(slots: &[DailySlot]) -> String {
+    serde_json::to_string(slots).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn parse_daily_slots(raw: Option<String>) -> Vec<DailySlot> {
+    let s = raw.unwrap_or_default();
+    if s.is_empty() {
+        return Vec::new();
+    }
+    serde_json::from_str(&s).unwrap_or_default()
+}
+
 // 应用自有数据库服务（读写）
 pub struct AppDbService {
     db: Connection,
@@ -74,6 +86,9 @@ impl AppDbService {
         }
         if version < 9 {
             self.migrate_v9()?;
+        }
+        if version < 10 {
+            self.migrate_v10()?;
         }
 
         Ok(())
@@ -343,6 +358,27 @@ impl AppDbService {
         Ok(())
     }
 
+    fn migrate_v10(&mut self) -> Result<(), String> {
+        let add_col = |table: &str| -> Result<(), String> {
+            let has = self.db
+                .prepare(&format!("SELECT daily_slots FROM {} LIMIT 0", table))
+                .is_ok();
+            if !has {
+                self.db.execute_batch(&format!(
+                    "ALTER TABLE {} ADD COLUMN daily_slots TEXT NOT NULL DEFAULT '[]';",
+                    table
+                )).map_err(|e| format!("迁移 v10 ({}.daily_slots) 失败: {}", table, e))?;
+            }
+            Ok(())
+        };
+        add_col("pricing_overrides")?;
+        add_col("time_pricing_overrides")?;
+        add_col("cloud_pricing_cache")?;
+        add_col("cloud_time_rules")?;
+        self.set_schema_version(10)?;
+        Ok(())
+    }
+
     // ========== 任务 CRUD ==========
 
     pub fn list_tasks(&self) -> Result<Vec<Task>, String> {
@@ -575,14 +611,16 @@ impl AppDbService {
                     row.get::<_, f64>("cache_read_cost_per_million")?,
                     row.get::<_, f64>("cache_creation_cost_per_million")?,
                     row.get::<_, i64>("updated_at")?,
+                    row.get::<_, Option<String>>("daily_slots")?,
                 ))
             })
             .map_err(|e| format!("查询定价覆盖失败: {}", e))?;
 
         let mut map: HashMap<String, PricingOverride> = HashMap::new();
         for row in rows {
-            let (model_id, threshold, inp, out, cr, cc, updated_at) =
+            let (model_id, threshold, inp, out, cr, cc, updated_at, daily_raw) =
                 row.map_err(|e| format!("读取定价覆盖失败: {}", e))?;
+            let slots = parse_daily_slots(daily_raw);
             let entry = map.entry(model_id.clone()).or_insert_with(|| PricingOverride {
                 model_id: model_id.clone(),
                 input_cost_per_million: inp,
@@ -591,8 +629,11 @@ impl AppDbService {
                 cache_creation_cost_per_million: cc,
                 updated_at,
                 context_tiers: Vec::new(),
+                daily_slots: if threshold == 0 { slots.clone() } else { Vec::new() },
             });
-            if threshold > 0 {
+            if threshold == 0 {
+                entry.daily_slots = slots;
+            } else if threshold > 0 {
                 entry.context_tiers.push(ContextTier {
                     id: None,
                     threshold,
@@ -600,6 +641,7 @@ impl AppDbService {
                     output_cost_per_million: out,
                     cache_read_cost_per_million: cr,
                     cache_creation_cost_per_million: cc,
+                    daily_slots: slots,
                 });
             }
         }
@@ -617,13 +659,37 @@ impl AppDbService {
         cache_read_cost: f64,
         cache_creation_cost: f64,
     ) -> Result<(), String> {
+        let existing = self.get_override_daily_slots(model_id, 0);
+        self.save_override_with_slots(model_id, input_cost, output_cost, cache_read_cost, cache_creation_cost, &existing)
+    }
+
+    fn get_override_daily_slots(&self, model_id: &str, threshold: i64) -> Vec<DailySlot> {
+        self.db
+            .query_row(
+                "SELECT daily_slots FROM pricing_overrides WHERE model_id = ? AND threshold = ?",
+                params![model_id, threshold],
+                |row| Ok(parse_daily_slots(row.get::<_, Option<String>>(0)?)),
+            )
+            .unwrap_or_default()
+    }
+
+    pub fn save_override_with_slots(
+        &self,
+        model_id: &str,
+        input_cost: f64,
+        output_cost: f64,
+        cache_read_cost: f64,
+        cache_creation_cost: f64,
+        daily_slots: &[DailySlot],
+    ) -> Result<(), String> {
+        let slots_json = serialize_daily_slots(daily_slots);
         self.db
             .execute(
                 "INSERT OR REPLACE INTO pricing_overrides
                     (model_id, threshold, input_cost_per_million, output_cost_per_million,
-                     cache_read_cost_per_million, cache_creation_cost_per_million, updated_at)
-                 VALUES (?, 0, ?, ?, ?, ?, strftime('%s','now'))",
-                params![model_id, input_cost, output_cost, cache_read_cost, cache_creation_cost],
+                     cache_read_cost_per_million, cache_creation_cost_per_million, updated_at, daily_slots)
+                 VALUES (?, 0, ?, ?, ?, ?, strftime('%s','now'), ?)",
+                params![model_id, input_cost, output_cost, cache_read_cost, cache_creation_cost, slots_json],
             )
             .map_err(|e| format!("保存定价覆盖失败: {}", e))?;
         Ok(())
@@ -638,13 +704,27 @@ impl AppDbService {
         cache_read_cost: f64,
         cache_creation_cost: f64,
     ) -> Result<(), String> {
+        self.save_override_tier_with_slots(model_id, threshold, input_cost, output_cost, cache_read_cost, cache_creation_cost, &[])
+    }
+
+    pub fn save_override_tier_with_slots(
+        &self,
+        model_id: &str,
+        threshold: i64,
+        input_cost: f64,
+        output_cost: f64,
+        cache_read_cost: f64,
+        cache_creation_cost: f64,
+        daily_slots: &[DailySlot],
+    ) -> Result<(), String> {
+        let slots_json = serialize_daily_slots(daily_slots);
         self.db
             .execute(
                 "INSERT OR REPLACE INTO pricing_overrides
                     (model_id, threshold, input_cost_per_million, output_cost_per_million,
-                     cache_read_cost_per_million, cache_creation_cost_per_million, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, strftime('%s','now'))",
-                params![model_id, threshold, input_cost, output_cost, cache_read_cost, cache_creation_cost],
+                     cache_read_cost_per_million, cache_creation_cost_per_million, updated_at, daily_slots)
+                 VALUES (?, ?, ?, ?, ?, ?, strftime('%s','now'), ?)",
+                params![model_id, threshold, input_cost, output_cost, cache_read_cost, cache_creation_cost, slots_json],
             )
             .map_err(|e| format!("保存上下文档位失败: {}", e))?;
         Ok(())
@@ -695,6 +775,7 @@ impl AppDbService {
                     row.get::<_, f64>("cache_creation_cost_per_million")?,
                     row.get::<_, Option<String>>("label")?.unwrap_or_default(),
                     row.get::<_, i64>("threshold")?,
+                    row.get::<_, Option<String>>("daily_slots")?,
                 ))
             })
             .map_err(|e| format!("查询时间定价失败: {}", e))?;
@@ -702,8 +783,9 @@ impl AppDbService {
         // 按 (model_id, start_time, end_time) 分组
         let mut map: HashMap<(String, i64, i64), TimePricingRule> = HashMap::new();
         for row in rows {
-            let (id, model_id, start_time, end_time, inp, out, cr, cc, label, threshold) =
+            let (id, model_id, start_time, end_time, inp, out, cr, cc, label, threshold, daily_raw) =
                 row.map_err(|e| format!("读取时间定价失败: {}", e))?;
+            let slots = parse_daily_slots(daily_raw);
             let key = (model_id.clone(), start_time, end_time);
             let entry = map.entry(key.clone()).or_insert_with(|| TimePricingRule {
                 id,
@@ -714,10 +796,19 @@ impl AppDbService {
                 output_cost_per_million: out,
                 cache_read_cost_per_million: cr,
                 cache_creation_cost_per_million: cc,
-                label,
+                label: label.clone(),
                 context_tiers: Vec::new(),
+                daily_slots: if threshold == 0 { slots.clone() } else { Vec::new() },
             });
-            if threshold > 0 {
+            if threshold == 0 {
+                entry.id = id;
+                entry.daily_slots = slots;
+                entry.input_cost_per_million = inp;
+                entry.output_cost_per_million = out;
+                entry.cache_read_cost_per_million = cr;
+                entry.cache_creation_cost_per_million = cc;
+                entry.label = label;
+            } else if threshold > 0 {
                 entry.context_tiers.push(ContextTier {
                     id: Some(id),
                     threshold,
@@ -725,6 +816,7 @@ impl AppDbService {
                     output_cost_per_million: out,
                     cache_read_cost_per_million: cr,
                     cache_creation_cost_per_million: cc,
+                    daily_slots: slots,
                 });
             }
         }
@@ -745,12 +837,30 @@ impl AppDbService {
         cache_creation_cost: f64,
         label: &str,
     ) -> Result<i64, String> {
+        self.add_time_override_with_slots(
+            model_id, start_time, end_time, input_cost, output_cost, cache_read_cost, cache_creation_cost, label, &[],
+        )
+    }
+
+    pub fn add_time_override_with_slots(
+        &self,
+        model_id: &str,
+        start_time: i64,
+        end_time: i64,
+        input_cost: f64,
+        output_cost: f64,
+        cache_read_cost: f64,
+        cache_creation_cost: f64,
+        label: &str,
+        daily_slots: &[DailySlot],
+    ) -> Result<i64, String> {
+        let slots_json = serialize_daily_slots(daily_slots);
         self.db
             .execute(
                 "INSERT INTO time_pricing_overrides
                     (model_id, start_time, end_time, input_cost_per_million, output_cost_per_million,
-                     cache_read_cost_per_million, cache_creation_cost_per_million, label, threshold)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                     cache_read_cost_per_million, cache_creation_cost_per_million, label, threshold, daily_slots)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
                 params![
                     model_id,
                     start_time,
@@ -759,7 +869,8 @@ impl AppDbService {
                     output_cost,
                     cache_read_cost,
                     cache_creation_cost,
-                    label
+                    label,
+                    slots_json,
                 ],
             )
             .map_err(|e| format!("添加时间定价失败: {}", e))?;
@@ -777,12 +888,30 @@ impl AppDbService {
         cache_read_cost: f64,
         cache_creation_cost: f64,
     ) -> Result<i64, String> {
+        self.add_time_override_tier_with_slots(
+            model_id, start_time, end_time, threshold, input_cost, output_cost, cache_read_cost, cache_creation_cost, &[],
+        )
+    }
+
+    pub fn add_time_override_tier_with_slots(
+        &self,
+        model_id: &str,
+        start_time: i64,
+        end_time: i64,
+        threshold: i64,
+        input_cost: f64,
+        output_cost: f64,
+        cache_read_cost: f64,
+        cache_creation_cost: f64,
+        daily_slots: &[DailySlot],
+    ) -> Result<i64, String> {
+        let slots_json = serialize_daily_slots(daily_slots);
         self.db
             .execute(
                 "INSERT INTO time_pricing_overrides
                     (model_id, start_time, end_time, input_cost_per_million, output_cost_per_million,
-                     cache_read_cost_per_million, cache_creation_cost_per_million, label, threshold)
-                 SELECT ?, ?, ?, ?, ?, ?, ?, label, ?
+                     cache_read_cost_per_million, cache_creation_cost_per_million, label, threshold, daily_slots)
+                 SELECT ?, ?, ?, ?, ?, ?, ?, label, ?, ?
                  FROM time_pricing_overrides
                  WHERE model_id = ? AND start_time = ? AND end_time = ? AND threshold = 0
                  LIMIT 1",
@@ -795,6 +924,7 @@ impl AppDbService {
                     cache_read_cost,
                     cache_creation_cost,
                     threshold,
+                    slots_json,
                     model_id,
                     start_time,
                     end_time,
@@ -815,26 +945,68 @@ impl AppDbService {
         cache_creation_cost: f64,
         label: &str,
     ) -> Result<(), String> {
-        self.db
-            .execute(
-                "UPDATE time_pricing_overrides SET
-                    start_time = ?, end_time = ?,
-                    input_cost_per_million = ?, output_cost_per_million = ?,
-                    cache_read_cost_per_million = ?, cache_creation_cost_per_million = ?,
-                    label = ?
-                 WHERE id = ?",
-                params![
-                    start_time,
-                    end_time,
-                    input_cost,
-                    output_cost,
-                    cache_read_cost,
-                    cache_creation_cost,
-                    label,
-                    id
-                ],
-            )
-            .map_err(|e| format!("更新时间定价失败: {}", e))?;
+        self.update_time_override_with_slots(
+            id, start_time, end_time, input_cost, output_cost, cache_read_cost, cache_creation_cost, label, None,
+        )
+    }
+
+    pub fn update_time_override_with_slots(
+        &self,
+        id: i64,
+        start_time: i64,
+        end_time: i64,
+        input_cost: f64,
+        output_cost: f64,
+        cache_read_cost: f64,
+        cache_creation_cost: f64,
+        label: &str,
+        daily_slots: Option<&[DailySlot]>,
+    ) -> Result<(), String> {
+        if let Some(slots) = daily_slots {
+            let slots_json = serialize_daily_slots(slots);
+            self.db
+                .execute(
+                    "UPDATE time_pricing_overrides SET
+                        start_time = ?, end_time = ?,
+                        input_cost_per_million = ?, output_cost_per_million = ?,
+                        cache_read_cost_per_million = ?, cache_creation_cost_per_million = ?,
+                        label = ?, daily_slots = ?
+                     WHERE id = ?",
+                    params![
+                        start_time,
+                        end_time,
+                        input_cost,
+                        output_cost,
+                        cache_read_cost,
+                        cache_creation_cost,
+                        label,
+                        slots_json,
+                        id
+                    ],
+                )
+                .map_err(|e| format!("更新时间定价失败: {}", e))?;
+        } else {
+            self.db
+                .execute(
+                    "UPDATE time_pricing_overrides SET
+                        start_time = ?, end_time = ?,
+                        input_cost_per_million = ?, output_cost_per_million = ?,
+                        cache_read_cost_per_million = ?, cache_creation_cost_per_million = ?,
+                        label = ?
+                     WHERE id = ?",
+                    params![
+                        start_time,
+                        end_time,
+                        input_cost,
+                        output_cost,
+                        cache_read_cost,
+                        cache_creation_cost,
+                        label,
+                        id
+                    ],
+                )
+                .map_err(|e| format!("更新时间定价失败: {}", e))?;
+        }
         Ok(())
     }
 
@@ -874,15 +1046,41 @@ impl AppDbService {
         cache_read_cost: f64,
         cache_creation_cost: f64,
     ) -> Result<(), String> {
-        self.db
-            .execute(
-                "UPDATE time_pricing_overrides SET
-                    input_cost_per_million = ?, output_cost_per_million = ?,
-                    cache_read_cost_per_million = ?, cache_creation_cost_per_million = ?
-                 WHERE id = ?",
-                params![input_cost, output_cost, cache_read_cost, cache_creation_cost, id],
-            )
-            .map_err(|e| format!("更新时间定价档位失败: {}", e))?;
+        self.update_time_override_tier_with_slots(id, input_cost, output_cost, cache_read_cost, cache_creation_cost, None)
+    }
+
+    pub fn update_time_override_tier_with_slots(
+        &self,
+        id: i64,
+        input_cost: f64,
+        output_cost: f64,
+        cache_read_cost: f64,
+        cache_creation_cost: f64,
+        daily_slots: Option<&[DailySlot]>,
+    ) -> Result<(), String> {
+        if let Some(slots) = daily_slots {
+            let slots_json = serialize_daily_slots(slots);
+            self.db
+                .execute(
+                    "UPDATE time_pricing_overrides SET
+                        input_cost_per_million = ?, output_cost_per_million = ?,
+                        cache_read_cost_per_million = ?, cache_creation_cost_per_million = ?,
+                        daily_slots = ?
+                     WHERE id = ?",
+                    params![input_cost, output_cost, cache_read_cost, cache_creation_cost, slots_json, id],
+                )
+                .map_err(|e| format!("更新时间定价档位失败: {}", e))?;
+        } else {
+            self.db
+                .execute(
+                    "UPDATE time_pricing_overrides SET
+                        input_cost_per_million = ?, output_cost_per_million = ?,
+                        cache_read_cost_per_million = ?, cache_creation_cost_per_million = ?
+                     WHERE id = ?",
+                    params![input_cost, output_cost, cache_read_cost, cache_creation_cost, id],
+                )
+                .map_err(|e| format!("更新时间定价档位失败: {}", e))?;
+        }
         Ok(())
     }
 
@@ -996,11 +1194,12 @@ impl AppDbService {
 
         for model in &data.models {
             let aliases_str = model.aliases.join(",");
+            let root_slots = serialize_daily_slots(&model.daily_slots);
             tx.execute(
                 "INSERT INTO cloud_pricing_cache
                     (model_id, display_name, input_cost_per_million, output_cost_per_million,
-                     cache_read_cost_per_million, cache_creation_cost_per_million, threshold, aliases, no_cache_support, family)
-                 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+                     cache_read_cost_per_million, cache_creation_cost_per_million, threshold, aliases, no_cache_support, family, daily_slots)
+                 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
                 params![
                     model.model_id,
                     model.model_id,
@@ -1011,15 +1210,17 @@ impl AppDbService {
                     aliases_str,
                     model.no_cache_support,
                     model.family,
+                    root_slots,
                 ],
             ).map_err(|e| format!("写入云端定价缓存失败: {}", e))?;
 
             for tier in &model.context_tiers {
+                let tier_slots = serialize_daily_slots(&tier.daily_slots);
                 tx.execute(
                     "INSERT INTO cloud_pricing_cache
                         (model_id, display_name, input_cost_per_million, output_cost_per_million,
-                         cache_read_cost_per_million, cache_creation_cost_per_million, threshold)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         cache_read_cost_per_million, cache_creation_cost_per_million, threshold, daily_slots)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     params![
                         model.model_id,
                         model.model_id,
@@ -1028,18 +1229,20 @@ impl AppDbService {
                         tier.cache_read_cost_per_million,
                         tier.cache_creation_cost_per_million,
                         tier.threshold,
+                        tier_slots,
                     ],
                 ).map_err(|e| format!("写入云端定价档位缓存失败: {}", e))?;
             }
 
             for rule in &model.time_rules {
+                let rule_slots = serialize_daily_slots(&rule.daily_slots);
                 tx.execute(
                     "INSERT INTO cloud_time_rules
                         (model_id, start_time, end_time,
                          input_cost_per_million, output_cost_per_million,
                          cache_read_cost_per_million, cache_creation_cost_per_million,
-                         label, threshold)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                         label, threshold, daily_slots)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
                     params![
                         model.model_id,
                         rule.start_time,
@@ -1049,17 +1252,19 @@ impl AppDbService {
                         rule.cache_read_cost_per_million,
                         rule.cache_creation_cost_per_million,
                         rule.label,
+                        rule_slots,
                     ],
                 ).map_err(|e| format!("写入云端时间规则缓存失败: {}", e))?;
 
                 for tier in &rule.context_tiers {
+                    let tier_slots = serialize_daily_slots(&tier.daily_slots);
                     tx.execute(
                         "INSERT INTO cloud_time_rules
                             (model_id, start_time, end_time,
                              input_cost_per_million, output_cost_per_million,
                              cache_read_cost_per_million, cache_creation_cost_per_million,
-                             label, threshold)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             label, threshold, daily_slots)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         params![
                             model.model_id,
                             rule.start_time,
@@ -1070,6 +1275,7 @@ impl AppDbService {
                             tier.cache_creation_cost_per_million,
                             rule.label,
                             tier.threshold,
+                            tier_slots,
                         ],
                     ).map_err(|e| format!("写入云端时间规则档位缓存失败: {}", e))?;
                 }
@@ -1105,7 +1311,7 @@ impl AppDbService {
                 "SELECT model_id,
                         input_cost_per_million, output_cost_per_million,
                         cache_read_cost_per_million, cache_creation_cost_per_million,
-                        aliases, no_cache_support, family
+                        aliases, no_cache_support, family, daily_slots
                  FROM cloud_pricing_cache WHERE threshold = 0 ORDER BY model_id"
             )
             .map_err(|e| format!("查询云端定价缓存失败: {}", e))?;
@@ -1118,6 +1324,7 @@ impl AppDbService {
                     output_cost_per_million: row.get("output_cost_per_million")?,
                     cache_read_cost_per_million: row.get("cache_read_cost_per_million")?,
                     cache_creation_cost_per_million: row.get("cache_creation_cost_per_million")?,
+                    daily_slots: parse_daily_slots(row.get::<_, Option<String>>("daily_slots")?),
                 },
                 row.get::<_, String>("aliases")?,
                 row.get::<_, bool>("no_cache_support")?,
@@ -1149,7 +1356,7 @@ impl AppDbService {
             .prepare(
                 "SELECT model_id, threshold,
                         input_cost_per_million, output_cost_per_million,
-                        cache_read_cost_per_million, cache_creation_cost_per_million
+                        cache_read_cost_per_million, cache_creation_cost_per_million, daily_slots
                  FROM cloud_pricing_cache WHERE threshold > 0 ORDER BY model_id, threshold"
             )
             .map_err(|e| format!("查询云端定价档位缓存失败: {}", e))?;
@@ -1164,6 +1371,7 @@ impl AppDbService {
                     output_cost_per_million: row.get("output_cost_per_million")?,
                     cache_read_cost_per_million: row.get("cache_read_cost_per_million")?,
                     cache_creation_cost_per_million: row.get("cache_creation_cost_per_million")?,
+                    daily_slots: parse_daily_slots(row.get::<_, Option<String>>("daily_slots")?),
                 },
             ))
         }).map_err(|e| format!("查询云端定价档位缓存失败: {}", e))?;
@@ -1197,7 +1405,7 @@ impl AppDbService {
                 "SELECT model_id, start_time, end_time,
                         input_cost_per_million, output_cost_per_million,
                         cache_read_cost_per_million, cache_creation_cost_per_million,
-                        label, threshold
+                        label, threshold, daily_slots
                  FROM cloud_time_rules ORDER BY model_id, start_time, threshold"
             )
             .map_err(|e| format!("查询云端时间规则缓存失败: {}", e))?;
@@ -1213,18 +1421,20 @@ impl AppDbService {
                 row.get::<_, f64>("cache_creation_cost_per_million")?,
                 row.get::<_, Option<String>>("label")?.unwrap_or_default(),
                 row.get::<_, i64>("threshold")?,
+                row.get::<_, Option<String>>("daily_slots")?,
             ))
         }).map_err(|e| format!("查询云端时间规则缓存失败: {}", e))?;
 
         // 先按 (model_id, start_time, end_time) 分组合并上下文档位
         let mut group_map: HashMap<(String, i64, i64), crate::models::CloudPricingTimeRule> = HashMap::new();
         for row in rows {
-            let (model_id, start_time, end_time, inp, out, cr, cc, label, threshold) =
+            let (model_id, start_time, end_time, inp, out, cr, cc, label, threshold, daily_raw) =
                 row.map_err(|e| format!("读取云端时间规则缓存失败: {}", e))?;
+            let slots = parse_daily_slots(daily_raw);
             let key = (model_id.clone(), start_time, end_time);
             let entry = group_map.entry(key).or_insert_with(|| crate::models::CloudPricingTimeRule {
                 model_id: model_id.clone(),
-                label,
+                label: label.clone(),
                 start_time,
                 end_time,
                 input_cost_per_million: inp,
@@ -1232,8 +1442,16 @@ impl AppDbService {
                 cache_read_cost_per_million: cr,
                 cache_creation_cost_per_million: cc,
                 context_tiers: Vec::new(),
+                daily_slots: if threshold == 0 { slots.clone() } else { Vec::new() },
             });
-            if threshold > 0 {
+            if threshold == 0 {
+                entry.label = label;
+                entry.daily_slots = slots;
+                entry.input_cost_per_million = inp;
+                entry.output_cost_per_million = out;
+                entry.cache_read_cost_per_million = cr;
+                entry.cache_creation_cost_per_million = cc;
+            } else if threshold > 0 {
                 entry.context_tiers.push(ContextTier {
                     id: None,
                     threshold,
@@ -1241,6 +1459,7 @@ impl AppDbService {
                     output_cost_per_million: out,
                     cache_read_cost_per_million: cr,
                     cache_creation_cost_per_million: cc,
+                    daily_slots: slots,
                 });
             }
         }
@@ -1329,6 +1548,7 @@ impl AppDbService {
                 cache_creation_cost_per_million REAL NOT NULL,
                 updated_at INTEGER DEFAULT (strftime('%s','now')),
                 user_aliases TEXT NOT NULL DEFAULT '',
+                daily_slots TEXT NOT NULL DEFAULT '[]',
                 PRIMARY KEY (model_id, threshold)
             );
             CREATE TABLE IF NOT EXISTS time_pricing_overrides (
@@ -1341,7 +1561,8 @@ impl AppDbService {
                 cache_read_cost_per_million REAL NOT NULL,
                 cache_creation_cost_per_million REAL NOT NULL,
                 label TEXT DEFAULT '',
-                threshold INTEGER NOT NULL DEFAULT 0
+                threshold INTEGER NOT NULL DEFAULT 0,
+                daily_slots TEXT NOT NULL DEFAULT '[]'
             );
             CREATE TABLE IF NOT EXISTS cloud_pricing_cache (
                 model_id TEXT NOT NULL,
@@ -1354,6 +1575,7 @@ impl AppDbService {
                 aliases TEXT NOT NULL DEFAULT '',
                 no_cache_support INTEGER NOT NULL DEFAULT 0,
                 family TEXT NOT NULL DEFAULT '',
+                daily_slots TEXT NOT NULL DEFAULT '[]',
                 PRIMARY KEY (model_id, threshold)
             );
             CREATE TABLE IF NOT EXISTS cloud_time_rules (
@@ -1366,7 +1588,8 @@ impl AppDbService {
                 cache_read_cost_per_million REAL NOT NULL,
                 cache_creation_cost_per_million REAL NOT NULL,
                 label TEXT DEFAULT '',
-                threshold INTEGER NOT NULL DEFAULT 0
+                threshold INTEGER NOT NULL DEFAULT 0,
+                daily_slots TEXT NOT NULL DEFAULT '[]'
             );
             CREATE TABLE IF NOT EXISTS model_aliases (
                 model_id TEXT NOT NULL,
@@ -1399,7 +1622,7 @@ impl AppDbService {
                 FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
             );"
         ).map_err(|e| format!("初始化内存表失败: {}", e))?;
-        self.set_setting("schema_version", "9")?;
+        self.set_setting("schema_version", "10")?;
         Ok(())
     }
 }
@@ -1530,6 +1753,7 @@ mod tests {
                         output_cost_per_million: 30.0,
                         cache_read_cost_per_million: 1.5,
                         cache_creation_cost_per_million: 7.5,
+                        daily_slots: vec![],
                     }],
                     time_rules: vec![crate::models::CloudPricingTimeRule {
                         model_id: "model-a".to_string(),
@@ -1541,10 +1765,12 @@ mod tests {
                         cache_read_cost_per_million: 0.5,
                         cache_creation_cost_per_million: 2.5,
                         context_tiers: vec![],
+                        daily_slots: vec![],
                     }],
                     aliases: vec!["model-a-alias".to_string()],
                     no_cache_support: false,
                     family: "gpt".to_string(),
+                    daily_slots: vec![],
                 },
             ],
         };

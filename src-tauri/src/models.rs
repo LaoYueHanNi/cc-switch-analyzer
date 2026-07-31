@@ -62,6 +62,8 @@ pub struct ModelPricing {
     pub output_cost_per_million: f64,
     pub cache_read_cost_per_million: f64,
     pub cache_creation_cost_per_million: f64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub daily_slots: Vec<DailySlot>,
 }
 
 // ========== 汇总统计 ==========
@@ -137,6 +139,8 @@ pub struct ModelContextTierBucket {
     pub cache_read: i64,
     pub cache_creation: i64,
     pub representative_epoch: i64,
+    /// -1 = 谷价/无峰谷；>=0 = 命中的 dailySlot 下标
+    pub slot_key: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -228,6 +232,28 @@ pub struct SessionRequestToken {
 
 // ========== 定价相关 ==========
 
+/// 日内峰时窗口（当天分钟数，半开区间 [start, end)）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DailyWindow {
+    pub start_minute: i64,
+    pub end_minute: i64,
+}
+
+/// 扁平峰时价：挂在价格节点上，不再嵌套 contextTiers
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DailySlot {
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub windows: Vec<DailyWindow>,
+    pub input_cost_per_million: f64,
+    pub output_cost_per_million: f64,
+    pub cache_read_cost_per_million: f64,
+    pub cache_creation_cost_per_million: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextTier {
@@ -238,6 +264,8 @@ pub struct ContextTier {
     pub output_cost_per_million: f64,
     pub cache_read_cost_per_million: f64,
     pub cache_creation_cost_per_million: f64,
+    #[serde(default)]
+    pub daily_slots: Vec<DailySlot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,6 +290,8 @@ pub struct PricingOverride {
     pub updated_at: i64,
     #[serde(default)]
     pub context_tiers: Vec<ContextTier>,
+    #[serde(default)]
+    pub daily_slots: Vec<DailySlot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,6 +308,8 @@ pub struct TimePricingRule {
     pub label: String,
     #[serde(default)]
     pub context_tiers: Vec<ContextTier>,
+    #[serde(default)]
+    pub daily_slots: Vec<DailySlot>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -304,6 +336,8 @@ pub struct PricingData {
     pub no_cache_support: bool,
     #[serde(default)]
     pub family: String,
+    #[serde(default)]
+    pub daily_slots: Vec<DailySlot>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -315,6 +349,13 @@ pub struct CompareBucket {
     pub output_tokens: i64,
     pub cache_read: i64,
     pub cache_creation: i64,
+    /// -1 = 谷价/无峰谷；>=0 = 命中的 dailySlot 下标
+    #[serde(default = "default_compare_slot_key")]
+    pub slot_key: i64,
+}
+
+fn default_compare_slot_key() -> i64 {
+    -1
 }
 
 // ========== 预计算结果 ==========
@@ -423,6 +464,8 @@ pub struct CloudPricingTimeRule {
     pub cache_creation_cost_per_million: f64,
     #[serde(default)]
     pub context_tiers: Vec<ContextTier>,
+    #[serde(default)]
+    pub daily_slots: Vec<DailySlot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -450,6 +493,8 @@ pub struct CloudPricingModel {
     pub no_cache_support: bool,
     #[serde(default)]
     pub family: String,
+    #[serde(default)]
+    pub daily_slots: Vec<DailySlot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

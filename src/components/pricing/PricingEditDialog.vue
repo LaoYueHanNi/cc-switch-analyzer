@@ -17,6 +17,8 @@
         <span class="edit-label">缓存写入单价 /M</span>
         <CompactNumber v-model:model-value="cacheCreation" :min="0" :step="0.01" width="130px" />
       </div>
+      <div class="tier-divider">峰谷</div>
+      <DailySlotsEditor v-model="localDailySlots" />
 
       <div v-if="localTiers.length > 0" class="tier-divider">上下文档位</div>
       <div v-for="(tier, idx) in localTiers" :key="idx" class="tier-row">
@@ -50,9 +52,10 @@ import { ref, watch } from 'vue'
 import CompactDialog from '@/components/common/CompactDialog.vue'
 import CompactNumber from '@/components/common/CompactNumber.vue'
 import ContextTierDialog from './ContextTierDialog.vue'
+import DailySlotsEditor from './DailySlotsEditor.vue'
 import { formatRate } from '@/utils/format'
 import { useContextTierEditor } from '@/composables/useContextTierEditor'
-import type { ContextTier } from '@/types/pricing'
+import type { ContextTier, DailySlot } from '@/types/pricing'
 
 const props = defineProps<{
   show: boolean
@@ -60,11 +63,12 @@ const props = defineProps<{
   currentPricing: { input: number; output: number; cacheRead: number; cacheCreation: number }
   showRestore?: boolean
   contextTiers?: ContextTier[]
+  dailySlots?: DailySlot[]
 }>()
 
 const emit = defineEmits<{
   'update:show': [value: boolean]
-  save: [data: { input: number; output: number; cacheRead: number; cacheCreation: number }, tiers: ContextTier[]]
+  save: [data: { input: number; output: number; cacheRead: number; cacheCreation: number; dailySlots: DailySlot[] }, tiers: ContextTier[]]
   restore: []
 }>()
 
@@ -72,6 +76,7 @@ const input = ref(0)
 const output = ref(0)
 const cacheRead = ref(0)
 const cacheCreation = ref(0)
+const localDailySlots = ref<DailySlot[]>([])
 
 const {
   localTiers,
@@ -90,7 +95,8 @@ watch(() => props.show, (val) => {
     output.value = props.currentPricing.output
     cacheRead.value = props.currentPricing.cacheRead
     cacheCreation.value = props.currentPricing.cacheCreation
-    localTiers.value = props.contextTiers ? [...props.contextTiers.map(t => ({ ...t }))] : []
+    localTiers.value = props.contextTiers ? [...props.contextTiers.map(t => ({ ...t, dailySlots: [...(t.dailySlots || [])] }))] : []
+    localDailySlots.value = props.dailySlots ? props.dailySlots.map(s => ({ ...s, windows: [...(s.windows || [])] })) : []
   }
   editingTierIdx.value = null
 })
@@ -100,7 +106,8 @@ function onSave(): void {
     input: input.value,
     output: output.value,
     cacheRead: cacheRead.value,
-    cacheCreation: cacheCreation.value
+    cacheCreation: cacheCreation.value,
+    dailySlots: [...localDailySlots.value]
   }, [...localTiers.value])
   emit('update:show', false)
 }

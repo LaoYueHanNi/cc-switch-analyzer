@@ -1,43 +1,126 @@
 {
-  "version": 3,
+  "version": 4,
   "updatedAt": 0,
   "currency": "RMB",
   "models": [
     {
       "modelId": "claude-sonnet-4-20250514",
-      "displayName": "Claude Sonnet 4",
       "inputCostPerMillion": 21.0,
       "outputCostPerMillion": 105.0,
       "cacheReadCostPerMillion": 2.1,
       "cacheCreationCostPerMillion": 26.25,
+      "dailySlots": [],
       "contextTiers": [
         {
           "threshold": 128000,
           "inputCostPerMillion": 42.0,
           "outputCostPerMillion": 210.0,
           "cacheReadCostPerMillion": 4.2,
-          "cacheCreationCostPerMillion": 52.5
+          "cacheCreationCostPerMillion": 52.5,
+          "dailySlots": []
         }
       ],
-      "aliases": ["claude-sonnet-4"]
+      "timeRules": [],
+      "aliases": ["claude-sonnet-4"],
+      "family": "claude"
     },
     {
-      "modelId": "claude-opus-4-20250514",
-      "displayName": "Claude Opus 4",
-      "inputCostPerMillion": 105.0,
-      "outputCostPerMillion": 525.0,
-      "cacheReadCostPerMillion": 10.5,
-      "cacheCreationCostPerMillion": 131.25,
-      "contextTiers": [],
-      "aliases": ["claude-opus-4"]
+      "modelId": "gpt-5.6-terra",
+      "inputCostPerMillion": 14.0,
+      "outputCostPerMillion": 84.0,
+      "cacheReadCostPerMillion": 1.4,
+      "cacheCreationCostPerMillion": 17.5,
+      "dailySlots": [
+        {
+          "label": "模型根-峰时",
+          "windows": [
+            { "startMinute": 480, "endMinute": 720 },
+            { "startMinute": 840, "endMinute": 1080 }
+          ],
+          "inputCostPerMillion": 16.0,
+          "outputCostPerMillion": 96.0,
+          "cacheReadCostPerMillion": 1.6,
+          "cacheCreationCostPerMillion": 20.0
+        }
+      ],
+      "contextTiers": [
+        {
+          "threshold": 128000,
+          "inputCostPerMillion": 28.0,
+          "outputCostPerMillion": 168.0,
+          "cacheReadCostPerMillion": 2.8,
+          "cacheCreationCostPerMillion": 35.0,
+          "dailySlots": [
+            {
+              "label": "模型128K-峰时",
+              "windows": [
+                { "startMinute": 480, "endMinute": 720 },
+                { "startMinute": 840, "endMinute": 1080 }
+              ],
+              "inputCostPerMillion": 32.0,
+              "outputCostPerMillion": 192.0,
+              "cacheReadCostPerMillion": 3.2,
+              "cacheCreationCostPerMillion": 40.0
+            }
+          ]
+        }
+      ],
+      "timeRules": [
+        {
+          "label": "原价",
+          "startTime": 0,
+          "endTime": 1769875199,
+          "inputCostPerMillion": 17.5,
+          "outputCostPerMillion": 105.0,
+          "cacheReadCostPerMillion": 1.75,
+          "cacheCreationCostPerMillion": 21.875,
+          "dailySlots": [
+            {
+              "label": "原价根-峰时",
+              "windows": [
+                { "startMinute": 480, "endMinute": 720 },
+                { "startMinute": 840, "endMinute": 1080 }
+              ],
+              "inputCostPerMillion": 20.0,
+              "outputCostPerMillion": 120.0,
+              "cacheReadCostPerMillion": 2.0,
+              "cacheCreationCostPerMillion": 25.0
+            }
+          ],
+          "contextTiers": [
+            {
+              "threshold": 128000,
+              "inputCostPerMillion": 35.0,
+              "outputCostPerMillion": 210.0,
+              "cacheReadCostPerMillion": 3.5,
+              "cacheCreationCostPerMillion": 43.75,
+              "dailySlots": [
+                {
+                  "label": "原价128K-峰时",
+                  "windows": [
+                    { "startMinute": 480, "endMinute": 720 },
+                    { "startMinute": 840, "endMinute": 1080 }
+                  ],
+                  "inputCostPerMillion": 40.0,
+                  "outputCostPerMillion": 240.0,
+                  "cacheReadCostPerMillion": 4.0,
+                  "cacheCreationCostPerMillion": 50.0
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "aliases": ["gpt-5.6-terra-high", "gpt-5.6-terra-medium", "gpt-5.6-terra-low"],
+      "family": "gpt"
     },
     {
       "modelId": "gpt-4o-2024-0806",
-      "displayName": "GPT-4o",
       "inputCostPerMillion": 17.5,
       "outputCostPerMillion": 52.5,
       "cacheReadCostPerMillion": 8.75,
       "cacheCreationCostPerMillion": 0,
+      "dailySlots": [],
       "contextTiers": [],
       "timeRules": [
         {
@@ -48,10 +131,12 @@
           "outputCostPerMillion": 26.25,
           "cacheReadCostPerMillion": 4.375,
           "cacheCreationCostPerMillion": 0,
+          "dailySlots": [],
           "contextTiers": []
         }
       ],
-      "aliases": ["gpt-4o"]
+      "aliases": ["gpt-4o"],
+      "family": "gpt"
     }
   ]
 }

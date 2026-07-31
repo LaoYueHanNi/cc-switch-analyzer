@@ -792,6 +792,7 @@ impl AiProxyDbService {
                     cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
                     cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                     representative_epoch: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
+                    slot_key: -1,
                 })
             })
             .map_err(|e| format!("查询上下文档位聚合失败: {}", e))?;

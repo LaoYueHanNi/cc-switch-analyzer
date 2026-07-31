@@ -367,7 +367,8 @@ fn aggregate_by_session_ids(
     // 算 cost
     let mut cost_map: HashMap<String, f64> = HashMap::new();
     if let Some(pricing) = pricing {
-        let cost_lookup = crate::services::precompute::compute_session_costs(&all_req, &pricing);
+        let tz_offset = (chrono::Local::now().offset().local_minus_utc() / 3600) as i64;
+        let cost_lookup = crate::services::precompute::compute_session_costs(&all_req, &pricing, tz_offset);
         for (sid, cost) in cost_lookup {
             if set.contains(&sid) {
                 cost_map.insert(sid, cost);

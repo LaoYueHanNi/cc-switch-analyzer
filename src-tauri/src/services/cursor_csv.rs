@@ -733,6 +733,7 @@ impl DataSource for CursorCsvService {
             &self.filter_records(params),
             Self::tz_offset(params),
             thresholds,
+            None,
         ))
     }
 

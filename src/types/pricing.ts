@@ -5,6 +5,22 @@ export interface PricingFamily {
   label: string
 }
 
+/** 日内峰时窗口（当天分钟数，半开区间 [start, end)） */
+export interface DailyWindow {
+  startMinute: number
+  endMinute: number
+}
+
+/** 扁平峰时价：挂在价格节点上，不再嵌套 contextTiers */
+export interface DailySlot {
+  label: string
+  windows: DailyWindow[]
+  inputCostPerMillion: number
+  outputCostPerMillion: number
+  cacheReadCostPerMillion: number
+  cacheCreationCostPerMillion: number
+}
+
 export interface ContextTier {
   id?: number                     // 时间规则档位行 ID（仅时间规则下的 tier 有）
   threshold: number               // 上下文大小边界（tokens）
@@ -12,6 +28,7 @@ export interface ContextTier {
   outputCostPerMillion: number
   cacheReadCostPerMillion: number
   cacheCreationCostPerMillion: number
+  dailySlots?: DailySlot[]
 }
 
 export interface ModelPricing {
@@ -40,6 +57,7 @@ export interface PricingOverride {
   cacheCreationCostPerMillion: number
   updatedAt: number
   contextTiers: ContextTier[]
+  dailySlots?: DailySlot[]
 }
 
 export interface TimePricingRule {
@@ -53,6 +71,7 @@ export interface TimePricingRule {
   cacheCreationCostPerMillion: number
   label: string
   contextTiers: ContextTier[]
+  dailySlots?: DailySlot[]
 }
 
 export interface CloudPricingTimeRule {
@@ -64,6 +83,7 @@ export interface CloudPricingTimeRule {
   cacheReadCostPerMillion: number
   cacheCreationCostPerMillion: number
   contextTiers: ContextTier[]
+  dailySlots?: DailySlot[]
 }
 
 export interface PricingData {
@@ -82,6 +102,7 @@ export interface PricingData {
   userAliases: string[]
   noCacheSupport?: boolean
   family?: string
+  dailySlots?: DailySlot[]
 }
 
 export interface TokenDimensions {

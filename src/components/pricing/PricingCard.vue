@@ -48,7 +48,7 @@
       </div>
     </div>
 
-    <!-- 时间定价规则 -->
+    <!-- 时间定价规则 + 常驻价（未命中区间时回落） -->
     <div v-if="allTimeRules.length > 0" class="time-rules">
       <div
         v-for="(rule, idx) in allTimeRules"
@@ -60,6 +60,7 @@
         <div class="time-rule-info">
           <span class="time-rule-label">{{ rule.label || '时段定价' }}</span>
           <span class="time-rule-date">{{ formatDate(rule.startTime) }} ~ {{ formatDate(rule.endTime) }}</span>
+          <span v-if="formatDailySlotsSummary(rule.dailySlots)" class="time-rule-date">峰 {{ formatDailySlotsSummary(rule.dailySlots) }}</span>
         </div>
         <template v-if="!rule.readonly">
           <button class="icon-btn" title="编辑" @click="$emit('editTimeRule', timeRules[idx])">✎</button>
@@ -68,6 +69,16 @@
         <template v-else>
           <button class="icon-btn" title="查看" @click="$emit('viewTimeRule', rule)">👁</button>
         </template>
+      </div>
+      <!-- 仅当时间区间盖住常驻时展示，便于对照回落价；常驻已生效则不再重复 -->
+      <div v-if="activeRule" class="time-rule">
+        <span class="time-icon">⏱</span>
+        <div class="time-rule-info">
+          <span class="time-rule-label">{{ baseDisplayRule.label }}</span>
+          <span class="time-rule-date">{{ formatDate(baseDisplayRule.startTime) }} ~ {{ formatDate(baseDisplayRule.endTime) }}</span>
+          <span v-if="formatDailySlotsSummary(baseDisplayRule.dailySlots)" class="time-rule-date">峰 {{ formatDailySlotsSummary(baseDisplayRule.dailySlots) }}</span>
+        </div>
+        <button class="icon-btn" title="查看" @click="$emit('viewTimeRule', baseDisplayRule)">👁</button>
       </div>
     </div>
 
@@ -80,8 +91,8 @@ import { computed } from 'vue'
 import { formatRate } from '@/utils/format'
 import { epochToDateStr } from '@/utils/format'
 import PricingGrid from '@/components/common/PricingGrid.vue'
-import { getActiveRate } from '@/utils/pricing'
-import type { PricingData, TimePricingRule, CloudPricingTimeRule, ContextTier } from '@/types/pricing'
+import { getActiveRate, formatDailySlotsSummary } from '@/utils/pricing'
+import type { PricingData, TimePricingRule, CloudPricingTimeRule, ContextTier, DailySlot } from '@/types/pricing'
 
 interface DisplayTimeRule {
   label: string
@@ -92,6 +103,7 @@ interface DisplayTimeRule {
   cacheReadCostPerMillion: number
   cacheCreationCostPerMillion: number
   contextTiers: ContextTier[]
+  dailySlots?: DailySlot[]
   readonly: boolean
 }
 
@@ -129,6 +141,7 @@ const allTimeRules = computed<DisplayTimeRule[]>(() => {
     cacheReadCostPerMillion: r.cacheReadCostPerMillion,
     cacheCreationCostPerMillion: r.cacheCreationCostPerMillion,
     contextTiers: r.contextTiers || [],
+    dailySlots: r.dailySlots || [],
     readonly: false
   }))
   const cloud: DisplayTimeRule[] = props.cloudTimeRules.map(r => ({
@@ -140,6 +153,7 @@ const allTimeRules = computed<DisplayTimeRule[]>(() => {
     cacheReadCostPerMillion: r.cacheReadCostPerMillion,
     cacheCreationCostPerMillion: r.cacheCreationCostPerMillion,
     contextTiers: r.contextTiers || [],
+    dailySlots: r.dailySlots || [],
     readonly: true
   }))
   return [...user, ...cloud]
@@ -148,6 +162,23 @@ const allTimeRules = computed<DisplayTimeRule[]>(() => {
 const activeRule = computed(() => {
   const now = Math.floor(Date.now() / 1000)
   return allTimeRules.value.find(r => now >= r.startTime && now <= r.endTime) || null
+})
+
+/** 常驻价：未命中任何时间规则时回落；展示区间从最晚规则结束后起算 */
+const baseDisplayRule = computed<DisplayTimeRule>(() => {
+  const maxEnd = allTimeRules.value.reduce((m, r) => Math.max(m, r.endTime), -1)
+  return {
+    label: '常驻价',
+    startTime: maxEnd >= 0 ? maxEnd + 1 : 0,
+    endTime: 4102415999,
+    inputCostPerMillion: props.pricing?.inputCostPerMillion || 0,
+    outputCostPerMillion: props.pricing?.outputCostPerMillion || 0,
+    cacheReadCostPerMillion: props.pricing?.cacheReadCostPerMillion || 0,
+    cacheCreationCostPerMillion: props.pricing?.cacheCreationCostPerMillion || 0,
+    contextTiers: props.contextTiers || [],
+    dailySlots: props.pricing?.dailySlots || [],
+    readonly: true
+  }
 })
 
 function isActive(rule: DisplayTimeRule): boolean {
@@ -163,15 +194,8 @@ const displayTiers = computed(() => {
 })
 
 const activeRates = computed(() => {
-  if (activeRule.value) {
-    return {
-      inputRate: activeRule.value.inputCostPerMillion,
-      outputRate: activeRule.value.outputCostPerMillion,
-      cacheReadRate: activeRule.value.cacheReadCostPerMillion,
-      cacheCreationRate: activeRule.value.cacheCreationCostPerMillion
-    }
-  }
-  return getActiveRate(props.pricing || undefined)
+  const ctx = props.simTokens.input + props.simTokens.cacheRead
+  return getActiveRate(props.pricing || undefined, ctx)
 })
 
 const inputCostComputed = computed(() =>

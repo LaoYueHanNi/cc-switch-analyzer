@@ -66,12 +66,22 @@ export interface FilterParams {
   modelId: string
 }
 
+export interface DailySlotData {
+  label: string
+  windows: Array<{ startMinute: number; endMinute: number }>
+  inputCostPerMillion: number
+  outputCostPerMillion: number
+  cacheReadCostPerMillion: number
+  cacheCreationCostPerMillion: number
+}
+
 export interface PricingOverrideData {
   modelId: string
   input: number
   output: number
   cacheRead: number
   cacheCreation: number
+  dailySlots?: DailySlotData[]
 }
 
 export interface TimePricingRuleData {
@@ -83,6 +93,7 @@ export interface TimePricingRuleData {
   cacheRead: number
   cacheCreation: number
   label: string
+  dailySlots?: DailySlotData[]
 }
 
 export interface UpdateTimePricingRuleData {
@@ -94,6 +105,7 @@ export interface UpdateTimePricingRuleData {
   cacheRead: number
   cacheCreation: number
   label: string
+  dailySlots?: DailySlotData[]
 }
 
 export interface ContextTierData {
@@ -103,6 +115,7 @@ export interface ContextTierData {
   output: number
   cacheRead: number
   cacheCreation: number
+  dailySlots?: DailySlotData[]
 }
 
 export interface TimeRuleContextTierData {
@@ -114,6 +127,7 @@ export interface TimeRuleContextTierData {
   output: number
   cacheRead: number
   cacheCreation: number
+  dailySlots?: DailySlotData[]
 }
 
 export interface DeleteTimePricingRuleData {

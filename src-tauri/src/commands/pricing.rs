@@ -49,6 +49,7 @@ pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, Strin
                 user_aliases: user_alias_map.get(&p.model_id).cloned().unwrap_or_default(),
                 no_cache_support: pricing.get_no_cache_support(&p.model_id),
                 family: pricing.get_family(&p.model_id),
+                daily_slots: pricing.get_model_daily_slots(&p.model_id),
             }
         })
         .collect())
@@ -86,6 +87,7 @@ pub fn set_pricing_override(
     output: f64,
     cache_read: f64,
     cache_creation: f64,
+    daily_slots: Option<Vec<DailySlot>>,
     state: State<AppState>,
 ) -> Result<(), String> {
     if model_id.trim().is_empty() {
@@ -96,7 +98,12 @@ pub fn set_pricing_override(
     }
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
-    apply_set_pricing_override(&app_db, &mut pricing, &model_id, input, output, cache_read, cache_creation)
+    if let Some(slots) = daily_slots {
+        app_db.save_override_with_slots(&model_id, input, output, cache_read, cache_creation, &slots)?;
+        pricing.refresh(&app_db)
+    } else {
+        apply_set_pricing_override(&app_db, &mut pricing, &model_id, input, output, cache_read, cache_creation)
+    }
 }
 
 fn apply_remove_pricing_override(
@@ -131,11 +138,15 @@ pub fn add_time_pricing_rule(
     cache_read: f64,
     cache_creation: f64,
     label: String,
+    daily_slots: Option<Vec<DailySlot>>,
     state: State<AppState>,
 ) -> Result<i64, String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
-    let id = app_db.add_time_override(&model_id, start_time, end_time, input, output, cache_read, cache_creation, &label)?;
+    let slots = daily_slots.unwrap_or_default();
+    let id = app_db.add_time_override_with_slots(
+        &model_id, start_time, end_time, input, output, cache_read, cache_creation, &label, &slots,
+    )?;
     pricing.refresh(&app_db)?;
     Ok(id)
 }
@@ -150,11 +161,14 @@ pub fn update_time_pricing_rule(
     cache_read: f64,
     cache_creation: f64,
     label: String,
+    daily_slots: Option<Vec<DailySlot>>,
     state: State<AppState>,
 ) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
-    app_db.update_time_override(id, start_time, end_time, input, output, cache_read, cache_creation, &label)?;
+    app_db.update_time_override_with_slots(
+        id, start_time, end_time, input, output, cache_read, cache_creation, &label, daily_slots.as_deref(),
+    )?;
     pricing.refresh(&app_db)
 }
 
@@ -177,11 +191,13 @@ pub fn save_override_context_tier(
     output: f64,
     cache_read: f64,
     cache_creation: f64,
+    daily_slots: Option<Vec<DailySlot>>,
     state: State<AppState>,
 ) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
-    app_db.save_override_tier(&model_id, threshold, input, output, cache_read, cache_creation)?;
+    let slots = daily_slots.unwrap_or_default();
+    app_db.save_override_tier_with_slots(&model_id, threshold, input, output, cache_read, cache_creation, &slots)?;
     pricing.refresh(&app_db)
 }
 
@@ -207,11 +223,15 @@ pub fn save_time_rule_context_tier(
     output: f64,
     cache_read: f64,
     cache_creation: f64,
+    daily_slots: Option<Vec<DailySlot>>,
     state: State<AppState>,
 ) -> Result<i64, String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
-    let id = app_db.add_time_override_tier(&model_id, start_time, end_time, threshold, input, output, cache_read, cache_creation)?;
+    let slots = daily_slots.unwrap_or_default();
+    let id = app_db.add_time_override_tier_with_slots(
+        &model_id, start_time, end_time, threshold, input, output, cache_read, cache_creation, &slots,
+    )?;
     pricing.refresh(&app_db)?;
     Ok(id)
 }
@@ -223,11 +243,14 @@ pub fn update_time_rule_context_tier(
     output: f64,
     cache_read: f64,
     cache_creation: f64,
+    daily_slots: Option<Vec<DailySlot>>,
     state: State<AppState>,
 ) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
-    app_db.update_time_override_tier(id, input, output, cache_read, cache_creation)?;
+    app_db.update_time_override_tier_with_slots(
+        id, input, output, cache_read, cache_creation, daily_slots.as_deref(),
+    )?;
     pricing.refresh(&app_db)
 }
 

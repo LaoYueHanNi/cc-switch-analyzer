@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import type { ContextTier } from '@/types/pricing'
+import type { ContextTier, DailySlot } from '@/types/pricing'
 
 /** ContextTierDialog 的初始数据结构 */
 export interface TierEditData {
@@ -8,6 +8,7 @@ export interface TierEditData {
   output: number
   cacheRead: number
   cacheCreation: number
+  dailySlots?: DailySlot[]
 }
 
 /**
@@ -41,7 +42,8 @@ export function useContextTierEditor() {
       input: tier.inputCostPerMillion,
       output: tier.outputCostPerMillion,
       cacheRead: tier.cacheReadCostPerMillion,
-      cacheCreation: tier.cacheCreationCostPerMillion
+      cacheCreation: tier.cacheCreationCostPerMillion,
+      dailySlots: tier.dailySlots ? [...tier.dailySlots] : []
     }
     showTierDialog.value = true
   }
@@ -58,7 +60,8 @@ export function useContextTierEditor() {
       inputCostPerMillion: data.input,
       outputCostPerMillion: data.output,
       cacheReadCostPerMillion: data.cacheRead,
-      cacheCreationCostPerMillion: data.cacheCreation
+      cacheCreationCostPerMillion: data.cacheCreation,
+      dailySlots: data.dailySlots || []
     }
     if (editingTierIdx.value !== null) {
       localTiers.value[editingTierIdx.value] = tier

@@ -117,7 +117,8 @@ export const platformAdapter: PlatformAdapter = {
   async setPricingOverride(data: PricingOverrideData): Promise<void> {
     return invoke<void>('set_pricing_override', {
       modelId: data.modelId, input: data.input, output: data.output,
-      cacheRead: data.cacheRead, cacheCreation: data.cacheCreation
+      cacheRead: data.cacheRead, cacheCreation: data.cacheCreation,
+      dailySlots: data.dailySlots || null
     })
   },
   async removePricingOverride(modelId: string): Promise<void> {
@@ -127,14 +128,16 @@ export const platformAdapter: PlatformAdapter = {
     return invoke<void>('add_time_pricing_rule', {
       modelId: data.modelId, startTime: data.startTime, endTime: data.endTime,
       input: data.input, output: data.output, cacheRead: data.cacheRead,
-      cacheCreation: data.cacheCreation, label: data.label
+      cacheCreation: data.cacheCreation, label: data.label,
+      dailySlots: data.dailySlots || []
     })
   },
   async updateTimePricingRule(data: UpdateTimePricingRuleData): Promise<void> {
     return invoke<void>('update_time_pricing_rule', {
       id: data.id, startTime: data.startTime, endTime: data.endTime,
       input: data.input, output: data.output, cacheRead: data.cacheRead,
-      cacheCreation: data.cacheCreation, label: data.label
+      cacheCreation: data.cacheCreation, label: data.label,
+      dailySlots: data.dailySlots || []
     })
   },
   async deleteTimePricingRule(data: { id: number }): Promise<void> {
@@ -145,10 +148,11 @@ export const platformAdapter: PlatformAdapter = {
   async refreshPricing(): Promise<void> {
     return invoke<void>('refresh_pricing')
   },
-  async saveOverrideContextTier(data: { modelId: string; threshold: number; input: number; output: number; cacheRead: number; cacheCreation: number }): Promise<void> {
+  async saveOverrideContextTier(data: { modelId: string; threshold: number; input: number; output: number; cacheRead: number; cacheCreation: number; dailySlots?: unknown[] }): Promise<void> {
     return invoke<void>('save_override_context_tier', {
       modelId: data.modelId, threshold: data.threshold, input: data.input, output: data.output,
-      cacheRead: data.cacheRead, cacheCreation: data.cacheCreation
+      cacheRead: data.cacheRead, cacheCreation: data.cacheCreation,
+      dailySlots: data.dailySlots || []
     })
   },
   async deleteOverrideContextTier(data: { modelId: string; threshold: number }): Promise<void> {
@@ -156,17 +160,19 @@ export const platformAdapter: PlatformAdapter = {
       modelId: data.modelId, threshold: data.threshold
     })
   },
-  async saveTimeRuleContextTier(data: { modelId: string; startTime: number; endTime: number; threshold: number; input: number; output: number; cacheRead: number; cacheCreation: number }): Promise<void> {
+  async saveTimeRuleContextTier(data: { modelId: string; startTime: number; endTime: number; threshold: number; input: number; output: number; cacheRead: number; cacheCreation: number; dailySlots?: unknown[] }): Promise<void> {
     return invoke<void>('save_time_rule_context_tier', {
       modelId: data.modelId, startTime: data.startTime, endTime: data.endTime,
       threshold: data.threshold, input: data.input, output: data.output,
-      cacheRead: data.cacheRead, cacheCreation: data.cacheCreation
+      cacheRead: data.cacheRead, cacheCreation: data.cacheCreation,
+      dailySlots: data.dailySlots || []
     })
   },
-  async updateTimeRuleContextTier(data: { id: number; input: number; output: number; cacheRead: number; cacheCreation: number }): Promise<void> {
+  async updateTimeRuleContextTier(data: { id: number; input: number; output: number; cacheRead: number; cacheCreation: number; dailySlots?: unknown[] }): Promise<void> {
     return invoke<void>('update_time_rule_context_tier', {
       id: data.id, input: data.input, output: data.output,
-      cacheRead: data.cacheRead, cacheCreation: data.cacheCreation
+      cacheRead: data.cacheRead, cacheCreation: data.cacheCreation,
+      dailySlots: data.dailySlots || []
     })
   },
   async deleteTimeRuleContextTier(id: number): Promise<void> {

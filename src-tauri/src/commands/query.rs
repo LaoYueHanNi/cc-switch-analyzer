@@ -257,6 +257,7 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     };
 
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
+    let tz_offset = (chrono::Local::now().offset().local_minus_utc() / 3600) as i64;
 
     let result: Vec<RealtimeRequestLog> = all_raw.into_iter().map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms, is_codex)| {
         let session_id = if is_codex {
@@ -266,7 +267,7 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
         };
         let context_size = input_tokens + cache_read_tokens;
         let (input_cost, output_cost, cache_read_cost, cache_creation_cost) =
-            if let Some(p) = pricing.get_pricing_at_with_context(&model, created_at, context_size) {
+            if let Some(p) = pricing.get_pricing_at_with_context(&model, created_at, context_size, tz_offset) {
                 (
                     input_tokens as f64 * p.input_cost_per_million / 1_000_000.0,
                     output_tokens as f64 * p.output_cost_per_million / 1_000_000.0,
@@ -307,7 +308,7 @@ pub fn compute_precompute(
     let provider_names = collect_provider_names(sources);
     let provider_breakdown = aggregate_provider_breakdown(&records, &provider_names);
     let combined = aggregate_combined_records(&records, tz_offset);
-    let tier_buckets = aggregate_model_context_tier_buckets(&records, tz_offset, &thresholds);
+    let tier_buckets = aggregate_model_context_tier_buckets(&records, tz_offset, &thresholds, Some(pricing));
 
     log::debug!("[QUERY] summary.requests={}, providers={}, combined_rows={}, tier_buckets={}",
         summary.total_requests, provider_breakdown.len(), combined.len(), tier_buckets.len());
@@ -335,7 +336,7 @@ pub fn compute_precompute(
 
     let mut precomputed = precompute_costs(&agg.daily_trend, &agg.provider_model_tokens, pricing, tz_offset);
 
-    let (tier_costs, ctx_model_costs, ctx_model_breakdown, ctx_day_cost_map) = build_context_tier_and_model_costs(&tier_buckets, pricing);
+    let (tier_costs, ctx_model_costs, ctx_model_breakdown, ctx_day_cost_map) = build_context_tier_and_model_costs(&tier_buckets, pricing, tz_offset);
     precomputed.model_context_tier_costs = tier_costs;
 
     let mut compare_buckets_map: HashMap<String, Vec<CompareBucket>> = HashMap::new();
@@ -350,6 +351,7 @@ pub fn compute_precompute(
             output_tokens: bucket.output_tokens,
             cache_read: bucket.cache_read,
             cache_creation: bucket.cache_creation,
+            slot_key: bucket.slot_key,
         };
         compare_buckets_map
             .entry(bucket.model.clone())
@@ -528,9 +530,10 @@ pub fn query_sessions_with_cost(
     };
 
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
+    let tz_offset = params.tz_offset.unwrap_or(0);
 
-    let session_costs = compute_session_costs(&session_request_tokens, &pricing);
-    let session_model_costs = compute_session_model_costs(&session_request_tokens, &session_model_tokens, &pricing);
+    let session_costs = compute_session_costs(&session_request_tokens, &pricing, tz_offset);
+    let session_model_costs = compute_session_model_costs(&session_request_tokens, &session_model_tokens, &pricing, tz_offset);
 
     let enriched: Vec<SessionWithCost> = filtered_sessions
         .iter()
@@ -652,7 +655,8 @@ pub fn query_session_project_groups(
         cache_read: r.cache_read,
         cache_creation: r.cache_creation,
     }).collect();
-    let session_costs = compute_session_costs(&all_request_tokens, &pricing);
+    let tz_offset = params.tz_offset.unwrap_or(0);
+    let session_costs = compute_session_costs(&all_request_tokens, &pricing, tz_offset);
 
     // 3.5 构建合并后的会话列表（按 codex_session_id 合并，保留原始 session_id 的 cost/project 映射）
     let merged_sessions = merge_codex_sessions(&all_sessions, &codex_mapping, &project_map, &source_type_map, &session_costs);
@@ -787,8 +791,9 @@ pub fn query_project_session_details(
     };
 
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
-    let session_costs = compute_session_costs(&all_request_tokens, &pricing);
-    let session_model_costs = compute_session_model_costs(&all_request_tokens, &all_model_tokens, &pricing);
+    let tz_offset = params.tz_offset.unwrap_or(0);
+    let session_costs = compute_session_costs(&all_request_tokens, &pricing, tz_offset);
+    let session_model_costs = compute_session_model_costs(&all_request_tokens, &all_model_tokens, &pricing, tz_offset);
 
     // 4. 批量构建 source_path
     let source_path_map: HashMap<String, String> = {

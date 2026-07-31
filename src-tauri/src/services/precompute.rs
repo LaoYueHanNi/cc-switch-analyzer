@@ -32,7 +32,7 @@ pub fn precompute_costs(
 
     for row in daily_trend {
         let epoch = day_to_epoch_local(&row.day, tz_offset);
-        let p_at = ps.get_pricing_at(&row.model, epoch);
+        let p_at = ps.get_pricing_at(&row.model, epoch, tz_offset);
         let mut day_cost = 0.0f64;
         let mut day_cost_breakdown = vec![0.0f64, 0.0f64, 0.0f64, 0.0f64];
 
@@ -126,12 +126,13 @@ pub fn precompute_costs(
 pub fn compute_session_costs(
     session_request_tokens: &[SessionRequestToken],
     ps: &PricingEngine,
+    tz_offset: i64,
 ) -> HashMap<String, f64> {
     let mut session_costs: HashMap<String, f64> = HashMap::new();
 
     for req in session_request_tokens {
         let context_size = req.input_tokens + req.cache_read;
-        if let Some(pricing) = ps.get_pricing_at_with_context(&req.model, req.created_at, context_size) {
+        if let Some(pricing) = ps.get_pricing_at_with_context(&req.model, req.created_at, context_size, tz_offset) {
             let cost = ps.calculate_cost(
                 &pricing,
                 req.input_tokens,
@@ -151,6 +152,7 @@ pub fn compute_session_model_costs(
     session_request_tokens: &[SessionRequestToken],
     session_model_tokens: &[SessionModelToken],
     ps: &PricingEngine,
+    tz_offset: i64,
 ) -> HashMap<String, HashMap<String, SessionModelCostData>> {
     let mut result: HashMap<String, HashMap<String, SessionModelCostData>> = HashMap::new();
 
@@ -177,7 +179,7 @@ pub fn compute_session_model_costs(
     // 从请求级数据累加费用
     for req in session_request_tokens {
         let context_size = req.input_tokens + req.cache_read;
-        let pricing = match ps.get_pricing_at_with_context(&req.model, req.created_at, context_size) {
+        let pricing = match ps.get_pricing_at_with_context(&req.model, req.created_at, context_size, tz_offset) {
             Some(p) => p,
             None => continue,
         };
@@ -308,6 +310,7 @@ pub fn aggregate_combined_breakdown(combined: &[CombinedBreakdownRow]) -> Combin
 pub fn build_context_tier_and_model_costs(
     tier_buckets: &[crate::models::ModelContextTierBucket],
     ps: &PricingEngine,
+    tz_offset: i64,
 ) -> (HashMap<String, Vec<ContextTierCost>>, HashMap<String, f64>, HashMap<String, Vec<f64>>, HashMap<String, f64>) {
     let mut tier_costs_map: HashMap<String, Vec<ContextTierCost>> = HashMap::new();
     let mut model_costs: HashMap<String, f64> = HashMap::new();
@@ -316,7 +319,7 @@ pub fn build_context_tier_and_model_costs(
 
     for bucket in tier_buckets {
         let pricing_context = bucket.context_tier.max(0);
-        let pricing = match ps.get_pricing_at_with_context(&bucket.model, bucket.representative_epoch, pricing_context) {
+        let pricing = match ps.get_pricing_at_with_context(&bucket.model, bucket.representative_epoch, pricing_context, tz_offset) {
             Some(p) => p,
             None => continue,
         };
@@ -386,6 +389,7 @@ mod tests {
                 aliases: vec![],
                 no_cache_support: false,
                 family: "claude".to_string(),
+                daily_slots: vec![],
             }],
         }).unwrap();
         let mut engine = PricingEngine::new();

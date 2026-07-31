@@ -397,13 +397,15 @@ pub fn aggregate_session_model_tokens(records: &[RawRecord]) -> Vec<SessionModel
 /// 聚合上下文档位桶：
 /// context_width = input_tokens + cache_read
 /// CASE WHEN context_width >= threshold THEN threshold
-/// GROUP BY (model, day, tier), MIN(created_at) as representative_epoch
+/// GROUP BY (model, day, tier, slot_key), MIN(created_at) as representative_epoch
 pub fn aggregate_model_context_tier_buckets(
     records: &[RawRecord],
     tz_offset: i64,
     thresholds: &[i64],
+    pricing: Option<&crate::services::pricing_engine::PricingEngine>,
 ) -> Vec<ModelContextTierBucket> {
-    if thresholds.is_empty() {
+    let split_slots = pricing.map(|p| p.has_any_daily_slots()).unwrap_or(false);
+    if thresholds.is_empty() && !split_slots {
         return Vec::new();
     }
 
@@ -419,20 +421,32 @@ pub fn aggregate_model_context_tier_buckets(
         representative_epoch: i64,
     }
 
-    let mut map: HashMap<(String, String, i64), Acc> = HashMap::new();
+    let mut map: HashMap<(String, String, i64, i64), Acc> = HashMap::new();
 
     for r in records {
         let context_width = r.input_tokens + r.cache_read;
 
         // 找到匹配的档位：最大的 <= context_width 的阈值
-        let tier = sorted_thresholds.iter()
-            .rev()
-            .find(|&&t| context_width >= t)
-            .copied()
-            .unwrap_or(0);
+        let tier = if sorted_thresholds.is_empty() {
+            0
+        } else {
+            sorted_thresholds.iter()
+                .rev()
+                .find(|&&t| context_width >= t)
+                .copied()
+                .unwrap_or(0)
+        };
+
+        let slot_key = if split_slots {
+            pricing
+                .map(|p| p.get_matched_slot_key(&r.model, r.created_at, context_width, tz_offset))
+                .unwrap_or(-1)
+        } else {
+            -1
+        };
 
         let day = to_day(r.created_at, tz_offset);
-        let key = (r.model.clone(), day, tier);
+        let key = (r.model.clone(), day, tier, slot_key);
 
         map.entry(key)
             .and_modify(|e| {
@@ -455,7 +469,7 @@ pub fn aggregate_model_context_tier_buckets(
     }
 
     map.into_iter()
-        .map(|((model, day, context_tier), acc)| ModelContextTierBucket {
+        .map(|((model, day, context_tier, slot_key), acc)| ModelContextTierBucket {
             model,
             day,
             context_tier,
@@ -464,6 +478,7 @@ pub fn aggregate_model_context_tier_buckets(
             cache_read: acc.cache_read,
             cache_creation: acc.cache_creation,
             representative_epoch: acc.representative_epoch,
+            slot_key,
         })
         .collect()
 }
@@ -695,7 +710,7 @@ mod tests {
             rec("s", "A", "p", 3000, 60000, 0, 0, 0, 0), // ctx=60000 → tier 50000
             rec("s", "A", "p", 1500, 60000, 0, 0, 0, 0), // ctx=60000 → tier 50000，合并
         ];
-        let v = aggregate_model_context_tier_buckets(&records, 0, &[10000, 50000]);
+        let v = aggregate_model_context_tier_buckets(&records, 0, &[10000, 50000], None);
         assert_eq!(v.len(), 3); // tier: 0, 10000, 50000
         let t50k = v.iter().find(|x| x.context_tier == 50000).unwrap();
         assert_eq!(t50k.input_tokens, 120000); // 60000+60000
@@ -708,6 +723,6 @@ mod tests {
     #[test]
     fn aggregate_model_context_tier_buckets_empty_thresholds() {
         let records = vec![rec("s", "A", "p", 0, 1000, 0, 0, 0, 0)];
-        assert!(aggregate_model_context_tier_buckets(&records, 0, &[]).is_empty());
+        assert!(aggregate_model_context_tier_buckets(&records, 0, &[], None).is_empty());
     }
 }
