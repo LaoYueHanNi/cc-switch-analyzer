@@ -4,6 +4,17 @@
     "date": "2026-07-31",
     "commits": [
       {
+        "hash": "ef82173",
+        "subject": "fix(cursor): Auto模型归因不再误判为模型不对",
+        "date": "2026-07-31"
+      }
+    ]
+  },
+  {
+    "version": "0.7.40",
+    "date": "2026-07-31",
+    "commits": [
+      {
         "hash": "18fb953",
         "subject": "feat(trend): 按模型对比支持按家族分组",
         "date": "2026-07-31"
