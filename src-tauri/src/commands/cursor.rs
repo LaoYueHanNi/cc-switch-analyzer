@@ -38,6 +38,7 @@ pub struct CursorStatus {
     pub membership_type: Option<String>,
     pub attribution_enabled: bool,
     pub hook_installed: bool,
+    pub hook_writing_enabled: bool,
     pub local_event_count: i64,
     pub attribution_hint: String,
     pub attribution_stats: AttributionTokenStats,
@@ -108,6 +109,7 @@ fn build_cursor_status(state: &State<AppState>) -> Result<CursorStatus, String> 
 
     let attribution_enabled = cursor_local_hook::is_attribution_enabled();
     let hook_installed = cursor_local_hook::is_hook_installed();
+    let hook_writing_enabled = cursor_local_hook::is_hook_writing_enabled();
     let local_event_count = cursor_local_hook::local_event_count() as i64;
     let mut attribution_hint = cursor_local_hook::attribution_hint(attribution_enabled);
     if attribution_enabled && !attribution_hint.is_empty() && !attribution_hint.contains("多账号") {
@@ -204,6 +206,7 @@ fn build_cursor_status(state: &State<AppState>) -> Result<CursorStatus, String> 
         membership_type: None,
         attribution_enabled,
         hook_installed,
+        hook_writing_enabled,
         local_event_count,
         attribution_hint,
         attribution_stats,
@@ -251,10 +254,25 @@ pub fn ensure_all_cursor_sources_registered(state: &State<AppState>) -> Result<(
 pub fn reload_cursor_sources(state: &State<AppState>) -> Result<(), String> {
     let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
     for entry in sources.iter_mut() {
-        if matches!(entry.db_type, DbType::Cursor) {
+        if matches!(entry.db_type, DbType::Cursor | DbType::CursorByok) {
             let path = entry.path.clone();
             if let Err(e) = entry.source.open(&path) {
                 log::warn!("[CURSOR] reload {} failed: {}", path, e);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 查询前轻量重载 Cursor-BYOK 数据源。
+/// usage.json mtime 未变化时 open 内部直接跳过解析，开销近似一次 stat。
+pub fn reload_cursor_byok_sources(state: &State<AppState>) -> Result<(), String> {
+    let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+    for entry in sources.iter_mut() {
+        if matches!(entry.db_type, DbType::CursorByok) {
+            let path = entry.path.clone();
+            if let Err(e) = entry.source.open(&path) {
+                log::warn!("[BYOK] reload {} failed: {}", path, e);
             }
         }
     }
@@ -270,6 +288,8 @@ fn save_sources(state: &State<AppState>) -> Result<Vec<SourceInfo>, String> {
 
 /// 查询前自动同步 Cursor 缓存并在有更新时重载数据源
 pub fn sync_and_reload_if_needed(state: &State<AppState>) -> Result<(), String> {
+    // Cursor-BYOK 是本地文件数据源，先重载（mtime 未变化时零开销）
+    reload_cursor_byok_sources(state)?;
     // 离线账号也要确保已注册
     if utils::any_cursor_usage_csv_exists() {
         let _ = ensure_all_cursor_sources_registered(state);
@@ -549,6 +569,16 @@ pub fn cursor_toggle_attribution(
         status.attribution_hint = hint;
     }
     Ok(status)
+}
+
+#[tauri::command]
+pub fn cursor_set_hook_writing(
+    enabled: bool,
+    state: State<AppState>,
+) -> Result<CursorStatus, String> {
+    cursor_local_hook::set_hook_writing_enabled(enabled)?;
+    log::info!("[CURSOR] hook writing enabled={}", enabled);
+    build_cursor_status(&state)
 }
 
 #[tauri::command]
