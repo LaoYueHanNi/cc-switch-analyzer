@@ -209,8 +209,6 @@ export interface CursorStatusInfo {
   cachePath: string | null
   attributionEnabled?: boolean
   hookInstalled?: boolean
-  /** Hook 是否允许继续写入新记录（false = 已暂停，仅用已有记录） */
-  hookWritingEnabled?: boolean
   localEventCount?: number
   attributionHint?: string
   attributionStats?: AttributionTokenStats
@@ -247,7 +245,6 @@ export interface DefaultPaths {
   opencode: string | null
   aiProxy: string | null
   cursor: string | null
-  cursorByok: string | null
 }
 
 export interface TmServiceStatus {

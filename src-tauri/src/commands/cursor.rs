@@ -254,25 +254,10 @@ pub fn ensure_all_cursor_sources_registered(state: &State<AppState>) -> Result<(
 pub fn reload_cursor_sources(state: &State<AppState>) -> Result<(), String> {
     let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
     for entry in sources.iter_mut() {
-        if matches!(entry.db_type, DbType::Cursor | DbType::CursorByok) {
+        if matches!(entry.db_type, DbType::Cursor) {
             let path = entry.path.clone();
             if let Err(e) = entry.source.open(&path) {
                 log::warn!("[CURSOR] reload {} failed: {}", path, e);
-            }
-        }
-    }
-    Ok(())
-}
-
-/// 查询前轻量重载 Cursor-BYOK 数据源。
-/// usage.json mtime 未变化时 open 内部直接跳过解析，开销近似一次 stat。
-pub fn reload_cursor_byok_sources(state: &State<AppState>) -> Result<(), String> {
-    let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
-    for entry in sources.iter_mut() {
-        if matches!(entry.db_type, DbType::CursorByok) {
-            let path = entry.path.clone();
-            if let Err(e) = entry.source.open(&path) {
-                log::warn!("[BYOK] reload {} failed: {}", path, e);
             }
         }
     }
@@ -288,8 +273,6 @@ fn save_sources(state: &State<AppState>) -> Result<Vec<SourceInfo>, String> {
 
 /// 查询前自动同步 Cursor 缓存并在有更新时重载数据源
 pub fn sync_and_reload_if_needed(state: &State<AppState>) -> Result<(), String> {
-    // Cursor-BYOK 是本地文件数据源，先重载（mtime 未变化时零开销）
-    reload_cursor_byok_sources(state)?;
     // 离线账号也要确保已注册
     if utils::any_cursor_usage_csv_exists() {
         let _ = ensure_all_cursor_sources_registered(state);

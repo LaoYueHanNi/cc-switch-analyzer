@@ -56,22 +56,6 @@ pub fn get_default_ai_proxy_db_path() -> Result<std::path::PathBuf, String> {
     Ok(home.join(".ai-agent-tools").join("data").join("access_log.db"))
 }
 
-/// 获取默认 Cursor-BYOK history 目录（usage.json 所在目录）
-pub fn get_default_cursor_byok_history_path() -> Result<std::path::PathBuf, String> {
-    let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;
-    Ok(home
-        .join(".cursor-local-assistant-v2")
-        .join("history"))
-}
-
-/// Cursor-BYOK 是否有可用数据（默认 history 目录存在 usage.json）
-pub fn has_cursor_byok_usage() -> bool {
-    get_default_cursor_byok_history_path()
-        .ok()
-        .map(|p| p.join("usage.json").is_file())
-        .unwrap_or(false)
-}
-
 /// Cursor 凭证文件路径
 pub fn get_cursor_credentials_path() -> Result<std::path::PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;

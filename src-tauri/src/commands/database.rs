@@ -47,11 +47,6 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
         {
             defaults.push(p);
         }
-        if crate::utils::has_cursor_byok_usage() {
-            if let Ok(p) = crate::utils::get_default_cursor_byok_history_path() {
-                defaults.push(p.to_string_lossy().to_string());
-            }
-        }
         if cursor_should_auto_load() {
             if let Ok(caches) = crate::utils::list_cursor_account_caches() {
                 for acc in caches {
@@ -334,10 +329,6 @@ fn validate_db_path(file_path: &str) -> Result<std::path::PathBuf, String> {
     let path = std::path::Path::new(file_path);
     let canonical = std::fs::canonicalize(path)
         .map_err(|e| format!("路径不存在或无法访问: {} ({})", file_path, e))?;
-    if canonical.is_dir() {
-        // 目录型数据源（Cursor 缓存 / Cursor-BYOK history），类型由 create_source_entry 判定
-        return strip_windows_unc(&canonical);
-    }
     if !canonical.is_file() {
         return Err(format!("路径不是文件: {}", canonical.display()));
     }
@@ -351,11 +342,7 @@ fn validate_db_path(file_path: &str) -> Result<std::path::PathBuf, String> {
             ));
         }
     }
-    strip_windows_unc(&canonical)
-}
-
-/// Windows 的 canonicalize 会返回 \\?\UNC 前缀，去掉它
-fn strip_windows_unc(canonical: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    // Windows 的 canonicalize 会返回 \\?\UNC 前缀，去掉它
     #[cfg(target_os = "windows")]
     {
         let s = canonical.to_string_lossy().to_string();
@@ -363,7 +350,7 @@ fn strip_windows_unc(canonical: &std::path::Path) -> Result<std::path::PathBuf, 
             return Ok(std::path::PathBuf::from(stripped));
         }
     }
-    Ok(canonical.to_path_buf())
+    Ok(canonical)
 }
 
 fn refresh_pricing(state: &AppState) -> Result<(), String> {
@@ -432,7 +419,6 @@ pub struct DefaultPaths {
     pub opencode: Option<String>,
     pub ai_proxy: Option<String>,
     pub cursor: Option<String>,
-    pub cursor_byok: Option<String>,
 }
 
 #[tauri::command]
@@ -445,9 +431,7 @@ pub fn get_default_paths() -> Result<DefaultPaths, String> {
         .map(|p| best_default_path(&p));
     let cursor = crate::utils::get_cursor_cache_dir().ok()
         .map(|p| p.to_string_lossy().to_string());
-    let cursor_byok = crate::utils::get_default_cursor_byok_history_path().ok()
-        .map(|p| p.to_string_lossy().to_string());
-    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, cursor_byok })
+    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor })
 }
 
 fn cursor_should_auto_load() -> bool {
@@ -460,10 +444,6 @@ fn source_mtime(path: &str, db_type: &crate::services::data_source::DbType) -> O
         DbType::Cursor => {
             let csv = std::path::Path::new(path).join("usage.csv");
             std::fs::metadata(csv).ok()
-        }
-        DbType::CursorByok => {
-            let usage = std::path::Path::new(path).join("usage.json");
-            std::fs::metadata(usage).ok()
         }
         _ => std::fs::metadata(path).ok(),
     }

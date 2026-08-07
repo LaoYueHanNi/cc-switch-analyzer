@@ -233,17 +233,6 @@
       </div>
 
       <div class="acc-dlg-row">
-        <span class="acc-dlg-k">写入记录</span>
-        <n-switch
-          size="small"
-          :value="cursorStatus.hookWritingEnabled ?? true"
-          :disabled="hookWritingToggling"
-          @update:value="onToggleHookWriting"
-        />
-      </div>
-      <p class="acc-dlg-hint">关闭后不再写入新记录，已有记录继续用于归因识别 token</p>
-
-      <div class="acc-dlg-row">
         <span class="acc-dlg-k">Hook 备份</span>
         <select
           class="lookback-select"
@@ -319,7 +308,7 @@ const emptyQuad = (): TokenQuad => ({ input: 0, output: 0, cacheRead: 0, cacheCr
 const dbStore = useDatabaseStore()
 const { addDatabase, removeDatabase, refreshAfterToggle } = useDatabase()
 
-const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null, cursor: null, cursorByok: null })
+const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null, cursor: null })
 
 const cursorStatus = ref<CursorStatusInfo>({
   loggedIn: false,
@@ -329,7 +318,6 @@ const cursorStatus = ref<CursorStatusInfo>({
   cachePath: null,
   attributionEnabled: false,
   hookInstalled: false,
-  hookWritingEnabled: true,
   localEventCount: 0,
   attributionHint: '',
   attributionStats: { csvTotal: emptyQuad(), filteredOut: emptyQuad() },
@@ -345,7 +333,6 @@ const sessionToken = ref('')
 const loginLoading = ref(false)
 const cursorSyncing = ref(false)
 const attributionToggling = ref(false)
-const hookWritingToggling = ref(false)
 const lookbackSaving = ref(false)
 const filterStartSaving = ref(false)
 const hookBackupSaving = ref(false)
@@ -539,22 +526,6 @@ async function onToggleAttribution(enabled: boolean): Promise<void> {
   }
 }
 
-async function onToggleHookWriting(enabled: boolean): Promise<void> {
-  hookWritingToggling.value = true
-  try {
-    cursorStatus.value = await platformAdapter.cursorSetHookWriting(enabled)
-    hookDialogFeedback.value = {
-      ok: true,
-      text: enabled ? '已恢复写入 Hook 记录' : '已暂停写入，已有记录仍可用于归因',
-    }
-  } catch (e) {
-    console.error('[cursor] toggle hook writing failed:', e)
-    hookDialogFeedback.value = { ok: false, text: String(e) }
-  } finally {
-    hookWritingToggling.value = false
-  }
-}
-
 async function commitFilterStart(): Promise<void> {
   const epoch = bjPartsToEpoch(filterStartDateDraft.value, filterStartTimeDraft.value)
   if (epoch == null) {
@@ -691,26 +662,13 @@ const slots = computed(() => [
     sourceId: dbStore.sources.find(s => s.dbType === 'Cursor')?.id || '',
     enabled: cursorAnyEnabled.value,
   },
-  {
-    key: 'cursor-byok',
-    label: 'Cursor-BYOK',
-    path: dbStore.sources.find(s => s.dbType === 'Cursor-BYOK')?.path || '',
-    defaultPath: defaultPaths.value.cursorByok,
-    sourceId: dbStore.sources.find(s => s.dbType === 'Cursor-BYOK')?.id || '',
-    enabled: dbStore.sources.find(s => s.dbType === 'Cursor-BYOK')?.enabled ?? true,
-  },
 ])
 
 async function onSelect(key: string): Promise<void> {
   const slot = slots.value.find(s => s.key === key)
-  let filePath: string | null
-  if (key === 'cursor-byok') {
-    filePath = await platformAdapter.pickDirectory('选择 Cursor-BYOK history 目录')
-  } else {
-    filePath = await platformAdapter.pickDatabaseFile(slot?.defaultPath || undefined)
-  }
+  const filePath = await platformAdapter.pickDatabaseFile(slot?.defaultPath || undefined)
   if (!filePath) return
-  const dbType = key === 'cc-switch' ? 'CC-Switch' : key === 'opencode' ? 'OpenCode' : key === 'ai-proxy' ? 'AI-Proxy' : 'Cursor-BYOK'
+  const dbType = key === 'cc-switch' ? 'CC-Switch' : key === 'opencode' ? 'OpenCode' : 'AI-Proxy'
   const existing = dbStore.sources.find(s => s.dbType === dbType)
   if (existing) {
     await removeDatabase(existing.id)
@@ -719,7 +677,7 @@ async function onSelect(key: string): Promise<void> {
 }
 
 async function onRemove(key: string): Promise<void> {
-  const dbType = key === 'cc-switch' ? 'CC-Switch' : key === 'opencode' ? 'OpenCode' : key === 'ai-proxy' ? 'AI-Proxy' : 'Cursor-BYOK'
+  const dbType = key === 'cc-switch' ? 'CC-Switch' : key === 'opencode' ? 'OpenCode' : 'AI-Proxy'
   const src = dbStore.sources.find(s => s.dbType === dbType)
   if (src) {
     await removeDatabase(src.id)
@@ -816,10 +774,6 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 
 .source-dot.cursor {
   background: #6c5ce7;
-}
-
-.source-dot.cursor-byok {
-  background: #00b894;
 }
 
 .source-name {

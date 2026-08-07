@@ -2,7 +2,6 @@ pub mod app_db;
 pub mod ai_proxy_db;
 pub mod cloud_pricing;
 pub mod codex_sessions;
-pub mod cursor_byok_db;
 pub mod cursor_csv;
 pub mod cursor_attribution;
 pub mod cursor_hook_backup;
