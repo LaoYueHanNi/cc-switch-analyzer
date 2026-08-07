@@ -4,6 +4,22 @@
     "date": "2026-08-07",
     "commits": [
       {
+        "hash": "b2871b9",
+        "subject": "Revert \"feat(source): 支持 Cursor-BYOK 数据源\"",
+        "date": "2026-08-07"
+      },
+      {
+        "hash": "fdb783c",
+        "subject": "fix(http): 接口按 enabled 过滤数据源，禁用源不再重复计数",
+        "date": "2026-08-07"
+      }
+    ]
+  },
+  {
+    "version": "0.7.42",
+    "date": "2026-08-07",
+    "commits": [
+      {
         "hash": "6cf0c4e",
         "subject": "feat(cursor): Hook 支持暂停写入，已有记录继续归因",
         "date": "2026-08-07"
