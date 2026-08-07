@@ -254,13 +254,15 @@ fn query_today_data(shared: &SharedState, tz_offset: i64) -> Result<TmTodayData,
     };
 
     // 只在锁期间读取路径列表，释放后创建独立的 DataSource 实例
+    // 按 enabled 过滤：HTTP 接口需尊重用户在 UI 里的数据源开关，否则
+    // create_source_entry 重建时会硬编码 enabled=true，被禁用的源会"复活"
     let paths: Vec<String> = {
         let sources = shared.data_sources.read().map_err(|e| e.to_string())?;
-        if sources.is_empty() {
-            return Err("no_database_loaded".to_string());
-        }
-        sources.iter().map(|s| s.path.clone()).collect()
+        sources.iter().filter(|s| s.enabled).map(|s| s.path.clone()).collect()
     };
+    if paths.is_empty() {
+        return Err("no_database_loaded".to_string());
+    }
 
     // 为每个路径创建独立的只读 DataSource（独立 SQLite 连接）
     let independent_sources: Vec<_> = paths
