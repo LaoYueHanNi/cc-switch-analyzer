@@ -280,6 +280,9 @@ export const platformAdapter: PlatformAdapter = {
   async cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo> {
     return invoke('cursor_toggle_attribution', { enabled })
   },
+  async cursorSetHookWriting(enabled: boolean): Promise<CursorStatusInfo> {
+    return invoke('cursor_set_hook_writing', { enabled })
+  },
   async cursorSetAttributionFilterStart(epoch: number): Promise<CursorStatusInfo> {
     return invoke('cursor_set_attribution_filter_start', { epoch })
   },

@@ -29,6 +29,14 @@ function Write-Heartbeat {
   } catch {}
 }
 
+# Pause switch: when .hook-write-disabled exists, stop writing new records.
+# Existing requests.jsonl keeps serving attribution / token identification.
+$disabledFile = Join-Path $here '.hook-write-disabled'
+if (Test-Path -LiteralPath $disabledFile) {
+  Write-Heartbeat -ok $true -eventName 'paused'
+  exit 0
+}
+
 $bytes = New-Object byte[] 0
 try {
   $stdin = [Console]::OpenStandardInput()

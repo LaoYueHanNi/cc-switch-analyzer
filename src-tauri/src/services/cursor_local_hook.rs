@@ -135,6 +135,28 @@ pub fn local_usage_dir() -> Result<PathBuf, String> {
     utils::get_cursor_local_usage_dir()
 }
 
+/// Hook 写入暂停开关文件名（存在于 local-usage 目录时，hook 脚本跳过写 requests.jsonl）。
+const WRITE_DISABLED_MARKER: &str = ".hook-write-disabled";
+
+/// Hook 是否允许继续写入新记录；false = 已暂停写入，已有记录仍用于归因。
+pub fn is_hook_writing_enabled() -> bool {
+    local_usage_dir()
+        .map(|d| !d.join(WRITE_DISABLED_MARKER).exists())
+        .unwrap_or(true)
+}
+
+pub fn set_hook_writing_enabled(enabled: bool) -> Result<(), String> {
+    let path = local_usage_dir()?.join(WRITE_DISABLED_MARKER);
+    if enabled {
+        if path.exists() {
+            fs::remove_file(&path).map_err(|e| format!("删除写入暂停标记失败: {e}"))?;
+        }
+    } else if !path.exists() {
+        fs::write(&path, b"").map_err(|e| format!("创建写入暂停标记失败: {e}"))?;
+    }
+    Ok(())
+}
+
 pub fn requests_jsonl_path() -> Result<PathBuf, String> {
     Ok(local_usage_dir()?.join("requests.jsonl"))
 }
@@ -434,21 +456,28 @@ pub fn attribution_hint(enabled: bool) -> String {
     }
     let count = local_event_count();
     let installed = is_hook_installed();
+    let paused_suffix = if is_hook_writing_enabled() {
+        ""
+    } else {
+        "（已暂停写入，仅用已有记录）"
+    };
     #[cfg(target_os = "windows")]
     {
-        if installed {
+        let base = if installed {
             format!("已装 Hook · {} 条本机事件（分钟±5 + 模型家族）", count)
         } else {
             format!("已启用但 Hook 未检测到 · {} 条本机事件", count)
-        }
+        };
+        format!("{base}{paused_suffix}")
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = installed;
-        format!(
+        let base = format!(
             "已启用过滤 · {} 条本机事件（自动装 Hook 仅 Windows）",
             count
-        )
+        );
+        format!("{base}{paused_suffix}")
     }
 }
 

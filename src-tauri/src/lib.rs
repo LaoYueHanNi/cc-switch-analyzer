@@ -181,6 +181,7 @@ pub fn run() {
             commands::cursor::cursor_set_attribution_override,
             commands::cursor::cursor_clear_attribution_override,
             commands::cursor::cursor_toggle_attribution,
+            commands::cursor::cursor_set_hook_writing,
             commands::cursor::cursor_set_attribution_filter_start,
             commands::cursor::cursor_set_sync_lookback,
             commands::cursor::cursor_set_hook_backup_period,
