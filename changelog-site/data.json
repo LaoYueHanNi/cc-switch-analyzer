@@ -1,6 +1,22 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-08-07",
+    "commits": [
+      {
+        "hash": "6cf0c4e",
+        "subject": "feat(cursor): Hook 支持暂停写入，已有记录继续归因",
+        "date": "2026-08-07"
+      },
+      {
+        "hash": "039f3c5",
+        "subject": "feat(source): 支持 Cursor-BYOK 数据源",
+        "date": "2026-08-07"
+      }
+    ]
+  },
+  {
+    "version": "0.7.41",
     "date": "2026-07-31",
     "commits": [
       {
