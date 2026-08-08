@@ -1,6 +1,6 @@
 # CC-Switch Analyzer
 
-CC-Switch、OpenCode、AI-Proxy 与 Cursor 用量数据的桌面分析工具。基于 Tauri v2 构建，提供 Token 消耗、模型分布、成本分析等多维度统计；多数据源可同时接入，透明合并查询并做请求级去重。
+CC-Switch、OpenCode、AI-Proxy、Cursor 与 Grok 用量数据的桌面分析工具。基于 Tauri v2 构建，提供 Token 消耗、模型分布、成本分析等多维度统计；多数据源可同时接入，透明合并查询并做请求级去重。
 
 ## 功能特性
 
@@ -26,7 +26,8 @@ CC-Switch、OpenCode、AI-Proxy 与 Cursor 用量数据的桌面分析工具。�
 - **会话分析** - 按项目分组的会话级详细分析，支持密度热力图和模型分解
 - **会话标题识别** - 多来源解析会话标题，快速定位目标会话
 - **Codex 会话** - 识别 Codex 请求并按真实 session 聚合；OpenAI API token 归一化
-- **终端启动** - 一键启动 / 恢复 Claude Code、OpenCode、Codex（Windows / macOS）
+- **Grok Build 会话** - 从本地 Grok 元数据读取会话标题，支持 Grok 终端启动与恢复
+- **终端启动** - 一键启动 / 恢复 Claude Code、OpenCode、Codex、Grok Build（Windows / macOS）
 - **供应商配置启动** - 右键 Claude 图标可选择 CC-Switch 供应商配置启动终端
 - **任务 Tab** - 跨目录、跨 agent 聚合多个会话；一键按分屏规则打开全部会话
 
@@ -47,7 +48,7 @@ CC-Switch、OpenCode、AI-Proxy 与 Cursor 用量数据的桌面分析工具。�
 
 ### 系统功能
 
-- **多数据源** - 同时支持 CC-Switch、OpenCode、AI-Proxy、Cursor；各源可独立启用 / 禁用并持久化
+- **多数据源** - 同时支持 CC-Switch、OpenCode、AI-Proxy、Cursor、Grok Build；各源可独立启用 / 禁用并持久化
 - **深色/亮色模式** - 支持明暗主题切换，配色针对对比度优化
 - **系统托盘** - 最小化到系统托盘后台运行；单实例，重复启动激活已有窗口
 - **自动更新** - 应用内检测和安装更新，可配置代理地址访问 GitHub
@@ -124,6 +125,7 @@ traffic-monitor-plugin/   # TrafficMonitor 插件（仅 Windows）
 | **OpenCode** | 系统数据目录下的 `opencode/opencode.db` |
 | **AI-Proxy** | 本地 AI-Proxy SQLite（设置中可选） |
 | **Cursor** | `~/.cc-switch-analyzer/cursor-cache/<userId>/`（API 同步的 `usage.csv`）；本机 Hook 日志用于精准归因 |
+| **Grok Build** | `~/.grok/{sessions,archived_sessions}/`（只读本地会话元数据） |
 
 > **重要**: 绝不修改 CC-Switch / OpenCode / AI-Proxy 等外部数据库（`SQLITE_OPEN_READ_ONLY`）。Cursor 仅写入应用自身缓存与凭证目录，不改 Cursor 源文件。
 
