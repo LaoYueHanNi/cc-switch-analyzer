@@ -502,6 +502,7 @@ impl ExternalDbService {
              FROM proxy_request_logs l
              {}
                AND l.session_id IS NOT NULL AND l.session_id != ''
+               AND l.app_type != 'claude-desktop'
              GROUP BY l.session_id
              ORDER BY requests DESC
              LIMIT {}",
@@ -856,6 +857,7 @@ impl ExternalDbService {
             FROM proxy_request_logs
             WHERE created_at >= ?
               AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
+              AND app_type != 'claude-desktop'
             GROUP BY bucket
             ORDER BY bucket";
 
@@ -887,6 +889,7 @@ impl ExternalDbService {
                 FROM proxy_request_logs
                 WHERE created_at > ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
+                  AND app_type != 'claude-desktop'
                 ORDER BY created_at DESC", vec![Box::new(s)]),
             None => ("
                 SELECT session_id, model, provider_id, created_at,
@@ -895,6 +898,7 @@ impl ExternalDbService {
                        latency_ms, app_type
                 FROM proxy_request_logs
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
+                  AND app_type != 'claude-desktop'
                 ORDER BY created_at DESC
                 LIMIT 500", vec![]),
         };
@@ -939,6 +943,7 @@ impl ExternalDbService {
                 FROM proxy_request_logs
                 WHERE created_at > ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
+                  AND app_type != 'claude-desktop'
                 ORDER BY created_at DESC", vec![Box::new(s)]),
             None => ("
                 SELECT session_id, model, provider_id, created_at,
@@ -947,6 +952,7 @@ impl ExternalDbService {
                        latency_ms, app_type
                 FROM proxy_request_logs
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
+                  AND app_type != 'claude-desktop'
                 ORDER BY created_at DESC
                 LIMIT 500", vec![]),
         };
@@ -1003,8 +1009,14 @@ impl ExternalDbService {
             let cache_read: i64 = row.get::<_, Option<i64>>(6)?.unwrap_or(0);
             // Codex / Gemini / GrokBuild：input 已含 cache_read，归一为 fresh input
             let input_tokens = normalize_input_tokens(&app_type, raw_input, cache_read);
+            // claude-desktop 每个请求 session_id 唯一，清空以跳过会话聚合
+            let session_id = if app_type == "claude-desktop" {
+                String::new()
+            } else {
+                row.get::<_, Option<String>>(0)?.unwrap_or_default()
+            };
             Ok(RawRecord {
-                session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                session_id,
                 model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 provider_id: provider_id.clone(),
                 created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
