@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-**CC-Switch Analyzer** — CC-Switch 和 OpenCode 代理使用数据的桌面分析工具。
+**CC-Switch Analyzer** — CC-Switch、OpenCode、AI-Proxy 与 Cursor 用量数据的桌面分析工具。
 
 - **版本**: 0.7.43
 - **架构**: Tauri v2（Rust 后端 + Vue 3 前端）
@@ -10,36 +10,44 @@
 
 ## 铁律
 
-- **禁止修改外部数据源数据库**：CC-Switch、OpenCode 等外部数据库只做读取操作（SELECT），绝不执行任何 ALTER TABLE、CREATE INDEX、INSERT、UPDATE、DELETE 等修改操作。这是不可违反的约束。
+- **禁止修改外部数据源数据库**：CC-Switch、OpenCode、AI-Proxy 等外部数据库只做读取操作（SELECT），绝不执行任何 ALTER TABLE、CREATE INDEX、INSERT、UPDATE、DELETE 等修改操作。这是不可违反的约束。
 
 ## 技术栈
 
 | 层级 | 技术 |
 |------|------|
 | 前端 | Vue 3 + TypeScript 5.5 + Naive UI 2.39 + ECharts 5.5 + Pinia 2 + Vue Router 4 |
-| 后端 | Rust 2021 + rusqlite 0.31 + Tauri v2 |
-| 插件 | C++17 + WinHTTP（TrafficMonitor 插件，32 位 DLL） |
+| 后端 | Rust 2021 + rusqlite 0.31 + ureq 3 + Tauri v2 |
+| 插件 | C++17 + WinHTTP（TrafficMonitor 插件，32/64 位 DLL） |
 | 构建 | pnpm + Vite 5.4 + Cargo |
 
 ## 目录结构
 
 ```
 src/                      # Vue 3 前端
-  components/             # UI 组件（charts/, layout/, model/, pricing/, provider/, session/）
-  views/                  # 页面视图（ByModel, ByProvider, Trend, Session, Realtime, Pricing）
-  stores/                 # Pinia stores（database, filter, pricing, query, theme）
-  composables/            # 组合式函数
-  platform/               # 平台适配器（tauri.ts 封装 Tauri IPC 调用）
-  types/                  # TypeScript 类型定义
-  utils/                  # 工具函数（format, pricing, color, constants）
+  components/             # UI 组件（charts/, layout/settings/, model/, pricing/, provider/, session/, task/）
+  views/                  # 页面视图（ByModel, ByProvider, Trend, Session, Realtime, Pricing, Task）
+  stores/                 # Pinia stores（database, filter, pricing, query, task, theme, updater）
+  composables/            # 组合式函数（useAutoRefresh, useContextTierEditor, useDatabase, useFilter,
+                          #               usePricing, useProviderContextMenu, useRealtimePolling,
+                          #               useSessionResume, useSessionTitles）
+  platform/               # 平台适配器（tauri.ts 封装 Tauri IPC 调用，types.ts 类型定义）
+  types/                  # TypeScript 类型定义（common, database, pricing, task）
+  utils/                  # 工具函数（color, constants, family, format, pricing）
 
 src-tauri/                # Rust 后端
-  src/commands/           # Tauri 命令处理器（database, pricing, query, session, traffic_monitor）
-  src/services/           # 业务逻辑（pricing_engine, precompute, external_db, app_db, http_server）
+  src/commands/           # Tauri 命令处理器（cursor, database, pricing, query,
+                          #                   session_manager, session_title, task, traffic_monitor）
+  src/services/           # 业务逻辑（ai_proxy_db, app_db, cloud_pricing, codex_sessions,
+                          #           cursor_attribution, cursor_csv, cursor_hook_backup,
+                          #           cursor_hook_merge, cursor_local_hook, cursor_sync,
+                          #           data_source, dedup, external_db, grok_sessions,
+                          #           http_server, multi_terminal, opencode_db, pipeline,
+                          #           precompute, pricing_engine, session_title）
   src/models.rs           # 数据模型定义
   src/utils.rs            # 工具函数和常量
 
-traffic-monitor-plugin/   # TrafficMonitor 插件（C++ 32 位 DLL）
+traffic-monitor-plugin/   # TrafficMonitor 插件（C++ DLL）
   CCSwitchAnalyzer.h/cpp  # 插件主类（WinHTTP 请求 + JSON 解析）
   TodayTokenItem.h/cpp    # 显示项（Tokens + Cost）
   PluginInterface.h       # TrafficMonitor 插件接口
@@ -88,8 +96,21 @@ powershell.exe -Command "cd 'D:\Code\oyw\cc-switch-analyzer\traffic-monitor-plug
 
 ### 数据库访问
 
-- 外部数据库（cc-switch.db、opencode.db）：**只读**，通过 `rusqlite::SQLITE_OPEN_READ_ONLY` 打开
+- 外部数据库（cc-switch.db、opencode.db、ai-proxy.db）：**只读**，通过 `rusqlite::SQLITE_OPEN_READ_ONLY` 打开
 - 应用自有数据库（pricing.db）：可读写，存储用户自定义定价配置
+- Cursor 数据：应用自身缓存目录（`~/.cc-switch-analyzer/cursor-cache/<userId>/`），不改 Cursor 源文件
+
+### Cursor 用量数据
+
+Cursor 不走 SQLite，而是通过 API 同步 CSV 到本地缓存：
+
+- **CSV 同步**（`cursor_sync.rs`）：使用 Session Token 登录后从 Cursor API 拉取用量 CSV；缓存过期 TTL 24h，过期时查询前自动触发同步
+- **本机归因**（`cursor_attribution.rs`, `cursor_local_hook.rs`）：用本机 Hook 日志按时间窗 + 模型家族匹配 CSV 记录
+- **多账号隔离**：按账号本地分目录缓存；退出登录默认保留已下载 CSV（`cursor_logout(clear_cache=false)`）
+
+### 终端启动
+
+`session_manager.rs` 和 `multi_terminal.rs` 支持启动/恢复四种终端：Claude Code、OpenCode、Codex、Grok Build。Grok Build 会话从 `~/.grok/{sessions,archived_sessions}/` 读取（只读）。
 
 ### TrafficMonitor 插件架构
 

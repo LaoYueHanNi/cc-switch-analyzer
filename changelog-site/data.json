@@ -1,6 +1,22 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-08-08",
+    "commits": [
+      {
+        "hash": "d01d336",
+        "subject": "fix: 会话与实时统计忽略claude-desktop请求",
+        "date": "2026-08-08"
+      },
+      {
+        "hash": "582c88a",
+        "subject": "doc: 同步项目文档至0.7.43",
+        "date": "2026-08-08"
+      }
+    ]
+  },
+  {
+    "version": "0.7.43",
     "date": "2026-08-07",
     "commits": [
       {
