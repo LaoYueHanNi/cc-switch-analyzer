@@ -1,6 +1,17 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-08-12",
+    "commits": [
+      {
+        "hash": "bccf861",
+        "subject": "feat: 接入ZCode数据源",
+        "date": "2026-08-12"
+      }
+    ]
+  },
+  {
+    "version": "0.7.44",
     "date": "2026-08-08",
     "commits": [
       {
@@ -12,6 +23,11 @@
         "hash": "582c88a",
         "subject": "doc: 同步项目文档至0.7.43",
         "date": "2026-08-08"
+      },
+      {
+        "hash": "3d6bed4",
+        "subject": "doc: 同步CLAUDE.md版本号 0.7.21 → 0.7.43",
+        "date": "2026-08-07"
       }
     ]
   },
