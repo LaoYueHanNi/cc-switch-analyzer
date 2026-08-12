@@ -106,12 +106,13 @@ pub trait DataSource: Send + Sync {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DbType {
     ExternalDb,
     OpenCode,
     AiProxy,
     Cursor,
+    ZCode,
 }
 
 impl DbType {
@@ -121,6 +122,19 @@ impl DbType {
             DbType::OpenCode => "OpenCode",
             DbType::AiProxy => "AI-Proxy",
             DbType::Cursor => "Cursor",
+            DbType::ZCode => "ZCode",
+        }
+    }
+
+    /// 由 label 反查类型（前端明确指定时使用，不依赖表名探测）
+    pub fn from_label(label: &str) -> Option<DbType> {
+        match label {
+            "CC-Switch" => Some(DbType::ExternalDb),
+            "OpenCode" => Some(DbType::OpenCode),
+            "AI-Proxy" => Some(DbType::AiProxy),
+            "Cursor" => Some(DbType::Cursor),
+            "ZCode" => Some(DbType::ZCode),
+            _ => None,
         }
     }
 }
@@ -164,6 +178,26 @@ pub fn detect_db_type(path: &str) -> Result<DbType, String> {
         return Ok(DbType::ExternalDb);
     }
 
+    let has_model_usage: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='model_usage'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    let has_turn_usage: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='turn_usage'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+
+    // ZCode 特有问题组合（model_usage + turn_usage），优先于 message（ZCode 也含 message 表）
+    if has_model_usage && has_turn_usage {
+        return Ok(DbType::ZCode);
+    }
+
     let has_message: bool = conn
         .query_row(
             "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='message'",
@@ -192,6 +226,13 @@ pub fn detect_db_type(path: &str) -> Result<DbType, String> {
 }
 
 pub fn create_source_entry(path: &str) -> Result<SourceEntry, String> {
+    create_source_entry_with_type(path, None)
+}
+
+/// 创建数据源条目。
+/// `explicit_type` 为 Some 时使用前端明确指定的类型（不依赖表名探测）；
+/// None 时回退到 `detect_db_type` 表名探测（auto-load 等场景）。
+pub fn create_source_entry_with_type(path: &str, explicit_type: Option<&DbType>) -> Result<SourceEntry, String> {
     let path_obj = Path::new(path);
     if path_obj.is_dir() && super::cursor_csv::detect_cursor_cache(path) {
         let id = SOURCE_ID_COUNTER.fetch_add(1, Ordering::Relaxed).to_string();
@@ -206,12 +247,16 @@ pub fn create_source_entry(path: &str) -> Result<SourceEntry, String> {
         });
     }
 
-    let db_type = detect_db_type(path)?;
+    let db_type = match explicit_type {
+        Some(t) => t.clone(),
+        None => detect_db_type(path)?,
+    };
     let id = SOURCE_ID_COUNTER.fetch_add(1, Ordering::Relaxed).to_string();
     let mut source = match &db_type {
         DbType::ExternalDb => Box::new(super::external_db::ExternalDbService::new()) as Box<dyn DataSource>,
         DbType::OpenCode => Box::new(super::opencode_db::OpenCodeDbService::new()) as Box<dyn DataSource>,
         DbType::AiProxy => Box::new(super::ai_proxy_db::AiProxyDbService::new()) as Box<dyn DataSource>,
+        DbType::ZCode => Box::new(super::zcode_db::ZCodeDbService::new()) as Box<dyn DataSource>,
         DbType::Cursor => return Err("Cursor 数据源需使用缓存目录路径".to_string()),
     };
     source.open(path)?;

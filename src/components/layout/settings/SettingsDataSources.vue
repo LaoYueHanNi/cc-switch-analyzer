@@ -655,6 +655,14 @@ const slots = computed(() => [
     enabled: dbStore.sources.find(s => s.dbType === 'AI-Proxy')?.enabled ?? true,
   },
   {
+    key: 'z-code',
+    label: 'ZCode',
+    path: dbStore.sources.find(s => s.dbType === 'ZCode')?.path || '',
+    defaultPath: defaultPaths.value.zCode,
+    sourceId: dbStore.sources.find(s => s.dbType === 'ZCode')?.id || '',
+    enabled: dbStore.sources.find(s => s.dbType === 'ZCode')?.enabled ?? true,
+  },
+  {
     key: 'cursor',
     label: 'Cursor',
     path: cursorStatus.value.cachePath || dbStore.sources.find(s => s.dbType === 'Cursor')?.path || '',
@@ -664,20 +672,33 @@ const slots = computed(() => [
   },
 ])
 
+// slot key → 后端 dbType 字面量映射
+const DB_TYPE_MAP: Record<string, string> = {
+  'cc-switch': 'CC-Switch',
+  'opencode': 'OpenCode',
+  'ai-proxy': 'AI-Proxy',
+  'z-code': 'ZCode',
+}
+
 async function onSelect(key: string): Promise<void> {
   const slot = slots.value.find(s => s.key === key)
+  console.log('[DEBUG] onSelect key=', key, 'slotPath=', slot?.path)
   const filePath = await platformAdapter.pickDatabaseFile(slot?.defaultPath || undefined)
+  console.log('[DEBUG] pickDatabaseFile ->', filePath)
   if (!filePath) return
-  const dbType = key === 'cc-switch' ? 'CC-Switch' : key === 'opencode' ? 'OpenCode' : 'AI-Proxy'
+  const dbType = DB_TYPE_MAP[key]
+  console.log('[DEBUG] dbType=', dbType)
+  if (!dbType) return
   const existing = dbStore.sources.find(s => s.dbType === dbType)
   if (existing) {
     await removeDatabase(existing.id)
   }
-  await addDatabase(filePath)
+  await addDatabase(filePath, dbType)
 }
 
 async function onRemove(key: string): Promise<void> {
-  const dbType = key === 'cc-switch' ? 'CC-Switch' : key === 'opencode' ? 'OpenCode' : 'AI-Proxy'
+  const dbType = DB_TYPE_MAP[key]
+  if (!dbType) return
   const src = dbStore.sources.find(s => s.dbType === dbType)
   if (src) {
     await removeDatabase(src.id)
@@ -770,6 +791,10 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 
 .source-dot.ai-proxy {
   background: var(--color-green);
+}
+
+.source-dot.z-code {
+  background: #00cec9;
 }
 
 .source-dot.cursor {

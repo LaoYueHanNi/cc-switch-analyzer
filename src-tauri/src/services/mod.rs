@@ -20,6 +20,7 @@ pub mod pipeline;
 pub mod precompute;
 pub mod pricing_engine;
 pub mod session_title;
+pub mod zcode_db;
 
 /// 非 Windows 平台的空实现
 #[cfg(not(target_os = "windows"))]

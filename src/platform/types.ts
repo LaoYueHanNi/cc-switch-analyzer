@@ -245,6 +245,7 @@ export interface DefaultPaths {
   opencode: string | null
   aiProxy: string | null
   cursor: string | null
+  zCode: string | null
 }
 
 export interface TmServiceStatus {
@@ -257,7 +258,7 @@ export interface PlatformAdapter {
   // 数据库
   selectDatabase(): Promise<DbResult | null>
   autoLoadDatabase(): Promise<SourceInfo[]>
-  addDatabase(filePath: string): Promise<SourceInfo[]>
+  addDatabase(filePath: string, dbType?: string): Promise<SourceInfo[]>
   removeDatabase(sourceId: string): Promise<SourceInfo[]>
   toggleDatabase(sourceId: string): Promise<SourceInfo[]>
   listDatabases(): Promise<SourceInfo[]>

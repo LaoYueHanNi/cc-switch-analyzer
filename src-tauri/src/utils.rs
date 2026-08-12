@@ -56,6 +56,12 @@ pub fn get_default_ai_proxy_db_path() -> Result<std::path::PathBuf, String> {
     Ok(home.join(".ai-agent-tools").join("data").join("access_log.db"))
 }
 
+/// 获取默认 ZCode 数据库路径
+pub fn get_default_zcode_db_path() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;
+    Ok(home.join(".zcode").join("cli").join("db").join("db.sqlite"))
+}
+
 /// Cursor 凭证文件路径
 pub fn get_cursor_credentials_path() -> Result<std::path::PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;

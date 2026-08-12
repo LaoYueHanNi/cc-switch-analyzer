@@ -55,9 +55,9 @@ export function useDatabase() {
     }
   }
 
-  async function addDatabase(filePath: string): Promise<boolean> {
+  async function addDatabase(filePath: string, dbType?: string): Promise<boolean> {
     try {
-      const sources = await platformAdapter.addDatabase(filePath)
+      const sources = await platformAdapter.addDatabase(filePath, dbType)
       queryStore.reset()
       await updateFilterOptions()
       await loadPricing()

@@ -2,7 +2,7 @@ use tauri::State;
 
 use crate::AppState;
 use crate::models::*;
-use crate::services::data_source::{create_source_entry, SourceEntry};
+use crate::services::data_source::{create_source_entry, create_source_entry_with_type, SourceEntry};
 use crate::services::pipeline::run_streaming_dedup;
 
 // ========== 数据库操作命令 ==========
@@ -177,10 +177,10 @@ pub fn load_database(file_path: String, state: State<AppState>) -> Result<Vec<So
 }
 
 #[tauri::command]
-pub fn add_database(file_path: String, state: State<AppState>) -> Result<Vec<SourceInfo>, String> {
+pub fn add_database(file_path: String, db_type: Option<String>, state: State<AppState>) -> Result<Vec<SourceInfo>, String> {
     let canonical = validate_db_path(&file_path)?;
     let canonical_str = canonical.to_string_lossy().to_string();
-    log::info!("[DB] add_database: {}", canonical_str);
+    log::info!("[DB] add_database: {} (type={:?})", canonical_str, db_type);
 
     // 检查是否已加载，避免重复
     {
@@ -190,7 +190,11 @@ pub fn add_database(file_path: String, state: State<AppState>) -> Result<Vec<Sou
         }
     }
 
-    let entry = create_source_entry(&canonical_str)?;
+    // 前端明确指定类型时优先使用，避免表名探测误判（如 ZCode 含 message 表被识别为 OpenCode）
+    let explicit = db_type
+        .as_deref()
+        .and_then(crate::services::data_source::DbType::from_label);
+    let entry = create_source_entry_with_type(&canonical_str, explicit.as_ref())?;
     log::info!("[DB] 添加成功 ({})", entry.db_type.label());
 
     let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
@@ -419,6 +423,7 @@ pub struct DefaultPaths {
     pub opencode: Option<String>,
     pub ai_proxy: Option<String>,
     pub cursor: Option<String>,
+    pub z_code: Option<String>,
 }
 
 #[tauri::command]
@@ -431,7 +436,9 @@ pub fn get_default_paths() -> Result<DefaultPaths, String> {
         .map(|p| best_default_path(&p));
     let cursor = crate::utils::get_cursor_cache_dir().ok()
         .map(|p| p.to_string_lossy().to_string());
-    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor })
+    let z_code = crate::utils::get_default_zcode_db_path().ok()
+        .map(|p| best_default_path(&p));
+    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code })
 }
 
 fn cursor_should_auto_load() -> bool {

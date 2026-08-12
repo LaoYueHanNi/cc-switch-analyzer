@@ -47,7 +47,7 @@
         <div class="session-header" :class="{ 'session-new': groupHasNew(group) }" @click="toggleGroup(group.sessionId)">
           <span class="sh-arrow" :class="{ collapsed: collapsedSessions.has(group.sessionId) }">▾</span>
           <span class="sh-project" v-if="getProject(group.sessionId)" :title="getProject(group.sessionId)">{{ getProject(group.sessionId) }}</span>
-          <span class="sh-id">{{ shortSessionId(group.sessionId) }}</span>
+          <span class="sh-id" :class="{ 'sh-id-zcode': group.sessionId === 'ZCode' }">{{ group.sessionId === 'ZCode' ? 'ZCode' : shortSessionId(group.sessionId) }}</span>
           <span class="sh-title" v-if="getTitle(group.sessionId)" :title="getTitle(group.sessionId)">{{ getTitle(group.sessionId) }}</span>
           <span class="sh-ctx">ctx {{ formatNum(group.maxContextWidth) }}</span>
           <span class="sh-count">{{ group.rows.length }} 次<template v-if="groupTierLabel(group)">（{{ groupTierLabel(group) }}）</template></span>
@@ -215,7 +215,8 @@ interface SessionGroup {
 const sessionGroups = computed<SessionGroup[]>(() => {
   const map = new Map<string, RealtimeRequestLog[]>()
   for (const log of logs.value) {
-    const sid = log.sessionId || 'unknown'
+    // ZCode 请求不按会话分组，聚合为单一 "ZCode" 组展示最近记录
+    const sid = log.providerId === 'ZCode' ? 'ZCode' : (log.sessionId || 'unknown')
     if (!map.has(sid)) map.set(sid, [])
     map.get(sid)!.push(log)
   }

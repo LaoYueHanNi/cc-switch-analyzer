@@ -54,8 +54,8 @@ export const platformAdapter: PlatformAdapter = {
   async autoLoadDatabase(): Promise<SourceInfo[]> {
     return invoke<SourceInfo[]>('auto_load_database')
   },
-  async addDatabase(filePath: string): Promise<SourceInfo[]> {
-    return invoke<SourceInfo[]>('add_database', { filePath })
+  async addDatabase(filePath: string, dbType?: string): Promise<SourceInfo[]> {
+    return invoke<SourceInfo[]>('add_database', { filePath, dbType })
   },
   async removeDatabase(sourceId: string): Promise<SourceInfo[]> {
     return invoke<SourceInfo[]>('remove_database', { sourceId })
