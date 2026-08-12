@@ -139,6 +139,13 @@ impl DbType {
     }
 }
 
+/// last_db_paths 持久化条目：路径 + 类型一起保存，重启后不再靠表名探测
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct PersistedSource {
+    pub path: String,
+    pub db_type: String,
+}
+
 pub struct SourceEntry {
     pub id: String,
     pub path: String,

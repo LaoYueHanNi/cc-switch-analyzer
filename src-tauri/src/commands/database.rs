@@ -2,7 +2,7 @@ use tauri::State;
 
 use crate::AppState;
 use crate::models::*;
-use crate::services::data_source::{create_source_entry, create_source_entry_with_type, SourceEntry};
+use crate::services::data_source::{create_source_entry, create_source_entry_with_type, DbType, PersistedSource, SourceEntry};
 use crate::services::pipeline::run_streaming_dedup;
 
 // ========== 数据库操作命令 ==========
@@ -13,64 +13,85 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
     let paths_json = app_db.get_setting("last_db_paths");
     drop(app_db);
 
-    let paths: Vec<String> = paths_json
-        .and_then(|json| serde_json::from_str(&json).ok())
-        .unwrap_or_default();
-
-    if paths.is_empty() {
-        // 兼容旧版：尝试 last_db_path（已废弃，由 last_db_paths 替代）
-        let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-        let single = app_db.get_setting("last_db_path");
-        drop(app_db);
-        if let Some(p) = single {
-            if std::path::Path::new(&p).exists() {
-                return auto_load_paths(&state, vec![p]);
-            }
-        }
-        // 自动探测默认路径
-        let mut defaults = Vec::new();
-        if let Some(p) = crate::utils::get_default_db_path().ok()
-            .and_then(|p| p.to_str().map(|s| s.to_string()))
-            .filter(|p| std::path::Path::new(p).exists())
-        {
-            defaults.push(p);
-        }
-        if let Some(p) = crate::utils::get_default_opencode_db_path().ok()
-            .and_then(|p| p.to_str().map(|s| s.to_string()))
-            .filter(|p| std::path::Path::new(p).exists())
-        {
-            defaults.push(p);
-        }
-        if let Some(p) = crate::utils::get_default_ai_proxy_db_path().ok()
-            .and_then(|p| p.to_str().map(|s| s.to_string()))
-            .filter(|p| std::path::Path::new(p).exists())
-        {
-            defaults.push(p);
-        }
-        if cursor_should_auto_load() {
-            if let Ok(caches) = crate::utils::list_cursor_account_caches() {
-                for acc in caches {
-                    defaults.push(acc.path.to_string_lossy().to_string());
+    // 新格式：路径 + 类型一起持久化，按持久化类型直接打开，不再靠表名探测
+    if let Some(json) = &paths_json {
+        if let Ok(entries) = serde_json::from_str::<Vec<PersistedSource>>(json) {
+            if !entries.is_empty() {
+                let existing: Vec<PersistedSource> = entries
+                    .into_iter()
+                    .filter(|e| std::path::Path::new(&e.path).exists())
+                    .collect();
+                if existing.is_empty() {
+                    log::info!("[DB] 记忆的数据库路径均不存在");
+                    return Ok(Vec::new());
                 }
+                return auto_load_paths(&state, existing);
             }
         }
-        if !defaults.is_empty() {
-            return auto_load_paths(&state, defaults);
+        // 老格式：纯路径数组，fallback 表名探测
+        let paths: Vec<String> = serde_json::from_str(json).unwrap_or_default();
+        if !paths.is_empty() {
+            let existing: Vec<String> = paths
+                .into_iter()
+                .filter(|p| std::path::Path::new(p).exists())
+                .collect();
+            if existing.is_empty() {
+                log::info!("[DB] 记忆的数据库路径均不存在");
+                return Ok(Vec::new());
+            }
+            let entries: Vec<PersistedSource> = existing
+                .into_iter()
+                .map(|path| PersistedSource { path, db_type: String::new() })
+                .collect();
+            return auto_load_paths(&state, entries);
         }
-        log::info!("[DB] 无可加载的数据库");
-        return Ok(Vec::new());
     }
 
-    let existing: Vec<String> = paths.into_iter().filter(|p| std::path::Path::new(p).exists()).collect();
-    if existing.is_empty() {
-        log::info!("[DB] 记忆的数据库路径均不存在");
-        return Ok(Vec::new());
+    // 兼容旧版：尝试 last_db_path（已废弃，由 last_db_paths 替代）
+    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+    let single = app_db.get_setting("last_db_path");
+    drop(app_db);
+    if let Some(p) = single {
+        if std::path::Path::new(&p).exists() {
+            let entries = vec![PersistedSource { path: p, db_type: String::new() }];
+            return auto_load_paths(&state, entries);
+        }
     }
-
-    auto_load_paths(&state, existing)
+    // 自动探测默认路径
+    let mut defaults: Vec<PersistedSource> = Vec::new();
+    if let Some(p) = crate::utils::get_default_db_path().ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .filter(|p| std::path::Path::new(p).exists())
+    {
+        defaults.push(PersistedSource { path: p, db_type: String::new() });
+    }
+    if let Some(p) = crate::utils::get_default_opencode_db_path().ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .filter(|p| std::path::Path::new(p).exists())
+    {
+        defaults.push(PersistedSource { path: p, db_type: String::new() });
+    }
+    if let Some(p) = crate::utils::get_default_ai_proxy_db_path().ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .filter(|p| std::path::Path::new(p).exists())
+    {
+        defaults.push(PersistedSource { path: p, db_type: String::new() });
+    }
+    if cursor_should_auto_load() {
+        if let Ok(caches) = crate::utils::list_cursor_account_caches() {
+            for acc in caches {
+                defaults.push(PersistedSource { path: acc.path.to_string_lossy().to_string(), db_type: String::new() });
+            }
+        }
+    }
+    if !defaults.is_empty() {
+        return auto_load_paths(&state, defaults);
+    }
+    log::info!("[DB] 无可加载的数据库");
+    return Ok(Vec::new());
 }
 
-fn auto_load_paths(state: &State<AppState>, paths: Vec<String>) -> Result<Vec<SourceInfo>, String> {
+fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Result<Vec<SourceInfo>, String> {
     let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
     sources.clear();
 
@@ -78,23 +99,31 @@ fn auto_load_paths(state: &State<AppState>, paths: Vec<String>) -> Result<Vec<So
         .ok()
         .map(|p| p.to_string_lossy().to_string());
 
-    for path in &paths {
+    for entry in &entries {
         // 丢弃无效旧根路径（扁平 cursor-cache 且无 usage.csv）
         if let Some(ref root) = cache_root {
-            if path == root || path_equals_ignore_slash(path, root) {
-                let csv = std::path::Path::new(path).join("usage.csv");
+            if entry.path == *root || path_equals_ignore_slash(&entry.path, root) {
+                let csv = std::path::Path::new(&entry.path).join("usage.csv");
                 if !csv.is_file() {
-                    log::info!("[DB] 跳过旧 Cursor 根路径: {}", path);
+                    log::info!("[DB] 跳过旧 Cursor 根路径: {}", entry.path);
                     continue;
                 }
             }
         }
-        match create_source_entry(path) {
-            Ok(entry) => {
-                log::info!("[DB] 自动加载: {} ({})", path, entry.db_type.label());
-                sources.push(entry);
+        // 优先使用持久化类型打开，避免表名探测误判（如 ZCode 含 message 表被识别为 OpenCode）；
+        // 持久化类型打开失败时 fallback 表名探测（Cursor 目录由 create_source_entry_with_type 内部识别，不走 db_type）
+        let explicit = DbType::from_label(&entry.db_type);
+        let loaded = match create_source_entry_with_type(&entry.path, explicit.as_ref()) {
+            Ok(e) => Ok(e),
+            Err(_) if explicit.is_some() => create_source_entry(&entry.path),
+            Err(e) => Err(e),
+        };
+        match loaded {
+            Ok(loaded) => {
+                log::info!("[DB] 自动加载: {} ({})", entry.path, loaded.db_type.label());
+                sources.push(loaded);
             }
-            Err(e) => log::error!("[DB] 加载失败 {}: {}", path, e),
+            Err(e) => log::error!("[DB] 加载失败 {}: {}", entry.path, e),
         }
     }
 
@@ -373,8 +402,11 @@ fn save_paths(state: &State<AppState>, info: &[SourceInfo]) {
 }
 
 pub fn save_paths_public(state: &State<AppState>, info: &[SourceInfo]) {
-    let paths: Vec<&str> = info.iter().map(|s| s.path.as_str()).collect();
-    if let Ok(json) = serde_json::to_string(&paths) {
+    let entries: Vec<PersistedSource> = info.iter().map(|s| PersistedSource {
+        path: s.path.clone(),
+        db_type: s.db_type.clone(),
+    }).collect();
+    if let Ok(json) = serde_json::to_string(&entries) {
         if let Ok(app_db) = state.app_db.lock() {
             if let Err(e) = app_db.set_setting("last_db_paths", &json) {
                 log::error!("[DB] 保存数据库路径失败: {}", e);
