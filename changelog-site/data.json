@@ -4,6 +4,17 @@
     "date": "2026-08-12",
     "commits": [
       {
+        "hash": "62db7fb",
+        "subject": "feat: 数据源路径持久化同时保存类型，重启不再误判ZCode",
+        "date": "2026-08-12"
+      }
+    ]
+  },
+  {
+    "version": "0.7.45",
+    "date": "2026-08-12",
+    "commits": [
+      {
         "hash": "bccf861",
         "subject": "feat: 接入ZCode数据源",
         "date": "2026-08-12"
