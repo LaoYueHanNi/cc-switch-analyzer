@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::models::FilterParams;
 use crate::commands::query::compute_precompute;
-use crate::services::data_source::create_source_entry;
+use crate::services::data_source::create_source_entry_with_type;
 use crate::SharedState;
 use crate::utils::*;
 
@@ -253,21 +253,26 @@ fn query_today_data(shared: &SharedState, tz_offset: i64) -> Result<TmTodayData,
         model_id: None,
     };
 
-    // 只在锁期间读取路径列表，释放后创建独立的 DataSource 实例
-    // 按 enabled 过滤：HTTP 接口需尊重用户在 UI 里的数据源开关，否则
-    // create_source_entry 重建时会硬编码 enabled=true，被禁用的源会"复活"
-    let paths: Vec<String> = {
+    // 只在锁期间读取 (路径, 类型) 列表，释放后创建独立的 DataSource 实例
+    // 按 enabled 过滤：HTTP 接口需尊重用户在 UI 里的数据源开关
+    // 必须带上 db_type 重建：DSH 源的 path 是应用库 pricing.db，没有
+    // proxy_request_logs 等表，靠 detect_db_type 表名探测会失败而被丢弃
+    let entries: Vec<(String, crate::services::data_source::DbType)> = {
         let sources = shared.data_sources.read().map_err(|e| e.to_string())?;
-        sources.iter().filter(|s| s.enabled).map(|s| s.path.clone()).collect()
+        sources
+            .iter()
+            .filter(|s| s.enabled)
+            .map(|s| (s.path.clone(), s.db_type.clone()))
+            .collect()
     };
-    if paths.is_empty() {
+    if entries.is_empty() {
         return Err("no_database_loaded".to_string());
     }
 
-    // 为每个路径创建独立的只读 DataSource（独立 SQLite 连接）
-    let independent_sources: Vec<_> = paths
+    // 为每个 (路径, 类型) 创建独立的只读 DataSource（独立 SQLite 连接）
+    let independent_sources: Vec<_> = entries
         .iter()
-        .filter_map(|p| create_source_entry(p).ok())
+        .filter_map(|(p, t)| create_source_entry_with_type(p, Some(t)).ok())
         .collect();
 
     if independent_sources.is_empty() {
