@@ -1,0 +1,40 @@
+---
+name: version
+description: 同步 package.json / tauri.conf.json / Cargo.toml 三个文件的版本号，跑 cargo check 更新 Cargo.lock，用 changelog 脚本生成变更要点并按项目约定提交。
+whenToUse: 用户要求升级版本号、提到"版本升级"、"bump version"、patch/minor/major 任何递增意图
+---
+
+# 版本号管理
+
+## 版本规则
+
+从 `package.json` 读取当前版本号（如 `0.3.8`），根据用户意图递增：
+
+| 用户说法 | 递增规则 | 示例 |
+|---------|---------|------|
+| 最小版本、patch | `+0.0.1` | 0.3.8 → 0.3.9 |
+| 中版本、minor | `+0.1.0` | 0.3.8 → 0.4.0 |
+| 大版本、major | `+1.0.0` | 0.3.8 → 1.0.0 |
+
+## 需要修改的文件（共 4 个）
+
+以下 3 个文件手动修改版本号，1 个文件自动同步：
+
+| # | 文件 | 字段 |
+|---|------|------|
+| 1 | `package.json` | `"version"` |
+| 2 | `src-tauri/tauri.conf.json` | `"version"` |
+| 3 | `src-tauri/Cargo.toml` | `version`（[package] 下） |
+| 4 | `src-tauri/Cargo.lock` | **自动** — cargo check 时同步 |
+
+## 执行步骤
+
+1. 从 `package.json` 读取当前版本，计算新版本号
+2. 用 `git log` 收集上次 tag 以来的所有 commit，AI 总结为变更要点（去重、合并同类项，不列举 ci/chore 类提交）
+3. 编辑上述 3 个文件，替换版本号
+4. 运行 `cargo check` 更新 `Cargo.lock`（只需几秒，不产生产物）
+5. 更新 changelog：
+   ```bash
+   node changelog-site/generate.cjs > changelog-site/data.json
+   ```
+6. 提交所有文件（含 `changelog-site/data.json`），commit message 格式：`chore: 版本号 X.Y.Z → A.B.C`，**body 写入 AI 总结的变更要点**（每条一行 `- xxx`）
