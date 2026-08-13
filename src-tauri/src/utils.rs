@@ -68,6 +68,12 @@ pub fn get_default_proma_dir() -> Result<std::path::PathBuf, String> {
     Ok(home.join(".proma"))
 }
 
+/// 获取默认 DSH 数据目录路径(~/.dsh)
+pub fn get_default_dsh_dir() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;
+    Ok(home.join(".dsh"))
+}
+
 /// Cursor 凭证文件路径
 pub fn get_cursor_credentials_path() -> Result<std::path::PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;

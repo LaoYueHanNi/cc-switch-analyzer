@@ -173,6 +173,7 @@ pub fn run() {
             commands::database::refresh_database,
             commands::database::get_filter_options,
             commands::database::get_default_paths,
+            commands::database::scan_dsh_now,
             // Cursor 数据源
             commands::cursor::cursor_login,
             commands::cursor::cursor_sync,

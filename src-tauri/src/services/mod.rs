@@ -8,6 +8,8 @@ pub mod cursor_hook_backup;
 pub mod cursor_hook_merge;
 pub mod cursor_local_hook;
 pub mod cursor_sync;
+pub mod dsh_db;
+pub mod dsh_scanner;
 pub mod data_source;
 pub mod dedup;
 pub mod external_db;

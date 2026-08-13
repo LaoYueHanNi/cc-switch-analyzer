@@ -90,6 +90,15 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
     {
         defaults.push(PersistedSource { path: p, db_type: String::new() });
     }
+    // DSH:存在 ~/.dsh 则注册(读取路径为应用库 pricing.db,扫描在 auto_load_paths 统一执行)
+    if crate::utils::get_default_dsh_dir().map(|d| d.is_dir()).unwrap_or(false) {
+        if let Ok(p) = crate::utils::get_app_db_path() {
+            defaults.push(PersistedSource {
+                path: p.to_string_lossy().to_string(),
+                db_type: "DSH".to_string(),
+            });
+        }
+    }
     if !defaults.is_empty() {
         return auto_load_paths(&state, defaults);
     }
@@ -98,6 +107,15 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
 }
 
 fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Result<Vec<SourceInfo>, String> {
+    // 先扫描 DSH(若 ~/.dsh 存在),保证 DshDbService 打开时已有数据
+    if let Ok(dir) = crate::utils::get_default_dsh_dir() {
+        if dir.is_dir() {
+            if let Ok(app_db) = state.app_db.lock() {
+                let _ = crate::services::dsh_scanner::scan_dsh_in(&app_db, &dir);
+            }
+        }
+    }
+
     let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
     sources.clear();
 
@@ -159,6 +177,29 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
                     sources.push(entry);
                 }
                 Err(e) => log::error!("[DB] Cursor 账号加载失败 {}: {}", cache_str, e),
+            }
+        }
+    }
+
+    // DSH:若 ~/.dsh 存在,补注册数据源(读取路径为应用库 pricing.db;数据已由开头 scan_dsh_in 入库)
+    // 持久化的 last_db_paths 不含 DSH,需在此补注册,否则启动时 DSH 源不会加载
+    if crate::utils::get_default_dsh_dir().map(|d| d.is_dir()).unwrap_or(false) {
+        let already = sources
+            .iter()
+            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Dsh));
+        if !already {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                let path_str = p.to_string_lossy().to_string();
+                match crate::services::data_source::create_source_entry_with_type(
+                    &path_str,
+                    Some(&crate::services::data_source::DbType::Dsh),
+                ) {
+                    Ok(entry) => {
+                        log::info!("[DB] 自动加载 DSH 源: {}", path_str);
+                        sources.push(entry);
+                    }
+                    Err(e) => log::error!("[DB] DSH 源加载失败: {}", e),
+                }
             }
         }
     }
@@ -278,6 +319,21 @@ pub fn list_databases(state: State<AppState>) -> Result<Vec<SourceInfo>, String>
 pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String> {
     let _ = crate::commands::cursor::sync_and_reload_if_needed(&state);
 
+    // DSH:增量扫描(若存在 DSH 源)。scanner 内部按 mtime 跳过未变文件,开销可接受
+    {
+        let has_dsh = {
+            let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+            sources
+                .iter()
+                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Dsh))
+        };
+        if has_dsh {
+            if let Ok(app_db) = state.app_db.lock() {
+                let _ = crate::services::dsh_scanner::scan_dsh(&app_db);
+            }
+        }
+    }
+
     // Phase 1: 快速检查文件 mtime，无变化则直接返回
     {
         let sources = state.data_sources.read().map_err(|e| e.to_string())?;
@@ -336,6 +392,38 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         .filter_map(|s| s.source.get_record_count().ok())
         .sum();
     Ok(RefreshResult { has_new: true, record_count: Some(count) })
+}
+
+#[tauri::command]
+pub fn scan_dsh_now(state: State<AppState>) -> Result<crate::services::dsh_scanner::DshScanResult, String> {
+    // 1. 扫描入库
+    let result = {
+        let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+        crate::services::dsh_scanner::scan_dsh(&app_db)?
+    };
+    // 2. 确保 DSH 源已注册(若 ~/.dsh 存在且尚未注册),否则扫描了也无数据源可读
+    if crate::utils::get_default_dsh_dir().map(|d| d.is_dir()).unwrap_or(false) {
+        let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+        let already = sources
+            .iter()
+            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Dsh));
+        if !already {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                let path_str = p.to_string_lossy().to_string();
+                match crate::services::data_source::create_source_entry_with_type(
+                    &path_str,
+                    Some(&crate::services::data_source::DbType::Dsh),
+                ) {
+                    Ok(entry) => {
+                        log::info!("[DB] 注册 DSH 源: {}", path_str);
+                        sources.push(entry);
+                    }
+                    Err(e) => log::error!("[DB] DSH 源注册失败: {}", e),
+                }
+            }
+        }
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -493,6 +581,7 @@ pub struct DefaultPaths {
     pub cursor: Option<String>,
     pub z_code: Option<String>,
     pub proma: Option<String>,
+    pub dsh: Option<String>,
 }
 
 #[tauri::command]
@@ -510,7 +599,10 @@ pub fn get_default_paths() -> Result<DefaultPaths, String> {
     let proma = crate::utils::get_default_proma_dir().ok()
         .filter(|p| crate::services::proma_dir::detect_proma_dir(&p.to_string_lossy()))
         .map(|p| p.to_string_lossy().to_string());
-    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code, proma })
+    let dsh = crate::utils::get_default_dsh_dir().ok()
+        .filter(|p| p.is_dir())
+        .map(|p| p.to_string_lossy().to_string());
+    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code, proma, dsh })
 }
 
 fn cursor_should_auto_load() -> bool {
@@ -543,6 +635,15 @@ fn source_mtime(path: &str, db_type: &crate::services::data_source::DbType) -> O
             match latest_file {
                 Some(p) => std::fs::metadata(p).ok(),
                 None => std::fs::metadata(path).ok(),
+            }
+        }
+        DbType::Dsh => {
+            // DSH 数据源 path 是 pricing.db;内容变化发生在 ~/.dsh/sessions,
+            // 取最新会话文件 mtime;无文件时回退目录 mtime
+            match crate::utils::get_default_dsh_dir() {
+                Ok(dir) => crate::services::dsh_scanner::latest_session_file_mtime(&dir)
+                    .or_else(|| std::fs::metadata(&dir).ok()),
+                Err(_) => std::fs::metadata(path).ok(),
             }
         }
         _ => std::fs::metadata(path).ok(),

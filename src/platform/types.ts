@@ -247,6 +247,15 @@ export interface DefaultPaths {
   cursor: string | null
   zCode: string | null
   proma: string | null
+  dsh: string | null
+}
+
+export interface DshScanResult {
+  filesScanned: number
+  imported: number
+  skipped: number
+  errors: number
+  totalRecords: number
 }
 
 export interface TmServiceStatus {
@@ -265,6 +274,7 @@ export interface PlatformAdapter {
   listDatabases(): Promise<SourceInfo[]>
   pickDatabaseFile(defaultPath?: string): Promise<string | null>
   refreshDatabase(): Promise<RefreshResult>
+  scanDshNow(): Promise<DshScanResult>
   getFilterOptions(): Promise<{ providers: { id: string; name: string }[]; models: string[]; dateRange: { min: number; max: number } }>
   // 查询
   querySummary(params: FilterParams): Promise<SummaryData>

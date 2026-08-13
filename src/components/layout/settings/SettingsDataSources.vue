@@ -23,19 +23,22 @@
 
       <!-- 路径/状态 + 操作（Cursor 已并入账号行，此处仅其它数据源） -->
       <div v-if="slot.key !== 'cursor'" class="source-path-row">
-        <span class="path-label">数据库地址</span>
+        <span class="path-label">{{ slot.key === 'dsh' ? '数据目录' : '数据库地址' }}</span>
         <span class="source-path" :title="slot.path || ''">{{ slot.path || '未选择' }}</span>
         <div class="path-actions">
           <button
             type="button"
             class="icon-btn"
-            :title="slot.path ? '更换数据库' : '选择数据库'"
+            :title="slot.key === 'dsh' ? '立即扫描' : (slot.path ? '更换数据库' : '选择数据库')"
             @click="onSelect(slot.key)"
           >
-            <n-icon size="14"><create-outline /></n-icon>
+            <n-icon size="14">
+              <sync-outline v-if="slot.key === 'dsh'" />
+              <create-outline v-else />
+            </n-icon>
           </button>
           <button
-            v-if="slot.path"
+            v-if="slot.path && slot.key !== 'dsh'"
             type="button"
             class="icon-btn danger"
             title="移除"
@@ -678,6 +681,18 @@ const slots = computed(() => [
     sourceId: dbStore.sources.find(s => s.dbType === 'Cursor')?.id || '',
     enabled: cursorAnyEnabled.value,
   },
+  {
+    key: 'dsh',
+    label: 'DSH',
+    path: (() => {
+      const base = defaultPaths.value.dsh || ''
+      const src = dbStore.sources.find(s => s.dbType === 'DSH')
+      return src && src.recordCount > 0 ? base + '  (已导入 ' + src.recordCount + ' 条)' : base
+    })(),
+    defaultPath: defaultPaths.value.dsh,
+    sourceId: dbStore.sources.find(s => s.dbType === 'DSH')?.id || '',
+    enabled: dbStore.sources.find(s => s.dbType === 'DSH')?.enabled ?? true,
+  },
 ])
 
 // slot key → 后端 dbType 字面量映射
@@ -687,9 +702,22 @@ const DB_TYPE_MAP: Record<string, string> = {
   'ai-proxy': 'AI-Proxy',
   'z-code': 'ZCode',
   'proma': 'Proma',
+  'dsh': 'DSH',
 }
 
 async function onSelect(key: string): Promise<void> {
+  // DSH 固定扫描 ~/.dsh,不走目录选择,直接触发增量扫描
+  if (key === 'dsh') {
+    try {
+      const result = await platformAdapter.scanDshNow()
+      console.log('[DSH] 扫描完成', result)
+      const sources = await platformAdapter.listDatabases()
+      dbStore.setSources(sources)
+    } catch (e) {
+      console.error('[DSH] 扫描失败', e)
+    }
+    return
+  }
   const slot = slots.value.find(s => s.key === key)
   console.log('[DEBUG] onSelect key=', key, 'slotPath=', slot?.path)
   // Proma 是目录型数据源，走目录选择；其余为 SQLite 文件选择
@@ -811,6 +839,10 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 
 .source-dot.proma {
   background: #ff9f43;
+}
+
+.source-dot.dsh {
+  background: #e84393;
 }
 
 .source-dot.cursor {

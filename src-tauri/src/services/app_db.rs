@@ -90,6 +90,9 @@ impl AppDbService {
         if version < 10 {
             self.migrate_v10()?;
         }
+        if version < 11 {
+            self.migrate_v11()?;
+        }
 
         Ok(())
     }
@@ -379,6 +382,39 @@ impl AppDbService {
         Ok(())
     }
 
+    /// v11: DSH 等本地会话源的通用扫描入库表
+    fn migrate_v11(&mut self) -> Result<(), String> {
+        self.db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS session_request_logs (
+                request_id TEXT PRIMARY KEY,
+                source TEXT NOT NULL DEFAULT '',
+                session_id TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                provider_id TEXT NOT NULL DEFAULT '',
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read INTEGER NOT NULL DEFAULT 0,
+                cache_creation INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_srl_source  ON session_request_logs(source);
+            CREATE INDEX IF NOT EXISTS idx_srl_created ON session_request_logs(created_at);
+            CREATE INDEX IF NOT EXISTS idx_srl_model   ON session_request_logs(model);
+            CREATE INDEX IF NOT EXISTS idx_srl_session ON session_request_logs(session_id);
+
+            CREATE TABLE IF NOT EXISTS session_log_sync (
+                file_path TEXT PRIMARY KEY,
+                source TEXT NOT NULL DEFAULT '',
+                last_modified INTEGER NOT NULL,
+                last_line_offset INTEGER NOT NULL DEFAULT 0,
+                last_synced_at INTEGER NOT NULL
+            );",
+        )
+        .map_err(|e| format!("迁移 v11 (session_request_logs/session_log_sync) 失败: {}", e))?;
+        self.set_schema_version(11)?;
+        Ok(())
+    }
+
     // ========== 任务 CRUD ==========
 
     pub fn list_tasks(&self) -> Result<Vec<Task>, String> {
@@ -590,6 +626,120 @@ impl AppDbService {
                 params![key, value],
             )
             .map_err(|e| format!("保存设置失败: {}", e))?;
+        Ok(())
+    }
+
+    // ========== 本地会话源扫描入库(session_request_logs / session_log_sync)==========
+    //
+    // 通用表,带 source 列区分来源('dsh' / 未来其他本地会话源)。
+    // 写入走 AppDbService(Mutex 保护);读取侧(各 SourceService)用只读连接打开同一库(WAL 并发读)。
+
+    /// 暴露内部连接,供 scanner 在一个 unchecked_transaction 内绑定"插入新行 + 推进游标"为原子提交。
+    pub fn conn(&self) -> &Connection {
+        &self.db
+    }
+
+    /// 查询某来源某文件的增量扫描游标 (last_modified 纳秒, last_line_offset 行号);无记录返回 None。
+    pub fn get_session_log_sync_state(&self, source: &str, file_path: &str) -> Option<(i64, i64)> {
+        self.db
+            .query_row(
+                "SELECT last_modified, last_line_offset FROM session_log_sync
+                 WHERE file_path = ? AND source = ?",
+                params![file_path, source],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .ok()
+    }
+
+    /// 插入一条会话请求日志(INSERT OR IGNORE,主键 request_id 去重)。返回是否实际写入。
+    /// 接收已开事务的连接,供 scanner 批量提交。
+    pub fn insert_session_log_on_conn(
+        conn: &Connection,
+        source: &str,
+        request_id: &str,
+        session_id: &str,
+        model: &str,
+        provider_id: &str,
+        input_tokens: i64,
+        output_tokens: i64,
+        cache_read: i64,
+        cache_creation: i64,
+        created_at: i64,
+    ) -> Result<bool, String> {
+        let changed = conn
+            .execute(
+                "INSERT OR IGNORE INTO session_request_logs
+                    (request_id, source, session_id, model, provider_id,
+                     input_tokens, output_tokens, cache_read, cache_creation, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    request_id,
+                    source,
+                    session_id,
+                    model,
+                    provider_id,
+                    input_tokens,
+                    output_tokens,
+                    cache_read,
+                    cache_creation,
+                    created_at
+                ],
+            )
+            .map_err(|e| format!("插入会话日志失败: {}", e))?;
+        Ok(changed > 0)
+    }
+
+    /// 更新某来源某文件的增量扫描游标。接收已开事务的连接。
+    pub fn update_session_log_sync_on_conn(
+        conn: &Connection,
+        source: &str,
+        file_path: &str,
+        last_modified: i64,
+        last_offset: i64,
+    ) -> Result<(), String> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        conn.execute(
+            "INSERT OR REPLACE INTO session_log_sync
+                (file_path, source, last_modified, last_line_offset, last_synced_at)
+             VALUES (?, ?, ?, ?, ?)",
+            params![file_path, source, last_modified, last_offset, now],
+        )
+        .map_err(|e| format!("更新同步状态失败: {}", e))?;
+        Ok(())
+    }
+
+    /// 统计某来源已入库的记录数。
+    pub fn get_session_log_count(&self, source: &str) -> Result<i64, String> {
+        self.db
+            .query_row(
+                "SELECT COUNT(*) FROM session_request_logs WHERE source = ?",
+                params![source],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("查询会话日志数量失败: {}", e))
+    }
+
+    /// 清空某来源的全部入库数据与同步游标。
+    pub fn clear_session_logs(&self, source: &str) -> Result<(), String> {
+        let tx = self
+            .db
+            .unchecked_transaction()
+            .map_err(|e| format!("开启事务失败: {}", e))?;
+        tx.execute(
+            "DELETE FROM session_request_logs WHERE source = ?",
+            params![source],
+        )
+        .map_err(|e| format!("清理会话日志失败: {}", e))?;
+        tx.execute(
+            "DELETE FROM session_log_sync WHERE source = ?",
+            params![source],
+        )
+        .map_err(|e| format!("清理同步状态失败: {}", e))?;
+        tx.commit()
+            .map_err(|e| format!("提交清理失败: {}", e))?;
         Ok(())
     }
 
@@ -1620,9 +1770,32 @@ impl AppDbService {
                 added_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
                 PRIMARY KEY (task_id, session_id, source),
                 FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS session_request_logs (
+                request_id TEXT PRIMARY KEY,
+                source TEXT NOT NULL DEFAULT '',
+                session_id TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                provider_id TEXT NOT NULL DEFAULT '',
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read INTEGER NOT NULL DEFAULT 0,
+                cache_creation INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_srl_source  ON session_request_logs(source);
+            CREATE INDEX IF NOT EXISTS idx_srl_created ON session_request_logs(created_at);
+            CREATE INDEX IF NOT EXISTS idx_srl_model   ON session_request_logs(model);
+            CREATE INDEX IF NOT EXISTS idx_srl_session ON session_request_logs(session_id);
+            CREATE TABLE IF NOT EXISTS session_log_sync (
+                file_path TEXT PRIMARY KEY,
+                source TEXT NOT NULL DEFAULT '',
+                last_modified INTEGER NOT NULL,
+                last_line_offset INTEGER NOT NULL DEFAULT 0,
+                last_synced_at INTEGER NOT NULL
             );"
         ).map_err(|e| format!("初始化内存表失败: {}", e))?;
-        self.set_setting("schema_version", "10")?;
+        self.set_setting("schema_version", "11")?;
         Ok(())
     }
 }
@@ -1648,7 +1821,7 @@ mod tests {
     #[test]
     fn test_schema_version() {
         let db = create_db();
-        assert_eq!(db.get_setting("schema_version").unwrap(), "9");
+        assert_eq!(db.get_setting("schema_version").unwrap(), "11");
     }
 
     #[test]

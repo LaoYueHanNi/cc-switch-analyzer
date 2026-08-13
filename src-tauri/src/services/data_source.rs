@@ -114,6 +114,7 @@ pub enum DbType {
     Cursor,
     ZCode,
     Proma,
+    Dsh,
 }
 
 impl DbType {
@@ -125,6 +126,7 @@ impl DbType {
             DbType::Cursor => "Cursor",
             DbType::ZCode => "ZCode",
             DbType::Proma => "Proma",
+            DbType::Dsh => "DSH",
         }
     }
 
@@ -137,6 +139,7 @@ impl DbType {
             "Cursor" => Some(DbType::Cursor),
             "ZCode" => Some(DbType::ZCode),
             "Proma" => Some(DbType::Proma),
+            "DSH" => Some(DbType::Dsh),
             _ => None,
         }
     }
@@ -282,6 +285,7 @@ pub fn create_source_entry_with_type(path: &str, explicit_type: Option<&DbType>)
         DbType::ZCode => Box::new(super::zcode_db::ZCodeDbService::new()) as Box<dyn DataSource>,
         DbType::Cursor => return Err("Cursor 数据源需使用缓存目录路径".to_string()),
         DbType::Proma => return Err("Proma 数据源需使用数据目录路径".to_string()),
+        DbType::Dsh => Box::new(super::dsh_db::DshDbService::new()) as Box<dyn DataSource>,
     };
     source.open(path)?;
     Ok(SourceEntry { id, path: path.to_string(), db_type, source, enabled: true })
