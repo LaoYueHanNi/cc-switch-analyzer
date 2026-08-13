@@ -246,6 +246,7 @@ export interface DefaultPaths {
   aiProxy: string | null
   cursor: string | null
   zCode: string | null
+  proma: string | null
 }
 
 export interface TmServiceStatus {

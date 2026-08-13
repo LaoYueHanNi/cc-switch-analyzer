@@ -62,6 +62,12 @@ pub fn get_default_zcode_db_path() -> Result<std::path::PathBuf, String> {
     Ok(home.join(".zcode").join("cli").join("db").join("db.sqlite"))
 }
 
+/// 获取默认 Proma 数据目录路径
+pub fn get_default_proma_dir() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;
+    Ok(home.join(".proma"))
+}
+
 /// Cursor 凭证文件路径
 pub fn get_cursor_credentials_path() -> Result<std::path::PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;

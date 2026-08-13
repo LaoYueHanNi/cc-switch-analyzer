@@ -84,6 +84,12 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
             }
         }
     }
+    if let Some(p) = crate::utils::get_default_proma_dir().ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .filter(|p| crate::services::proma_dir::detect_proma_dir(p))
+    {
+        defaults.push(PersistedSource { path: p, db_type: String::new() });
+    }
     if !defaults.is_empty() {
         return auto_load_paths(&state, defaults);
     }
@@ -207,7 +213,12 @@ pub fn load_database(file_path: String, state: State<AppState>) -> Result<Vec<So
 
 #[tauri::command]
 pub fn add_database(file_path: String, db_type: Option<String>, state: State<AppState>) -> Result<Vec<SourceInfo>, String> {
-    let canonical = validate_db_path(&file_path)?;
+    // Proma 是目录型数据源，走目录校验；其余为 SQLite 文件校验
+    let canonical = if db_type.as_deref() == Some("Proma") {
+        validate_proma_dir(&file_path)?
+    } else {
+        validate_db_path(&file_path)?
+    };
     let canonical_str = canonical.to_string_lossy().to_string();
     log::info!("[DB] add_database: {} (type={:?})", canonical_str, db_type);
 
@@ -386,6 +397,31 @@ fn validate_db_path(file_path: &str) -> Result<std::path::PathBuf, String> {
     Ok(canonical)
 }
 
+/// Proma 目录型数据源校验：必须是目录且能识别为 Proma 数据目录
+fn validate_proma_dir(file_path: &str) -> Result<std::path::PathBuf, String> {
+    let path = std::path::Path::new(file_path);
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|e| format!("路径不存在或无法访问: {} ({})", file_path, e))?;
+    if !canonical.is_dir() {
+        return Err(format!("路径不是目录: {}", canonical.display()));
+    }
+    if !crate::services::proma_dir::detect_proma_dir(&canonical.to_string_lossy()) {
+        return Err(format!(
+            "目录不是 Proma 数据目录（缺少 agent-sessions）: {}",
+            canonical.display()
+        ));
+    }
+    // Windows 的 canonicalize 会返回 \\?\UNC 前缀，去掉它
+    #[cfg(target_os = "windows")]
+    {
+        let s = canonical.to_string_lossy().to_string();
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            return Ok(std::path::PathBuf::from(stripped));
+        }
+    }
+    Ok(canonical)
+}
+
 fn refresh_pricing(state: &AppState) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     let mut pricing = state.pricing_engine.write().map_err(|e| e.to_string())?;
@@ -456,6 +492,7 @@ pub struct DefaultPaths {
     pub ai_proxy: Option<String>,
     pub cursor: Option<String>,
     pub z_code: Option<String>,
+    pub proma: Option<String>,
 }
 
 #[tauri::command]
@@ -470,7 +507,10 @@ pub fn get_default_paths() -> Result<DefaultPaths, String> {
         .map(|p| p.to_string_lossy().to_string());
     let z_code = crate::utils::get_default_zcode_db_path().ok()
         .map(|p| best_default_path(&p));
-    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code })
+    let proma = crate::utils::get_default_proma_dir().ok()
+        .filter(|p| crate::services::proma_dir::detect_proma_dir(&p.to_string_lossy()))
+        .map(|p| p.to_string_lossy().to_string());
+    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code, proma })
 }
 
 fn cursor_should_auto_load() -> bool {
@@ -483,6 +523,27 @@ fn source_mtime(path: &str, db_type: &crate::services::data_source::DbType) -> O
         DbType::Cursor => {
             let csv = std::path::Path::new(path).join("usage.csv");
             std::fs::metadata(csv).ok()
+        }
+        DbType::Proma => {
+            // 内容变化发生在 agent-sessions 下的 jsonl，取最新文件 mtime；
+            // 无 jsonl 时回退目录自身 mtime
+            let sessions_dir = std::path::Path::new(path).join("agent-sessions");
+            let latest_file = std::fs::read_dir(&sessions_dir)
+                .ok()?
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
+                .filter_map(|p| {
+                    let meta = std::fs::metadata(&p).ok()?;
+                    let mtime = meta.modified().ok()?;
+                    Some((mtime, p))
+                })
+                .max_by_key(|(t, _)| *t)
+                .map(|(_, p)| p);
+            match latest_file {
+                Some(p) => std::fs::metadata(p).ok(),
+                None => std::fs::metadata(path).ok(),
+            }
         }
         _ => std::fs::metadata(path).ok(),
     }

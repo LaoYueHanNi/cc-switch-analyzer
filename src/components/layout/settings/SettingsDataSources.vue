@@ -663,6 +663,14 @@ const slots = computed(() => [
     enabled: dbStore.sources.find(s => s.dbType === 'ZCode')?.enabled ?? true,
   },
   {
+    key: 'proma',
+    label: 'Proma',
+    path: dbStore.sources.find(s => s.dbType === 'Proma')?.path || '',
+    defaultPath: defaultPaths.value.proma,
+    sourceId: dbStore.sources.find(s => s.dbType === 'Proma')?.id || '',
+    enabled: dbStore.sources.find(s => s.dbType === 'Proma')?.enabled ?? true,
+  },
+  {
     key: 'cursor',
     label: 'Cursor',
     path: cursorStatus.value.cachePath || dbStore.sources.find(s => s.dbType === 'Cursor')?.path || '',
@@ -678,12 +686,16 @@ const DB_TYPE_MAP: Record<string, string> = {
   'opencode': 'OpenCode',
   'ai-proxy': 'AI-Proxy',
   'z-code': 'ZCode',
+  'proma': 'Proma',
 }
 
 async function onSelect(key: string): Promise<void> {
   const slot = slots.value.find(s => s.key === key)
   console.log('[DEBUG] onSelect key=', key, 'slotPath=', slot?.path)
-  const filePath = await platformAdapter.pickDatabaseFile(slot?.defaultPath || undefined)
+  // Proma 是目录型数据源，走目录选择；其余为 SQLite 文件选择
+  const filePath = key === 'proma'
+    ? await platformAdapter.pickDirectory('选择 Proma 数据目录')
+    : await platformAdapter.pickDatabaseFile(slot?.defaultPath || undefined)
   console.log('[DEBUG] pickDatabaseFile ->', filePath)
   if (!filePath) return
   const dbType = DB_TYPE_MAP[key]
@@ -795,6 +807,10 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 
 .source-dot.z-code {
   background: #00cec9;
+}
+
+.source-dot.proma {
+  background: #ff9f43;
 }
 
 .source-dot.cursor {

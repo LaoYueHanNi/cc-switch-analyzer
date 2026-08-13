@@ -19,6 +19,7 @@ pub mod opencode_db;
 pub mod pipeline;
 pub mod precompute;
 pub mod pricing_engine;
+pub mod proma_dir;
 pub mod session_title;
 pub mod zcode_db;
 

@@ -113,6 +113,7 @@ pub enum DbType {
     AiProxy,
     Cursor,
     ZCode,
+    Proma,
 }
 
 impl DbType {
@@ -123,6 +124,7 @@ impl DbType {
             DbType::AiProxy => "AI-Proxy",
             DbType::Cursor => "Cursor",
             DbType::ZCode => "ZCode",
+            DbType::Proma => "Proma",
         }
     }
 
@@ -134,6 +136,7 @@ impl DbType {
             "AI-Proxy" => Some(DbType::AiProxy),
             "Cursor" => Some(DbType::Cursor),
             "ZCode" => Some(DbType::ZCode),
+            "Proma" => Some(DbType::Proma),
             _ => None,
         }
     }
@@ -254,6 +257,19 @@ pub fn create_source_entry_with_type(path: &str, explicit_type: Option<&DbType>)
         });
     }
 
+    if path_obj.is_dir() && super::proma_dir::detect_proma_dir(path) {
+        let id = SOURCE_ID_COUNTER.fetch_add(1, Ordering::Relaxed).to_string();
+        let mut source = Box::new(super::proma_dir::PromaDirService::new()) as Box<dyn DataSource>;
+        source.open(path)?;
+        return Ok(SourceEntry {
+            id,
+            path: path.to_string(),
+            db_type: DbType::Proma,
+            source,
+            enabled: true,
+        });
+    }
+
     let db_type = match explicit_type {
         Some(t) => t.clone(),
         None => detect_db_type(path)?,
@@ -265,6 +281,7 @@ pub fn create_source_entry_with_type(path: &str, explicit_type: Option<&DbType>)
         DbType::AiProxy => Box::new(super::ai_proxy_db::AiProxyDbService::new()) as Box<dyn DataSource>,
         DbType::ZCode => Box::new(super::zcode_db::ZCodeDbService::new()) as Box<dyn DataSource>,
         DbType::Cursor => return Err("Cursor 数据源需使用缓存目录路径".to_string()),
+        DbType::Proma => return Err("Proma 数据源需使用数据目录路径".to_string()),
     };
     source.open(path)?;
     Ok(SourceEntry { id, path: path.to_string(), db_type, source, enabled: true })
