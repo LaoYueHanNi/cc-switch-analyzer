@@ -1,6 +1,17 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-08-13",
+    "commits": [
+      {
+        "hash": "19010b2",
+        "subject": "feat: 接入Proma数据源",
+        "date": "2026-08-13"
+      }
+    ]
+  },
+  {
+    "version": "0.7.46",
     "date": "2026-08-12",
     "commits": [
       {
