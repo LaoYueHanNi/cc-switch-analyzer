@@ -1,5 +1,21 @@
 [
   {
+    "version": "0.7.51",
+    "date": "2026-08-14",
+    "commits": [
+      {
+        "hash": "232b7b1",
+        "subject": "fix(cursor): 避免每次搜索/轮询重复 open 数据源",
+        "date": "2026-08-14"
+      },
+      {
+        "hash": "120e204",
+        "subject": "test(dsh): 插件数据多天文件同时扫描用例",
+        "date": "2026-08-14"
+      }
+    ]
+  },
+  {
     "version": "0.7.50",
     "date": "2026-08-14",
     "commits": [
