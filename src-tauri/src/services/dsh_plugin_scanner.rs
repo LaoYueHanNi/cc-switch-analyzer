@@ -328,6 +328,71 @@ mod tests {
         assert_eq!(r4.total_records, 2);
     }
 
+    /// 多天文件同时读取(模拟很久未打开):全部历史文件导入、旧文件跳过、
+    /// 新日期文件与旧文件追加行只增量导入
+    #[test]
+    fn test_scan_plugin_multiple_days() {
+        let db = AppDbService::new_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+
+        // 三个历史日期文件 + 干扰文件(state.json / 非 usage 文件)
+        for (name, id) in [
+            ("usage-2026-08-10.jsonl", "d10"),
+            ("usage-2026-08-11.jsonl", "d11"),
+            ("usage-2026-08-12.jsonl", "d12"),
+        ] {
+            std::fs::write(
+                dir.path().join(name),
+                format!("{}\n", plugin_line(id, 1_000_000, "s1", "m", Some(10), Some(5), None, None)),
+            )
+            .unwrap();
+        }
+        std::fs::write(dir.path().join("state.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "x").unwrap();
+
+        // 首次扫描:三个历史文件全部导入(忽略 state.json / notes.txt)
+        let r1 = scan_plugin_in(&db, dir.path()).unwrap();
+        assert_eq!(r1.files_scanned, 3);
+        assert_eq!(r1.imported, 3);
+        assert_eq!(r1.total_records, 3);
+
+        // 再次扫描:mtime 未变,全部跳过
+        let r2 = scan_plugin_in(&db, dir.path()).unwrap();
+        assert_eq!(r2.imported, 0);
+        assert_eq!(r2.total_records, 3);
+
+        // 模拟「很久没打开」:期间新增了后续日期文件,旧文件也追加了行
+        std::fs::write(
+            dir.path().join("usage-2026-08-15.jsonl"),
+            format!("{}\n", plugin_line("d15", 2_000_000, "s1", "m", Some(20), Some(5), None, None)),
+        )
+        .unwrap();
+        let old = dir.path().join("usage-2026-08-10.jsonl");
+        let old_content = format!(
+            "{}\n{}\n",
+            plugin_line("d10", 1_000_000, "s1", "m", Some(10), Some(5), None, None),
+            plugin_line("d10b", 1_500_000, "s1", "m", Some(11), Some(5), None, None)
+        );
+        std::fs::write(&old, old_content).unwrap();
+        set_mtime_future(&old);
+
+        let r3 = scan_plugin_in(&db, dir.path()).unwrap();
+        assert_eq!(r3.files_scanned, 4);
+        assert_eq!(r3.imported, 2); // 新日期文件 1 条 + 旧文件追加 1 条
+        assert_eq!(r3.total_records, 5);
+
+        // 行内 time 决定入库时间(与文件名日期无关)
+        let times: Vec<i64> = db
+            .conn()
+            .prepare("SELECT created_at FROM session_request_logs WHERE source='dsh' ORDER BY created_at")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(times, vec![1000, 1000, 1000, 1500, 2000]);
+    }
+
     /// 与会话扫描同 request_id 去重:同一 message id 由两种来源先后入库,只保留一条
     #[test]
     fn test_dedupe_with_session_scanner() {
