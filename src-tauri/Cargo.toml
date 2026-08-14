@@ -1,6 +1,6 @@
 [package]
 name = "cc-switch-analyzer"
-version = "0.7.49"
+version = "0.7.50"
 description = "CC-Switch 使用分析器 — Tauri 版本"
 authors = ["LaoYueHanNi"]
 license = "MIT"
