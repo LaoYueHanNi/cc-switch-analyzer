@@ -31,10 +31,13 @@ export function formatDuration(seconds: number): string {
   return Math.floor(seconds / 3600) + 'h ' + Math.floor((seconds % 3600) / 60) + 'm'
 }
 
-// Unix 秒转日期字符串
+// Unix 秒转日期字符串（YYYY-MM-DD，按本地时区，与 epochToDateTimeStr 等保持一致）
 export function epochToDateStr(epoch: number): string {
   const d = new Date(epoch * 1000)
-  return d.toISOString().slice(0, 10)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
 // Unix 秒转时间字符串 HH:mm
