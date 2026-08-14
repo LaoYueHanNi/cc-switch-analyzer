@@ -628,7 +628,7 @@ fn cursor_should_auto_load() -> bool {
     crate::utils::any_cursor_usage_csv_exists()
 }
 
-fn source_mtime(path: &str, db_type: &crate::services::data_source::DbType, dsh_use_plugin: bool) -> Option<std::fs::Metadata> {
+pub(crate) fn source_mtime(path: &str, db_type: &crate::services::data_source::DbType, dsh_use_plugin: bool) -> Option<std::fs::Metadata> {
     use crate::services::data_source::DbType;
     match db_type {
         DbType::Cursor => {

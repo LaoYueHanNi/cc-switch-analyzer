@@ -78,6 +78,12 @@ pub trait DataSource: Send + Sync {
     /// 刷新 Cursor 本机 Hook 事件缓存。
     fn refresh_cursor_local_events(&mut self) {}
 
+    /// 本数据源内容文件的最新 mtime（上次 open 时记录），用于跳过无变化的重复 open。
+    /// 文件型源（Cursor CSV / Proma 目录）返回 Some；SQL 型源返回 None（实时读取，无需重开）。
+    fn content_mtime(&self) -> Option<std::time::SystemTime> {
+        None
+    }
+
     /// Cursor CSV 分页预览；非 Cursor 源返回 None。
     fn get_cursor_csv_preview(
         &self,
@@ -106,7 +112,7 @@ pub trait DataSource: Send + Sync {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DbType {
     ExternalDb,
     OpenCode,

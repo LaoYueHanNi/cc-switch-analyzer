@@ -1,12 +1,14 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use serde::Serialize;
 
-use crate::models::FilterParams;
+use crate::commands::database::source_mtime;
 use crate::commands::query::compute_precompute;
-use crate::services::data_source::create_source_entry_with_type;
+use crate::models::FilterParams;
+use crate::services::data_source::{create_source_entry_with_type, DbType, SourceEntry};
 use crate::SharedState;
 use crate::utils::*;
 
@@ -36,15 +38,17 @@ impl TrafficMonitorServerHandle {
 
         let shutdown = Arc::new(AtomicBool::new(false));
         let cache: Arc<Mutex<TmCache>> = Arc::new(Mutex::new(TmCache::default()));
+        let source_cache: Arc<Mutex<TmSourceCache>> = Arc::new(Mutex::new(TmSourceCache::default()));
 
         let thread_shutdown = shutdown.clone();
         let thread_cache = cache.clone();
+        let thread_source_cache = source_cache.clone();
         let thread_shared = shared;
 
         std::thread::Builder::new()
             .name("tm-api-server".into())
             .spawn(move || {
-                run_server(listener, thread_cache, thread_shutdown, thread_shared);
+                run_server(listener, thread_cache, thread_source_cache, thread_shutdown, thread_shared);
             })
             .map_err(|e| format!("启动服务线程失败: {}", e))?;
 
@@ -95,6 +99,28 @@ impl Default for TmCache {
     }
 }
 
+/// 独立 DataSource 实例缓存：避免每个 `/api/today` 请求都重建所有源
+/// （重建会重解析 Cursor CSV、重读本机 Hook 日志、重解析 Proma 目录）。
+/// 仅在源集合（路径+类型）或文件 mtime 变化时才重建，否则复用长驻实例。
+struct TmSourceCache {
+    /// 长驻的独立只读数据源实例
+    sources: Vec<SourceEntry>,
+    /// 上次构建所用的 (路径, 类型) 列表
+    signature: Vec<(String, DbType)>,
+    /// path → 上次构建时观测到的内容 mtime（None 表示无法获取）
+    mtimes: HashMap<String, Option<SystemTime>>,
+}
+
+impl Default for TmSourceCache {
+    fn default() -> Self {
+        Self {
+            sources: Vec::new(),
+            signature: Vec::new(),
+            mtimes: HashMap::new(),
+        }
+    }
+}
+
 #[derive(Clone, Serialize)]
 struct TmTodayData {
     #[serde(rename = "totalTokens")]
@@ -118,6 +144,7 @@ struct TmTodayData {
 fn run_server(
     listener: std::net::TcpListener,
     cache: Arc<Mutex<TmCache>>,
+    source_cache: Arc<Mutex<TmSourceCache>>,
     shutdown: Arc<AtomicBool>,
     shared: Arc<SharedState>,
 ) {
@@ -142,8 +169,9 @@ fn run_server(
             .ok();
 
         let cache = cache.clone();
+        let source_cache = source_cache.clone();
         let shared = shared.clone();
-        handle_request(stream, cache, shared);
+        handle_request(stream, cache, source_cache, shared);
     }
 
     log::info!("[TM] API 服务线程已退出");
@@ -152,6 +180,7 @@ fn run_server(
 fn handle_request(
     mut stream: std::net::TcpStream,
     cache: Arc<Mutex<TmCache>>,
+    source_cache: Arc<Mutex<TmSourceCache>>,
     shared: Arc<SharedState>,
 ) {
     use std::io::{Read, Write};
@@ -177,7 +206,7 @@ fn handle_request(
         ("200 OK".to_string(), r#"{"status":"ok"}"#.to_string())
     } else if path_with_query.starts_with("/api/today") {
         let tz = parse_tz_param(path_with_query);
-        handle_today(cache, shared, tz)
+        handle_today(cache, source_cache, shared, tz)
     } else {
         ("404 Not Found".to_string(), r#"{"error":"not_found"}"#.to_string())
     };
@@ -199,7 +228,12 @@ fn handle_request(
     let _ = stream.flush();
 }
 
-fn handle_today(cache: Arc<Mutex<TmCache>>, shared: Arc<SharedState>, tz: i64) -> (String, String) {
+fn handle_today(
+    cache: Arc<Mutex<TmCache>>,
+    source_cache: Arc<Mutex<TmSourceCache>>,
+    shared: Arc<SharedState>,
+    tz: i64,
+) -> (String, String) {
     {
         let c = cache.lock().unwrap();
         if let (Some(data), Some(cached_tz), Some(updated)) = (&c.data, c.tz, c.updated_at) {
@@ -209,7 +243,7 @@ fn handle_today(cache: Arc<Mutex<TmCache>>, shared: Arc<SharedState>, tz: i64) -
         }
     }
 
-    match query_today_data(&shared, tz) {
+    match query_today_data(&shared, tz, &source_cache) {
         Ok(data) => {
             let mut c = cache.lock().unwrap();
             c.data = Some(data.clone());
@@ -238,7 +272,13 @@ fn parse_tz_param(path: &str) -> i64 {
 
 /// 通过共享的 compute_precompute 管道查询今日数据。
 /// 使用独立的 DataSource 实例，避免与前端的 rusqlite Connection 并发冲突。
-fn query_today_data(shared: &SharedState, tz_offset: i64) -> Result<TmTodayData, String> {
+/// 这些独立实例被缓存在 `source_cache` 中，仅在源集合（路径+类型）或文件 mtime
+/// 变化时才重建，而不是每个请求都重建（否则会反复重解析 CSV / 目录）。
+fn query_today_data(
+    shared: &SharedState,
+    tz_offset: i64,
+    source_cache: &Mutex<TmSourceCache>,
+) -> Result<TmTodayData, String> {
     let now = now_epoch_seconds();
     let local_now = now + tz_offset * 3600;
     let today_start_local = local_now - (local_now % 86400);
@@ -253,11 +293,11 @@ fn query_today_data(shared: &SharedState, tz_offset: i64) -> Result<TmTodayData,
         model_id: None,
     };
 
-    // 只在锁期间读取 (路径, 类型) 列表，释放后创建独立的 DataSource 实例
+    // 只在锁期间读取 (路径, 类型) 列表，释放后用于 staleness 判断
     // 按 enabled 过滤：HTTP 接口需尊重用户在 UI 里的数据源开关
-    // 必须带上 db_type 重建：DSH 源的 path 是应用库 pricing.db，没有
+    // 必须带上 db_type：DSH 源的 path 是应用库 pricing.db，没有
     // proxy_request_logs 等表，靠 detect_db_type 表名探测会失败而被丢弃
-    let entries: Vec<(String, crate::services::data_source::DbType)> = {
+    let entries: Vec<(String, DbType)> = {
         let sources = shared.data_sources.read().map_err(|e| e.to_string())?;
         sources
             .iter()
@@ -269,18 +309,47 @@ fn query_today_data(shared: &SharedState, tz_offset: i64) -> Result<TmTodayData,
         return Err("no_database_loaded".to_string());
     }
 
-    // 为每个 (路径, 类型) 创建独立的只读 DataSource（独立 SQLite 连接）
-    let independent_sources: Vec<_> = entries
+    // DSH mtime 计算需知道当前模式；TM 服务无 app_db 句柄，按插件目录是否存在推断。
+    // 即便推断不准也不影响数据新鲜度——DSH 源每次都实时读取 pricing.db。
+    let dsh_use_plugin = crate::utils::get_default_dsh_plugin_dir()
+        .ok()
+        .map(|d| std::path::Path::new(&d).is_dir())
+        .unwrap_or(false);
+
+    // 观测各源当前内容 mtime（开销远低于重解析）
+    let mtimes_now: HashMap<String, Option<SystemTime>> = entries
         .iter()
-        .filter_map(|(p, t)| create_source_entry_with_type(p, Some(t)).ok())
+        .map(|(p, t)| {
+            (
+                p.clone(),
+                source_mtime(p, t, dsh_use_plugin).and_then(|m| m.modified().ok()),
+            )
+        })
         .collect();
 
-    if independent_sources.is_empty() {
-        return Err("no_database_loaded".to_string());
-    }
-
     let pricing = shared.pricing_engine.read().map_err(|e| e.to_string())?;
-    let result = compute_precompute(&independent_sources, &pricing, &params)?;
+
+    // 仅在源集合或 mtime 变化时重建独立 DataSource；否则复用长驻实例。
+    // compute_precompute 在持锁期间执行：TM 服务为单线程顺序处理，无并发竞争。
+    let result = {
+        let mut sc = source_cache.lock().map_err(|e| e.to_string())?;
+        let signature_changed = sc.signature != entries;
+        let mtime_changed = sc.mtimes != mtimes_now;
+        if sc.sources.is_empty() || signature_changed || mtime_changed {
+            let rebuilt: Vec<SourceEntry> = entries
+                .iter()
+                .filter_map(|(p, t)| create_source_entry_with_type(p, Some(t)).ok())
+                .collect();
+            if rebuilt.is_empty() {
+                return Err("no_database_loaded".to_string());
+            }
+            sc.sources = rebuilt;
+            sc.signature = entries;
+            sc.mtimes = mtimes_now;
+        }
+        compute_precompute(&sc.sources, &pricing, &params)?
+    };
+
     let summary = result.summary;
 
     let total_cost: f64 = result.precomputed.model_costs.values().sum();

@@ -33,6 +33,8 @@ pub struct CursorCsvService {
     attribution_filter_start: i64,
     /// row_key → 手动改判
     overrides: HashMap<String, OverrideEntry>,
+    /// 上次成功 open 时的 usage.csv mtime；用于跳过无变化的重复 open
+    csv_mtime: Option<std::time::SystemTime>,
 }
 
 impl CursorCsvService {
@@ -46,6 +48,7 @@ impl CursorCsvService {
             local_events: Vec::new(),
             attribution_filter_start: cursor_local_hook::get_attribution_filter_start(),
             overrides: HashMap::new(),
+            csv_mtime: None,
         }
     }
 
@@ -126,6 +129,10 @@ impl CursorCsvService {
         self.user_id = user_id;
         self.reload_attribution();
         self.reload_overrides();
+        // 记录本次 open 对应的 CSV mtime，供后续跳过无变化的重复 open
+        self.csv_mtime = std::fs::metadata(&csv_path)
+            .ok()
+            .and_then(|m| m.modified().ok());
         Ok(())
     }
 
@@ -139,6 +146,7 @@ impl CursorCsvService {
         self.local_events.clear();
         self.overrides.clear();
         self.attribution_enabled = false;
+        self.csv_mtime = None;
     }
 
     pub fn is_open(&self) -> bool {
@@ -809,6 +817,10 @@ impl DataSource for CursorCsvService {
 
     fn refresh_cursor_local_events(&mut self) {
         self.refresh_local_events();
+    }
+
+    fn content_mtime(&self) -> Option<std::time::SystemTime> {
+        self.csv_mtime
     }
 
     fn get_cursor_csv_preview(

@@ -235,6 +235,18 @@ pub fn ensure_all_cursor_sources_registered(state: &State<AppState>) -> Result<(
             .iter_mut()
             .find(|s| matches!(s.db_type, DbType::Cursor) && paths_equal(&s.path, &cache_str))
         {
+            // 仅当 usage.csv 实际变化（或尚未打开）时才重新 open，
+            // 避免每次查询都重复解析 CSV + 重读 19000+ 条本机 Hook 日志
+            let csv_path = std::path::Path::new(&cache_str).join("usage.csv");
+            let current_mtime = std::fs::metadata(&csv_path)
+                .ok()
+                .and_then(|m| m.modified().ok());
+            let unchanged = current_mtime.is_some()
+                && current_mtime == entry.source.content_mtime()
+                && entry.source.is_open();
+            if unchanged {
+                continue;
+            }
             if let Err(e) = entry.source.open(&cache_str) {
                 log::warn!("[CURSOR] 重载账号缓存失败 {}: {}", cache_str, e);
             }
