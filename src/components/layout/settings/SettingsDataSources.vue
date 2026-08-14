@@ -49,6 +49,51 @@
         </div>
       </div>
 
+      <!-- DSH：用量插件（可选）数据源切换 -->
+      <div v-if="slot.key === 'dsh'" class="dsh-plugin-section">
+        <div class="dsh-plugin-title">用量插件 dsh-token-usage（可选）</div>
+        <div class="dsh-plugin-row">
+          <span class="path-label">仓库</span>
+          <span class="source-path" :title="DSH_PLUGIN_REPO">{{ DSH_PLUGIN_REPO }}</span>
+          <div class="path-actions">
+            <button type="button" class="icon-btn" title="打开仓库" @click="onOpenPluginRepo">
+              <n-icon size="14"><open-outline /></n-icon>
+            </button>
+          </div>
+        </div>
+        <div class="dsh-plugin-row">
+          <span class="path-label">安装</span>
+          <code class="dsh-install-cmd">{{ DSH_INSTALL_CMD }}</code>
+          <div class="path-actions">
+            <button type="button" class="icon-btn" title="复制安装命令" @click="onCopyInstallCmd">
+              <n-icon size="14"><copy-outline /></n-icon>
+            </button>
+          </div>
+        </div>
+        <p class="dsh-plugin-status">
+          <span :class="['dsh-plugin-state', dshSettings.pluginInstalled ? 'ok' : 'warn']">
+            {{ dshSettings.pluginInstalled ? '已安装' : '未安装' }}
+          </span>
+          <template v-if="dshSettings.pluginInstalled">
+            · {{ dshSettings.usageFiles }} 个数据文件 · {{ dshSettings.pluginDataDir }}
+          </template>
+          <template v-else>
+            · {{ dshSettings.pluginDataDir || '~/.dsh/token-usage' }}（安装插件后自动出现）
+          </template>
+        </p>
+        <div class="dsh-plugin-mode-row">
+          <n-switch
+            size="small"
+            :value="dshSettings.usePlugin"
+            :disabled="dshModeBusy"
+            @update:value="onToggleDshPlugin"
+          />
+          <span class="tm-label">使用此插件数据</span>
+          <span class="tm-hint">{{ dshSettings.usePlugin ? '扫描插件记录（按天 JSONL）' : '扫描会话日志（session.jsonl.zstd）' }}</span>
+        </div>
+        <p class="dsh-plugin-hint">两种来源按请求 ID 去重，切换不清空已导入数据；未使用插件数据时沿用会话扫描。</p>
+      </div>
+
       <!-- Cursor：Hook 第一行 + 账号行 -->
       <div v-if="slot.key === 'cursor'" class="cursor-rows">
         <div class="cursor-line" @click="showHookSettings = true">
@@ -293,18 +338,22 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { NModal, NIcon, NButton, NSwitch, NInput, useMessage } from 'naive-ui'
-import { CloseOutline, CreateOutline, SyncOutline } from '@vicons/ionicons5'
+import { CloseOutline, CopyOutline, CreateOutline, OpenOutline, SyncOutline } from '@vicons/ionicons5'
 import CompactDialog from '@/components/common/CompactDialog.vue'
 import CursorCsvPreviewDialog from '@/components/layout/CursorCsvPreviewDialog.vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useDatabase } from '@/composables/useDatabase'
 import { platformAdapter } from '@/platform'
 import { formatNum } from '@/utils/format'
-import type { CursorAccountInfo, CursorStatusInfo, DefaultPaths, TokenQuad } from '@/platform/types'
+import type { CursorAccountInfo, CursorStatusInfo, DefaultPaths, DshSettings, TokenQuad } from '@/platform/types'
 
 const props = defineProps<{ active: boolean }>()
 
 const message = useMessage()
+
+// dsh-token-usage 插件(https://github.com/LaoYueHanNi/dsh-token-usage)
+const DSH_PLUGIN_REPO = 'https://github.com/LaoYueHanNi/dsh-token-usage'
+const DSH_INSTALL_CMD = 'dsh plugin --profile web add github:LaoYueHanNi/dsh-token-usage'
 
 const emptyQuad = (): TokenQuad => ({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 })
 
@@ -312,6 +361,79 @@ const dbStore = useDatabaseStore()
 const { addDatabase, removeDatabase, refreshAfterToggle } = useDatabase()
 
 const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null, cursor: null })
+
+const dshSettings = ref<DshSettings>({
+  usePlugin: false,
+  dataDir: null,
+  pluginDataDir: null,
+  pluginInstalled: false,
+  usageFiles: 0,
+  totalRecords: 0,
+})
+const dshModeBusy = ref(false)
+
+async function loadDshSettings(): Promise<void> {
+  try {
+    dshSettings.value = await platformAdapter.getDshSettings()
+  } catch { /* ignore */ }
+}
+
+async function onOpenPluginRepo(): Promise<void> {
+  try {
+    await platformAdapter.openPluginRepo()
+  } catch (e) {
+    console.error('[DSH] 打开插件仓库失败', e)
+    message.error(typeof e === 'string' ? e : String((e as any)?.message || e || '打开仓库失败'))
+  }
+}
+
+async function onCopyInstallCmd(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(DSH_INSTALL_CMD)
+  } catch {
+    // 兜底：临时 textarea + execCommand
+    const ta = document.createElement('textarea')
+    ta.value = DSH_INSTALL_CMD
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    let ok = false
+    try {
+      ok = document.execCommand('copy')
+    } catch { /* ignore */ }
+    document.body.removeChild(ta)
+    if (!ok) {
+      message.error('复制失败，请手动复制')
+      return
+    }
+  }
+  message.success('安装命令已复制')
+}
+
+async function onToggleDshPlugin(use: boolean): Promise<void> {
+  dshModeBusy.value = true
+  try {
+    const settings = await platformAdapter.setDshPluginMode(use)
+    dshSettings.value = settings
+    if (use) {
+      if (!settings.pluginInstalled) {
+        message.warning('未检测到插件数据目录，请先安装 dsh-token-usage 插件后重试')
+      }
+      const result = await platformAdapter.scanDshNow()
+      console.log('[DSH] 插件数据扫描完成', result)
+    }
+    const sources = await platformAdapter.listDatabases()
+    dbStore.setSources(sources)
+    await refreshAfterToggle()
+  } catch (e) {
+    console.error('[DSH] 切换插件模式失败', e)
+    message.error(typeof e === 'string' ? e : String((e as any)?.message || e || '切换失败'))
+    await loadDshSettings()
+  } finally {
+    dshModeBusy.value = false
+  }
+}
 
 const cursorStatus = ref<CursorStatusInfo>({
   loggedIn: false,
@@ -620,7 +742,10 @@ async function onHookMergeNow(): Promise<void> {
 watch(
   () => props.active,
   (visible) => {
-    if (visible) loadCursorStatus()
+    if (visible) {
+      loadCursorStatus()
+      loadDshSettings()
+    }
   },
   { immediate: true },
 )
@@ -687,7 +812,10 @@ const slots = computed(() => [
     path: (() => {
       const base = defaultPaths.value.dsh || ''
       const src = dbStore.sources.find(s => s.dbType === 'DSH')
-      return src && src.recordCount > 0 ? base + '  (已导入 ' + src.recordCount + ' 条)' : base
+      const modeTag = dshSettings.value.usePlugin ? '插件数据' : '会话扫描'
+      return src && src.recordCount > 0
+        ? base + `  (已导入 ${src.recordCount} 条 · ${modeTag})`
+        : base
     })(),
     defaultPath: defaultPaths.value.dsh,
     sourceId: dbStore.sources.find(s => s.dbType === 'DSH')?.id || '',
@@ -706,13 +834,14 @@ const DB_TYPE_MAP: Record<string, string> = {
 }
 
 async function onSelect(key: string): Promise<void> {
-  // DSH 固定扫描 ~/.dsh,不走目录选择,直接触发增量扫描
+  // DSH 固定扫描当前模式数据目录(插件数据或会话日志),不走目录选择,直接触发增量扫描
   if (key === 'dsh') {
     try {
       const result = await platformAdapter.scanDshNow()
       console.log('[DSH] 扫描完成', result)
       const sources = await platformAdapter.listDatabases()
       dbStore.setSources(sources)
+      await loadDshSettings()
     } catch (e) {
       console.error('[DSH] 扫描失败', e)
     }
@@ -1250,5 +1379,79 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 .tm-hint {
   font-size: 11px;
   color: var(--text-tertiary);
+}
+
+/* ========== DSH 用量插件区块 ========== */
+
+.dsh-plugin-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-main);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-hover, rgba(255, 255, 255, 0.04)) 40%, transparent);
+}
+
+.dsh-plugin-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.dsh-plugin-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+}
+
+.dsh-install-cmd {
+  flex: 1;
+  min-width: 0;
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text-secondary);
+  background: var(--border-light);
+  padding: 1px 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-plugin-status {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.dsh-plugin-state {
+  font-weight: 600;
+}
+
+.dsh-plugin-state.ok {
+  color: var(--primary-color, #18a058);
+}
+
+.dsh-plugin-state.warn {
+  color: var(--color-cost, #e17055);
+}
+
+.dsh-plugin-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.dsh-plugin-hint {
+  margin: 2px 0 0;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
 }
 </style>

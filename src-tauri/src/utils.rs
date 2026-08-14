@@ -74,6 +74,50 @@ pub fn get_default_dsh_dir() -> Result<std::path::PathBuf, String> {
     Ok(home.join(".dsh"))
 }
 
+/// 获取 DSH token-usage 插件数据目录路径。
+///
+/// 解析规则与插件 resolveDataDir 保持一致:
+/// `$DSH_HOME` 环境变量非空时用 `$DSH_HOME/token-usage`,否则 `~/.dsh/token-usage`。
+pub fn get_default_dsh_plugin_dir() -> Result<std::path::PathBuf, String> {
+    let env_home = std::env::var("DSH_HOME")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let base = if env_home.is_empty() {
+        get_default_dsh_dir()?
+    } else {
+        std::path::PathBuf::from(env_home)
+    };
+    Ok(base.join("token-usage"))
+}
+
+/// 用系统默认浏览器打开 URL(纯 std 平台命令,不引入额外依赖)。
+pub fn open_url_in_browser(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .map_err(|e| format!("打开链接失败: {}", e))?;
+        Ok(())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| format!("打开链接失败: {}", e))?;
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| format!("打开链接失败: {}", e))?;
+        Ok(())
+    }
+}
+
 /// Cursor 凭证文件路径
 pub fn get_cursor_credentials_path() -> Result<std::path::PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;

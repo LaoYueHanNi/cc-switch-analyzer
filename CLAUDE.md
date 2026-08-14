@@ -112,6 +112,15 @@ Cursor 不走 SQLite，而是通过 API 同步 CSV 到本地缓存：
 
 `session_manager.rs` 和 `multi_terminal.rs` 支持启动/恢复四种终端：Claude Code、OpenCode、Codex、Grok Build。Grok Build 会话从 `~/.grok/{sessions,archived_sessions}/` 读取（只读）。
 
+### DSH 用量数据（双数据源模式）
+
+DSH（DeepSeek Harness）本地用量支持两种数据来源，由 `pricing.db::settings` 的 `dsh_use_plugin` 键切换（缺省会话扫描）：
+
+- **会话扫描**（`dsh_scanner.rs`）：扫描 `~/.dsh/sessions/**/session.jsonl.zstd|.jsonl`，zstd 解压后解析 `assistant/message` 事件的 usage
+- **插件数据**（`dsh_plugin_scanner.rs`）：扫描 dsh-token-usage 插件（仓库 `https://github.com/LaoYueHanNi/dsh-token-usage`）写入的 `~/.dsh/token-usage/usage-YYYY-MM-DD.jsonl`（按天 JSONL，目录解析支持 `$DSH_HOME` 环境变量）
+
+两种来源解析为统一的 `ParsedRow`，经 `dsh_scanner::scan_file_incremental` 增量入库 `pricing.db::session_request_logs`（source='dsh'，request_id = `"dsh:" + message id`，请求级去重）。读取侧 `dsh_db.rs` 只查该表，与扫描方式无关。后端命令：`dsh_settings` / `set_dsh_plugin_mode` / `scan_dsh_now`；`auto_load_paths`、`refresh_database`、`source_mtime` 均按当前模式路由。
+
 ### TrafficMonitor 插件架构
 
 插件通过 HTTP API（`127.0.0.1:19810`）获取今日 token 和费用数据。

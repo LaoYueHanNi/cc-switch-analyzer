@@ -258,6 +258,21 @@ export interface DshScanResult {
   totalRecords: number
 }
 
+export interface DshSettings {
+  /** 当前是否使用插件数据(关闭时走会话扫描) */
+  usePlugin: boolean
+  /** DSH 数据目录(~/.dsh,存在时) */
+  dataDir: string | null
+  /** 插件数据目录(计算路径,可能不存在) */
+  pluginDataDir: string | null
+  /** 插件是否已安装(插件数据目录存在) */
+  pluginInstalled: boolean
+  /** 插件 usage-*.jsonl 文件数 */
+  usageFiles: number
+  /** 已入库的 DSH 记录总数 */
+  totalRecords: number
+}
+
 export interface TmServiceStatus {
   enabled: boolean
   running: boolean
@@ -275,6 +290,9 @@ export interface PlatformAdapter {
   pickDatabaseFile(defaultPath?: string): Promise<string | null>
   refreshDatabase(): Promise<RefreshResult>
   scanDshNow(): Promise<DshScanResult>
+  getDshSettings(): Promise<DshSettings>
+  setDshPluginMode(usePlugin: boolean): Promise<DshSettings>
+  openPluginRepo(): Promise<void>
   getFilterOptions(): Promise<{ providers: { id: string; name: string }[]; models: string[]; dateRange: { min: number; max: number } }>
   // 查询
   querySummary(params: FilterParams): Promise<SummaryData>

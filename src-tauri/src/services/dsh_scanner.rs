@@ -1,8 +1,14 @@
 //! DSH(DeepSeek Harness)本地会话用量扫描入库
 //!
-//! 扫描 `~/.dsh/sessions/<编码项目目录>/session-<uuid>/session.jsonl.zstd`,
-//! zstd 解压后提取 `assistant/message` 事件的 usage,增量写入应用自有库
-//! `pricing.db::session_request_logs`(通用表,source='dsh')。
+//! 支持两种数据来源(settings 表 `dsh_use_plugin` 切换,缺省会话扫描):
+//! - **会话扫描**:扫描 `~/.dsh/sessions/<编码项目目录>/session-<uuid>/session.jsonl.zstd`,
+//!   zstd 解压后提取 `assistant/message` 事件的 usage。
+//! - **插件数据**:扫描插件 dsh-token-usage 写入的 `~/.dsh/token-usage/usage-*.jsonl`
+//!   (见 [`crate::services::dsh_plugin_scanner`])。
+//!
+//! 两种来源解析出的行统一为 [`ParsedRow`],经 [`scan_file_incremental`] 增量写入
+//! 应用自有库 `pricing.db::session_request_logs`(通用表,source='dsh',
+//! request_id = "dsh:" + 消息 id,两种来源请求级去重)。
 //!
 //! 增量机制参考 cc-switch 的 session_usage.rs:
 //! - session_log_sync 表记录 (file_path, source) → (mtime 纳秒, 行 offset)
@@ -26,16 +32,21 @@ use crate::services::app_db::AppDbService;
 /// DSH 数据源标识(也用作 provider_id 与 session_request_logs.source)
 pub const DSH_SOURCE: &str = "dsh";
 
-/// 单条解析结果
-struct ParsedDshMessage {
-    message_id: String,
-    session_id: Option<String>,
-    model: String,
-    input_tokens: i64,
-    output_tokens: i64,
-    cache_read: i64,
-    cache_creation: i64,
-    created_at: i64,
+/// 数据来源模式设置 key(settings 表):"1" 使用插件数据,其余走会话扫描
+pub const SETTING_DSH_USE_PLUGIN: &str = "dsh_use_plugin";
+
+/// 一条已解析的用量行(会话事件解析 / 插件记录解析的统一结构)
+#[derive(Debug, Clone)]
+pub struct ParsedRow {
+    /// 原始请求标识(会话事件:message.id;插件记录:requestId)
+    pub request_id: String,
+    pub session_id: Option<String>,
+    pub model: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read: i64,
+    pub cache_creation: i64,
+    pub created_at: i64,
 }
 
 /// 扫描结果(序列化给前端)
@@ -49,11 +60,11 @@ pub struct DshScanResult {
     pub total_records: i64,
 }
 
-/// 读取 DSH 会话日志文件并解压为文本。
+/// 读取 DSH 日志文件(会话/插件 JSONL 共用)并解压为文本。
 ///
 /// 兼容 zstd 压缩(magic bytes `28 b5 2f fd`)与明文 JSONL 两种格式。
 /// 解压/解码失败返回 Err(由调用方捕获后跳过该文件)。
-fn read_dsh_session_log(path: &Path) -> Result<String, String> {
+fn read_log_file(path: &Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("读取文件失败: {}", e))?;
     let is_zstd = bytes.len() >= 4 && bytes[0..4] == [0x28, 0xb5, 0x2f, 0xfd];
     if is_zstd {
@@ -65,14 +76,14 @@ fn read_dsh_session_log(path: &Path) -> Result<String, String> {
     }
 }
 
-/// 解析一行 DSH 事件。
+/// 解析一行 DSH 会话事件。
 ///
 /// - `session` 事件:记录 session id 到 `current_session_id`,返回 None
-/// - `assistant/message` 事件:提取 usage + model,返回 Some(ParsedDshMessage)
+/// - `assistant/message` 事件:提取 usage + model,返回 Some(ParsedRow)
 /// - 其他事件(含 assistant/chunk 快照):返回 None
 ///
 /// 解析失败(非 JSON 等)返回 None,容忍不完整行。
-fn parse_dsh_line(line: &str, current_session_id: &mut Option<String>) -> Option<ParsedDshMessage> {
+fn parse_dsh_line(line: &str, current_session_id: &mut Option<String>) -> Option<ParsedRow> {
     let line = line.trim();
     if line.is_empty() {
         return None;
@@ -99,7 +110,7 @@ fn parse_dsh_line(line: &str, current_session_id: &mut Option<String>) -> Option
     let message = data.get("message")?;
     let usage = data.get("usage")?;
 
-    let message_id = message.get("id").and_then(|i| i.as_str())?.to_string();
+    let request_id = message.get("id").and_then(|i| i.as_str())?.to_string();
 
     // model: message.source.model → message.model → "unknown"
     let model = message
@@ -126,8 +137,8 @@ fn parse_dsh_line(line: &str, current_session_id: &mut Option<String>) -> Option
     let time_ms = v.get("time").and_then(|t| t.as_u64()).unwrap_or(0);
     let created_at = (time_ms / 1000) as i64;
 
-    Some(ParsedDshMessage {
-        message_id,
+    Some(ParsedRow {
+        request_id,
         session_id: current_session_id.clone(),
         model,
         input_tokens,
@@ -139,7 +150,7 @@ fn parse_dsh_line(line: &str, current_session_id: &mut Option<String>) -> Option
 }
 
 /// 返回文件 mtime 的纳秒时间戳(照搬 cc-switch metadata_modified_nanos)
-fn metadata_modified_nanos(metadata: &std::fs::Metadata) -> i64 {
+pub(crate) fn metadata_modified_nanos(metadata: &std::fs::Metadata) -> i64 {
     metadata
         .modified()
         .ok()
@@ -190,25 +201,31 @@ pub fn latest_session_file_mtime(dsh_dir: &Path) -> Option<std::fs::Metadata> {
         .max_by_key(|m| metadata_modified_nanos(m))
 }
 
-/// 对单个文件执行增量扫描,返回 (imported, skipped)。
+/// 对单个 JSONL 日志文件执行增量扫描(会话事件 / 插件记录共用)。
 ///
 /// 文件 mtime 未变 → 整文件跳过返回 (0,0)。
-/// 否则全量解压,从 last_offset+1 行解析 assistant/message,事务内 INSERT OR IGNORE + 推进 offset。
-fn scan_single_file(app_db: &AppDbService, file_path: &Path) -> Result<(u32, u32), String> {
+/// 否则全量读取,从 last_offset+1 行解析(parse 返回 None 的行跳过),
+/// 事务内 INSERT OR IGNORE + 推进 offset。
+pub fn scan_file_incremental(
+    app_db: &AppDbService,
+    source: &str,
+    file_path: &Path,
+    mut parse: impl FnMut(&str) -> Option<ParsedRow>,
+) -> Result<(u32, u32), String> {
     let file_path_str = file_path.to_string_lossy().to_string();
     let metadata = std::fs::metadata(file_path)
         .map_err(|e| format!("读取文件元数据失败: {}", e))?;
     let file_modified = metadata_modified_nanos(&metadata);
 
     let (last_modified, last_offset) = app_db
-        .get_session_log_sync_state(DSH_SOURCE, &file_path_str)
+        .get_session_log_sync_state(source, &file_path_str)
         .unwrap_or((0, 0));
 
     if file_modified <= last_modified {
         return Ok((0, 0));
     }
 
-    let text = read_dsh_session_log(file_path)?;
+    let text = read_log_file(file_path)?;
 
     let conn = app_db.conn();
     let tx = conn
@@ -218,14 +235,13 @@ fn scan_single_file(app_db: &AppDbService, file_path: &Path) -> Result<(u32, u32
     let mut imported = 0u32;
     let mut skipped = 0u32;
     let mut line_offset = 0i64;
-    let mut current_session_id: Option<String> = None;
 
     for line in text.lines() {
         line_offset += 1;
         if line_offset <= last_offset {
             continue;
         }
-        if let Some(msg) = parse_dsh_line(line, &mut current_session_id) {
+        if let Some(msg) = parse(line) {
             // 任一计费维度 > 0 即导入(照搬 cc-switch has_billable_token)
             let has_billable = msg.input_tokens > 0
                 || msg.output_tokens > 0
@@ -234,14 +250,14 @@ fn scan_single_file(app_db: &AppDbService, file_path: &Path) -> Result<(u32, u32
             if !has_billable {
                 continue;
             }
-            let request_id = format!("{}:{}", DSH_SOURCE, msg.message_id);
+            let request_id = format!("{}:{}", source, msg.request_id);
             match AppDbService::insert_session_log_on_conn(
                 &tx,
-                DSH_SOURCE,
+                source,
                 &request_id,
                 msg.session_id.as_deref().unwrap_or(""),
                 &msg.model,
-                DSH_SOURCE,
+                source,
                 msg.input_tokens,
                 msg.output_tokens,
                 msg.cache_read,
@@ -251,7 +267,7 @@ fn scan_single_file(app_db: &AppDbService, file_path: &Path) -> Result<(u32, u32
                 Ok(true) => imported += 1,
                 Ok(false) => skipped += 1,
                 Err(e) => {
-                    log::warn!("[DSH-SYNC] 插入失败 ({}): {}", msg.message_id, e);
+                    log::warn!("[DSH-SYNC] 插入失败 ({}): {}", msg.request_id, e);
                     skipped += 1;
                 }
             }
@@ -260,7 +276,7 @@ fn scan_single_file(app_db: &AppDbService, file_path: &Path) -> Result<(u32, u32
 
     AppDbService::update_session_log_sync_on_conn(
         &tx,
-        DSH_SOURCE,
+        source,
         &file_path_str,
         file_modified,
         line_offset,
@@ -270,7 +286,7 @@ fn scan_single_file(app_db: &AppDbService, file_path: &Path) -> Result<(u32, u32
     Ok((imported, skipped))
 }
 
-/// 对指定目录执行扫描(可测入口,不依赖 ~/.dsh 固定路径)。
+/// 对指定目录执行会话文件扫描(可测入口,不依赖 ~/.dsh 固定路径)。
 pub fn scan_dsh_in(app_db: &AppDbService, dsh_dir: &Path) -> Result<DshScanResult, String> {
     if !dsh_dir.is_dir() {
         let total = app_db.get_session_log_count(DSH_SOURCE).unwrap_or(0);
@@ -287,7 +303,10 @@ pub fn scan_dsh_in(app_db: &AppDbService, dsh_dir: &Path) -> Result<DshScanResul
     let mut skipped = 0u32;
     let mut errors = 0u32;
     for f in &files {
-        match scan_single_file(app_db, f) {
+        let mut current_session_id: Option<String> = None;
+        match scan_file_incremental(app_db, DSH_SOURCE, f, |line| {
+            parse_dsh_line(line, &mut current_session_id)
+        }) {
             Ok((imp, skp)) => {
                 imported += imp;
                 skipped += skp;
@@ -308,10 +327,45 @@ pub fn scan_dsh_in(app_db: &AppDbService, dsh_dir: &Path) -> Result<DshScanResul
     })
 }
 
-/// 扫描默认 DSH 目录(~/.dsh)并增量入库。
+/// 扫描默认 DSH 目录(~/.dsh)并增量入库(会话扫描模式)。
 pub fn scan_dsh(app_db: &AppDbService) -> Result<DshScanResult, String> {
     let dir = crate::utils::get_default_dsh_dir()?;
     scan_dsh_in(app_db, &dir)
+}
+
+// ========== 数据来源模式 ==========
+
+/// 当前 DSH 数据来源是否为插件数据(settings 表 `dsh_use_plugin` = "1")。
+pub fn dsh_use_plugin(app_db: &AppDbService) -> bool {
+    app_db.get_setting(SETTING_DSH_USE_PLUGIN).as_deref() == Some("1")
+}
+
+/// 持久化 DSH 数据来源模式(开启插件数据 / 会话扫描)。
+pub fn set_dsh_use_plugin(app_db: &AppDbService, use_plugin: bool) -> Result<(), String> {
+    app_db.set_setting(SETTING_DSH_USE_PLUGIN, if use_plugin { "1" } else { "0" })
+}
+
+/// 按当前模式扫描 DSH 数据并增量入库(插件数据 / 会话扫描)。
+pub fn scan_dsh_by_mode(app_db: &AppDbService) -> Result<DshScanResult, String> {
+    if dsh_use_plugin(app_db) {
+        let dir = crate::utils::get_default_dsh_plugin_dir()?;
+        crate::services::dsh_plugin_scanner::scan_plugin_in(app_db, &dir)
+    } else {
+        scan_dsh(app_db)
+    }
+}
+
+/// 当前模式下 DSH 数据目录是否存在(用于数据源注册判断)。
+pub fn dsh_source_dir_available(app_db: &AppDbService) -> bool {
+    if dsh_use_plugin(app_db) {
+        crate::utils::get_default_dsh_plugin_dir()
+            .map(|d| d.is_dir())
+            .unwrap_or(false)
+    } else {
+        crate::utils::get_default_dsh_dir()
+            .map(|d| d.is_dir())
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]
@@ -347,7 +401,7 @@ mod tests {
         let line = assistant_msg("m1", "deepseek-v4-flash", 1786629109285, 14175, 220, 195072, 0);
         let mut sid = None;
         let m = parse_dsh_line(&line, &mut sid).expect("应解析出消息");
-        assert_eq!(m.message_id, "m1");
+        assert_eq!(m.request_id, "m1");
         assert_eq!(m.model, "deepseek-v4-flash");
         assert_eq!(m.input_tokens, 14175);
         assert_eq!(m.output_tokens, 220);
@@ -410,18 +464,18 @@ mod tests {
     }
 
     #[test]
-    fn test_read_dsh_session_log_zstd_and_plain() {
+    fn test_read_log_file_zstd_and_plain() {
         let dir = tempfile::tempdir().unwrap();
         let original = "line1\nline2\n";
         // zstd 压缩
         let zst_path = dir.path().join("session.jsonl.zstd");
         let compressed = zstd::encode_all(original.as_bytes(), 3).unwrap();
         std::fs::write(&zst_path, &compressed).unwrap();
-        assert_eq!(read_dsh_session_log(&zst_path).unwrap(), original);
+        assert_eq!(read_log_file(&zst_path).unwrap(), original);
         // 明文
         let plain_path = dir.path().join("session.jsonl");
         std::fs::write(&plain_path, original).unwrap();
-        assert_eq!(read_dsh_session_log(&plain_path).unwrap(), original);
+        assert_eq!(read_log_file(&plain_path).unwrap(), original);
     }
 
     #[test]
@@ -485,6 +539,16 @@ mod tests {
         let r3 = scan_dsh_in(&db, dir.path()).unwrap();
         assert_eq!(r3.imported, 1);
         assert_eq!(r3.total_records, 2);
+    }
+
+    #[test]
+    fn test_mode_setting_roundtrip() {
+        let db = AppDbService::new_in_memory().unwrap();
+        assert!(!dsh_use_plugin(&db), "缺省应为会话扫描模式");
+        set_dsh_use_plugin(&db, true).unwrap();
+        assert!(dsh_use_plugin(&db));
+        set_dsh_use_plugin(&db, false).unwrap();
+        assert!(!dsh_use_plugin(&db));
     }
 
     /// 真实数据验证(扫描 ~/.dsh 到内存库,只读不改源文件)

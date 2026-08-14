@@ -90,13 +90,20 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
     {
         defaults.push(PersistedSource { path: p, db_type: String::new() });
     }
-    // DSH:存在 ~/.dsh 则注册(读取路径为应用库 pricing.db,扫描在 auto_load_paths 统一执行)
-    if crate::utils::get_default_dsh_dir().map(|d| d.is_dir()).unwrap_or(false) {
-        if let Ok(p) = crate::utils::get_app_db_path() {
-            defaults.push(PersistedSource {
-                path: p.to_string_lossy().to_string(),
-                db_type: "DSH".to_string(),
-            });
+    // DSH:当前模式数据目录存在(~/.dsh 或插件 token-usage 目录)则注册(读取路径为应用库 pricing.db,扫描在 auto_load_paths 统一执行)
+    {
+        let dsh_available = state
+            .app_db
+            .lock()
+            .map(|db| crate::services::dsh_scanner::dsh_source_dir_available(&db))
+            .unwrap_or(false);
+        if dsh_available {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                defaults.push(PersistedSource {
+                    path: p.to_string_lossy().to_string(),
+                    db_type: "DSH".to_string(),
+                });
+            }
         }
     }
     if !defaults.is_empty() {
@@ -107,13 +114,9 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
 }
 
 fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Result<Vec<SourceInfo>, String> {
-    // 先扫描 DSH(若 ~/.dsh 存在),保证 DshDbService 打开时已有数据
-    if let Ok(dir) = crate::utils::get_default_dsh_dir() {
-        if dir.is_dir() {
-            if let Ok(app_db) = state.app_db.lock() {
-                let _ = crate::services::dsh_scanner::scan_dsh_in(&app_db, &dir);
-            }
-        }
+    // 先扫描 DSH(若当前模式数据目录存在),保证 DshDbService 打开时已有数据
+    if let Ok(app_db) = state.app_db.lock() {
+        let _ = crate::services::dsh_scanner::scan_dsh_by_mode(&app_db);
     }
 
     let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
@@ -181,24 +184,31 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
         }
     }
 
-    // DSH:若 ~/.dsh 存在,补注册数据源(读取路径为应用库 pricing.db;数据已由开头 scan_dsh_in 入库)
+    // DSH:若当前模式数据目录存在,补注册数据源(读取路径为应用库 pricing.db;数据已由开头 scan_dsh_by_mode 入库)
     // 持久化的 last_db_paths 不含 DSH,需在此补注册,否则启动时 DSH 源不会加载
-    if crate::utils::get_default_dsh_dir().map(|d| d.is_dir()).unwrap_or(false) {
-        let already = sources
-            .iter()
-            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Dsh));
-        if !already {
-            if let Ok(p) = crate::utils::get_app_db_path() {
-                let path_str = p.to_string_lossy().to_string();
-                match crate::services::data_source::create_source_entry_with_type(
-                    &path_str,
-                    Some(&crate::services::data_source::DbType::Dsh),
-                ) {
-                    Ok(entry) => {
-                        log::info!("[DB] 自动加载 DSH 源: {}", path_str);
-                        sources.push(entry);
+    {
+        let dsh_available = state
+            .app_db
+            .lock()
+            .map(|db| crate::services::dsh_scanner::dsh_source_dir_available(&db))
+            .unwrap_or(false);
+        if dsh_available {
+            let already = sources
+                .iter()
+                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Dsh));
+            if !already {
+                if let Ok(p) = crate::utils::get_app_db_path() {
+                    let path_str = p.to_string_lossy().to_string();
+                    match crate::services::data_source::create_source_entry_with_type(
+                        &path_str,
+                        Some(&crate::services::data_source::DbType::Dsh),
+                    ) {
+                        Ok(entry) => {
+                            log::info!("[DB] 自动加载 DSH 源: {}", path_str);
+                            sources.push(entry);
+                        }
+                        Err(e) => log::error!("[DB] DSH 源加载失败: {}", e),
                     }
-                    Err(e) => log::error!("[DB] DSH 源加载失败: {}", e),
                 }
             }
         }
@@ -319,8 +329,9 @@ pub fn list_databases(state: State<AppState>) -> Result<Vec<SourceInfo>, String>
 pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String> {
     let _ = crate::commands::cursor::sync_and_reload_if_needed(&state);
 
-    // DSH:增量扫描(若存在 DSH 源)。scanner 内部按 mtime 跳过未变文件,开销可接受
-    {
+    // DSH:增量扫描(若存在 DSH 源,按当前模式扫插件数据或会话日志)。
+    // scanner 内部按 mtime 跳过未变文件,开销可接受
+    let dsh_plugin_mode = {
         let has_dsh = {
             let sources = state.data_sources.read().map_err(|e| e.to_string())?;
             sources
@@ -329,10 +340,16 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         };
         if has_dsh {
             if let Ok(app_db) = state.app_db.lock() {
-                let _ = crate::services::dsh_scanner::scan_dsh(&app_db);
+                let use_plugin = crate::services::dsh_scanner::dsh_use_plugin(&app_db);
+                let _ = crate::services::dsh_scanner::scan_dsh_by_mode(&app_db);
+                use_plugin
+            } else {
+                false
             }
+        } else {
+            false
         }
-    }
+    };
 
     // Phase 1: 快速检查文件 mtime，无变化则直接返回
     {
@@ -344,7 +361,7 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         let mut mtimes = state.db_file_mtimes.lock().map_err(|e| e.to_string())?;
         let mut any_changed = false;
         for entry in sources.iter() {
-            let mtime = source_mtime(&entry.path, &entry.db_type)
+            let mtime = source_mtime(&entry.path, &entry.db_type, dsh_plugin_mode)
                 .and_then(|m| m.modified().ok());
             let prev = mtimes.get(&entry.path).copied();
             if mtime != prev {
@@ -396,13 +413,15 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
 
 #[tauri::command]
 pub fn scan_dsh_now(state: State<AppState>) -> Result<crate::services::dsh_scanner::DshScanResult, String> {
-    // 1. 扫描入库
-    let result = {
+    // 1. 按当前模式扫描入库(插件数据 / 会话日志)
+    let (result, dsh_available) = {
         let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
-        crate::services::dsh_scanner::scan_dsh(&app_db)?
+        let available = crate::services::dsh_scanner::dsh_source_dir_available(&app_db);
+        let result = crate::services::dsh_scanner::scan_dsh_by_mode(&app_db)?;
+        (result, available)
     };
-    // 2. 确保 DSH 源已注册(若 ~/.dsh 存在且尚未注册),否则扫描了也无数据源可读
-    if crate::utils::get_default_dsh_dir().map(|d| d.is_dir()).unwrap_or(false) {
+    // 2. 确保 DSH 源已注册(若当前模式数据目录存在且尚未注册),否则扫描了也无数据源可读
+    if dsh_available {
         let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
         let already = sources
             .iter()
@@ -609,7 +628,7 @@ fn cursor_should_auto_load() -> bool {
     crate::utils::any_cursor_usage_csv_exists()
 }
 
-fn source_mtime(path: &str, db_type: &crate::services::data_source::DbType) -> Option<std::fs::Metadata> {
+fn source_mtime(path: &str, db_type: &crate::services::data_source::DbType, dsh_use_plugin: bool) -> Option<std::fs::Metadata> {
     use crate::services::data_source::DbType;
     match db_type {
         DbType::Cursor => {
@@ -638,12 +657,21 @@ fn source_mtime(path: &str, db_type: &crate::services::data_source::DbType) -> O
             }
         }
         DbType::Dsh => {
-            // DSH 数据源 path 是 pricing.db;内容变化发生在 ~/.dsh/sessions,
-            // 取最新会话文件 mtime;无文件时回退目录 mtime
-            match crate::utils::get_default_dsh_dir() {
-                Ok(dir) => crate::services::dsh_scanner::latest_session_file_mtime(&dir)
-                    .or_else(|| std::fs::metadata(&dir).ok()),
-                Err(_) => std::fs::metadata(path).ok(),
+            // DSH 数据源 path 是 pricing.db;内容变化发生在当前模式的源目录
+            // (插件模式:~/.dsh/token-usage;会话模式:~/.dsh/sessions),
+            // 取最新源文件 mtime;无文件时回退目录 mtime
+            if dsh_use_plugin {
+                match crate::utils::get_default_dsh_plugin_dir() {
+                    Ok(dir) => crate::services::dsh_plugin_scanner::latest_plugin_file_mtime(&dir)
+                        .or_else(|| std::fs::metadata(&dir).ok()),
+                    Err(_) => std::fs::metadata(path).ok(),
+                }
+            } else {
+                match crate::utils::get_default_dsh_dir() {
+                    Ok(dir) => crate::services::dsh_scanner::latest_session_file_mtime(&dir)
+                        .or_else(|| std::fs::metadata(&dir).ok()),
+                    Err(_) => std::fs::metadata(path).ok(),
+                }
             }
         }
         _ => std::fs::metadata(path).ok(),
@@ -664,4 +692,74 @@ fn best_default_path(target: &std::path::Path) -> String {
     } else {
         dirs::home_dir().map(|h| h.to_string_lossy().to_string()).unwrap_or_else(|| ".".to_string())
     }
+}
+
+// ========== DSH 插件数据模式 ==========
+
+/// dsh-token-usage 插件仓库地址(设置面板展示与跳转)
+pub const DSH_PLUGIN_REPO_URL: &str = "https://github.com/LaoYueHanNi/dsh-token-usage";
+
+/// DSH 数据源设置(序列化给前端)
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DshSettings {
+    /// 当前是否使用插件数据(关闭时走会话扫描)
+    pub use_plugin: bool,
+    /// DSH 数据目录(~/.dsh,存在时)
+    pub data_dir: Option<String>,
+    /// 插件数据目录(计算路径,可能不存在)
+    pub plugin_data_dir: Option<String>,
+    /// 插件是否已安装(插件数据目录存在)
+    pub plugin_installed: bool,
+    /// 插件 usage-*.jsonl 文件数
+    pub usage_files: u32,
+    /// 已入库的 DSH 记录总数(source='dsh')
+    pub total_records: i64,
+}
+
+fn collect_dsh_settings(app_db: &crate::services::app_db::AppDbService) -> DshSettings {
+    let use_plugin = crate::services::dsh_scanner::dsh_use_plugin(app_db);
+    let data_dir = crate::utils::get_default_dsh_dir()
+        .ok()
+        .filter(|p| p.is_dir())
+        .map(|p| p.to_string_lossy().to_string());
+    let plugin_data_dir = crate::utils::get_default_dsh_plugin_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().to_string());
+    let plugin_installed = plugin_data_dir
+        .as_ref()
+        .map(|p| std::path::Path::new(p).is_dir())
+        .unwrap_or(false);
+    let usage_files = plugin_data_dir
+        .as_ref()
+        .map(|p| crate::services::dsh_plugin_scanner::walk_plugin_files(std::path::Path::new(p)).len() as u32)
+        .unwrap_or(0);
+    let total_records = app_db.get_session_log_count(crate::services::dsh_scanner::DSH_SOURCE).unwrap_or(0);
+    DshSettings {
+        use_plugin,
+        data_dir,
+        plugin_data_dir,
+        plugin_installed,
+        usage_files,
+        total_records,
+    }
+}
+
+#[tauri::command]
+pub fn dsh_settings(state: State<AppState>) -> Result<DshSettings, String> {
+    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+    Ok(collect_dsh_settings(&app_db))
+}
+
+#[tauri::command]
+pub fn set_dsh_plugin_mode(use_plugin: bool, state: State<AppState>) -> Result<DshSettings, String> {
+    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+    crate::services::dsh_scanner::set_dsh_use_plugin(&app_db, use_plugin)?;
+    log::info!("[DB] DSH 数据来源切换: {}", if use_plugin { "插件数据" } else { "会话扫描" });
+    Ok(collect_dsh_settings(&app_db))
+}
+
+#[tauri::command]
+pub fn open_plugin_repo() -> Result<(), String> {
+    crate::utils::open_url_in_browser(DSH_PLUGIN_REPO_URL)
 }

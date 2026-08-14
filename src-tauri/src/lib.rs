@@ -174,6 +174,9 @@ pub fn run() {
             commands::database::get_filter_options,
             commands::database::get_default_paths,
             commands::database::scan_dsh_now,
+            commands::database::dsh_settings,
+            commands::database::set_dsh_plugin_mode,
+            commands::database::open_plugin_repo,
             // Cursor 数据源
             commands::cursor::cursor_login,
             commands::cursor::cursor_sync,
