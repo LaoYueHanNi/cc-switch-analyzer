@@ -289,8 +289,12 @@ export const platformAdapter: PlatformAdapter = {
   ): Promise<CursorStatusInfo> {
     return invoke('cursor_clear_attribution_override', { rowKey, cachePath, userId })
   },
-  async cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo> {
-    return invoke('cursor_toggle_attribution', { enabled })
+  async cursorToggleAttribution(
+    enabled: boolean,
+    cachePath: string | null = null,
+    userId: string | null = null,
+  ): Promise<CursorStatusInfo> {
+    return invoke('cursor_toggle_attribution', { enabled, cachePath, userId })
   },
   async cursorSetHookWriting(enabled: boolean): Promise<CursorStatusInfo> {
     return invoke('cursor_set_hook_writing', { enabled })

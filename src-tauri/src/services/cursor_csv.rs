@@ -63,7 +63,8 @@ impl CursorCsvService {
     }
 
     fn reload_attribution(&mut self) {
-        self.attribution_enabled = cursor_local_hook::is_attribution_enabled();
+        // 精准归因按账号生效：账号级配置优先，未设置时回落全局默认
+        self.attribution_enabled = cursor_local_hook::is_attribution_enabled_for(&self.user_id);
         self.attribution_filter_start = cursor_local_hook::get_attribution_filter_start();
         if self.attribution_enabled {
             self.local_events = cursor_local_hook::load_local_events().unwrap_or_else(|e| {
@@ -74,7 +75,8 @@ impl CursorCsvService {
             self.local_events.clear();
         }
         log::info!(
-            "[CURSOR] 本机归因 enabled={} filter_start={} local_events={}",
+            "[CURSOR] 本机归因 user={} enabled={} filter_start={} local_events={}",
+            self.user_id,
             self.attribution_enabled,
             self.attribution_filter_start,
             self.local_events.len()

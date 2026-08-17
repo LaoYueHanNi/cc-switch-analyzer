@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::services::cursor_attribution::{
-    default_attribution_filter_start_epoch, normalize_model_family, LocalHookEvent,
-    ATTRIBUTION_FILTER_START_SETTING_KEY, ATTRIBUTION_SETTING_KEY,
+    account_attribution_setting_key, default_attribution_filter_start_epoch, normalize_model_family,
+    LocalHookEvent, ATTRIBUTION_FILTER_START_SETTING_KEY, ATTRIBUTION_SETTING_KEY,
 };
 use crate::utils;
 
@@ -112,6 +112,30 @@ pub fn is_attribution_enabled() -> bool {
 
 pub fn set_attribution_enabled(enabled: bool) -> Result<(), String> {
     write_setting_raw(ATTRIBUTION_SETTING_KEY, if enabled { "1" } else { "0" })
+}
+
+/// 单账号精准归因生效状态：账号级配置优先，未设置时回落全局默认。
+pub fn is_attribution_enabled_for(user_id: &str) -> bool {
+    let uid = user_id.trim();
+    if uid.is_empty() {
+        return is_attribution_enabled();
+    }
+    match read_setting_raw(&account_attribution_setting_key(uid)) {
+        Some(v) => v == "1",
+        None => is_attribution_enabled(),
+    }
+}
+
+/// 设置单账号精准归因开关（覆盖该账号的全局默认）。
+pub fn set_attribution_enabled_for(user_id: &str, enabled: bool) -> Result<(), String> {
+    let uid = user_id.trim();
+    if uid.is_empty() {
+        return set_attribution_enabled(enabled);
+    }
+    write_setting_raw(
+        &account_attribution_setting_key(uid),
+        if enabled { "1" } else { "0" },
+    )
 }
 
 /// 本机归因过滤起始时刻（Unix 秒）；未配置时返回默认值。

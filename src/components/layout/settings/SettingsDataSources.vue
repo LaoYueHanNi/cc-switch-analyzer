@@ -213,12 +213,12 @@
           <span class="acc-dlg-k">精准归因</span>
           <n-switch
             size="small"
-            :value="!!cursorStatus.attributionEnabled"
+            :value="!!accountSettings.attributionEnabled"
             :disabled="attributionToggling"
             @update:value="onToggleAttribution"
           />
         </div>
-        <p class="acc-dlg-hint">本机全局 · Hook 过滤此账号 CSV（分钟±5 + 模型家族）</p>
+        <p class="acc-dlg-hint">仅此账号独立开关 · Hook 过滤此账号 CSV（分钟±5 + 模型家族）</p>
 
         <div class="acc-dlg-row">
           <span class="acc-dlg-k">归因起始</span>
@@ -637,9 +637,18 @@ async function onCursorLogout(): Promise<void> {
 }
 
 async function onToggleAttribution(enabled: boolean): Promise<void> {
+  const acc = accountSettings.value
   attributionToggling.value = true
   try {
-    cursorStatus.value = await platformAdapter.cursorToggleAttribution(enabled)
+    // 指定账号 path/userId：仅切换该账号的精准归因
+    cursorStatus.value = await platformAdapter.cursorToggleAttribution(
+      enabled,
+      acc?.path ?? null,
+      acc?.userId ?? null,
+    )
+    if (acc) {
+      accountSettings.value = cursorAccounts.value.find(a => a.path === acc.path) ?? acc
+    }
     const sources = await platformAdapter.listDatabases()
     dbStore.setSources(sources)
     await refreshAfterToggle()

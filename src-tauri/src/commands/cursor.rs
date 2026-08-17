@@ -23,6 +23,8 @@ pub struct CursorAccountStatus {
     pub enabled: bool,
     pub source_id: String,
     pub attribution_stats: AttributionTokenStats,
+    /// 该账号的精准归因生效开关（账号级配置优先，回落全局默认）
+    pub attribution_enabled: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -111,13 +113,7 @@ fn build_cursor_status(state: &State<AppState>) -> Result<CursorStatus, String> 
     let hook_installed = cursor_local_hook::is_hook_installed();
     let hook_writing_enabled = cursor_local_hook::is_hook_writing_enabled();
     let local_event_count = cursor_local_hook::local_event_count() as i64;
-    let mut attribution_hint = cursor_local_hook::attribution_hint(attribution_enabled);
-    if attribution_enabled && !attribution_hint.is_empty() && !attribution_hint.contains("多账号") {
-        attribution_hint = format!("{}（多账号共用本机 Hook）", attribution_hint);
-    }
     let heartbeat = cursor_local_hook::read_hook_heartbeat();
-    let hook_alert =
-        cursor_local_hook::hook_alert(attribution_enabled, hook_installed, heartbeat.as_ref());
 
     let mut record_count: i64 = 0;
     let mut attribution_stats = AttributionTokenStats::default();
@@ -145,6 +141,7 @@ fn build_cursor_status(state: &State<AppState>) -> Result<CursorStatus, String> 
                 })
                 .unwrap_or(false);
             accounts.push(CursorAccountStatus {
+                attribution_enabled: cursor_local_hook::is_attribution_enabled_for(&user_id),
                 user_id,
                 path: entry.path.clone(),
                 record_count: count,
@@ -172,6 +169,7 @@ fn build_cursor_status(state: &State<AppState>) -> Result<CursorStatus, String> 
                 .map(|uid| utils::sanitize_user_id(uid) == utils::sanitize_user_id(&acc.user_id))
                 .unwrap_or(false);
             accounts.push(CursorAccountStatus {
+                attribution_enabled: cursor_local_hook::is_attribution_enabled_for(&acc.user_id),
                 user_id: acc.user_id,
                 path: path_str,
                 record_count: 0,
@@ -185,6 +183,19 @@ fn build_cursor_status(state: &State<AppState>) -> Result<CursorStatus, String> 
     }
 
     accounts.sort_by(|a, b| a.user_id.cmp(&b.user_id));
+
+    // Hook 是本机级的：任一账号启用即视为启用（提示/告警按此聚合）
+    let any_attribution = if accounts.is_empty() {
+        attribution_enabled
+    } else {
+        accounts.iter().any(|a| a.attribution_enabled)
+    };
+    let mut attribution_hint = cursor_local_hook::attribution_hint(any_attribution);
+    if any_attribution && !attribution_hint.is_empty() && !attribution_hint.contains("多账号") {
+        attribution_hint = format!("{}（多账号共用本机 Hook）", attribution_hint);
+    }
+    let hook_alert =
+        cursor_local_hook::hook_alert(any_attribution, hook_installed, heartbeat.as_ref());
 
     let hook_backup = cursor_hook_backup::backup_status();
 
@@ -540,18 +551,54 @@ pub fn cursor_clear_attribution_override(
     build_cursor_status(&state)
 }
 
+/// 任一磁盘账号的精准归因处于生效开启状态（决定本机 Hook 是否需要安装）。
+fn any_cursor_account_attribution_enabled() -> bool {
+    match utils::list_cursor_account_caches() {
+        Ok(caches) if !caches.is_empty() => caches
+            .iter()
+            .any(|acc| cursor_local_hook::is_attribution_enabled_for(&acc.user_id)),
+        _ => cursor_local_hook::is_attribution_enabled(),
+    }
+}
+
 #[tauri::command]
 pub fn cursor_toggle_attribution(
     enabled: bool,
+    cache_path: Option<String>,
+    user_id: Option<String>,
     state: State<AppState>,
 ) -> Result<CursorStatus, String> {
-    cursor_local_hook::set_attribution_enabled(enabled)?;
-    let hint = if enabled {
+    // 指定 cachePath/userId 时只改该账号的归因开关；否则改全局默认（兼容旧调用）
+    let target_uid: Option<String> = {
+        let by_uid = user_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        match by_uid {
+            Some(uid) => Some(uid.to_string()),
+            None => cache_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|p| utils::resolve_account_user_id(std::path::Path::new(p))),
+        }
+    };
+
+    match target_uid.as_deref() {
+        Some(uid) => cursor_local_hook::set_attribution_enabled_for(uid, enabled)?,
+        None => cursor_local_hook::set_attribution_enabled(enabled)?,
+    }
+
+    // Hook 是本机级的：任一账号启用即安装，全部关闭才卸载
+    let any_enabled = any_cursor_account_attribution_enabled();
+    let hint = if any_enabled {
         cursor_local_hook::install_hooks()?
     } else {
         cursor_local_hook::uninstall_hooks()?
     };
-    log::info!("[CURSOR] attribution toggle enabled={} hint={}", enabled, hint);
+    log::info!(
+        "[CURSOR] attribution toggle enabled={} account={:?} any_enabled={}",
+        enabled,
+        target_uid,
+        any_enabled
+    );
 
     if utils::any_cursor_usage_csv_exists() {
         let _ = ensure_all_cursor_sources_registered(&state);

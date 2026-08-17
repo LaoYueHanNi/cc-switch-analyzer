@@ -198,6 +198,8 @@ export interface CursorAccountInfo {
   enabled: boolean
   sourceId: string
   attributionStats?: AttributionTokenStats
+  /** 该账号的精准归因生效开关（账号级配置优先，回落全局默认） */
+  attributionEnabled?: boolean
 }
 
 export interface CursorStatusInfo {
@@ -364,7 +366,11 @@ export interface PlatformAdapter {
     cachePath?: string | null,
     userId?: string | null,
   ): Promise<CursorStatusInfo>
-  cursorToggleAttribution(enabled: boolean): Promise<CursorStatusInfo>
+  cursorToggleAttribution(
+    enabled: boolean,
+    cachePath?: string | null,
+    userId?: string | null,
+  ): Promise<CursorStatusInfo>
   cursorSetAttributionFilterStart(epoch: number): Promise<CursorStatusInfo>
   cursorSetSyncLookback(lookback: string): Promise<CursorStatusInfo>
   cursorSetHookBackupPeriod(period: string): Promise<CursorStatusInfo>

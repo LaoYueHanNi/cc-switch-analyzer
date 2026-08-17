@@ -11,6 +11,16 @@ use serde::{Deserialize, Serialize};
 pub const ATTRIBUTION_SETTING_KEY: &str = "cursor_local_attribution_enabled";
 /// 本机归因过滤起始时刻（Unix 秒）配置键；未设置时用默认值。
 pub const ATTRIBUTION_FILTER_START_SETTING_KEY: &str = "cursor_attribution_filter_start";
+
+/// 单账号精准归因开关配置键；未设置该键的账号回落到全局默认 [`ATTRIBUTION_SETTING_KEY`]。
+/// 净化后的 userId 仅含 `[A-Za-z0-9_-]`，`::` 分隔符不会与全局键冲突。
+pub fn account_attribution_setting_key(user_id: &str) -> String {
+    format!(
+        "{}::{}",
+        ATTRIBUTION_SETTING_KEY,
+        crate::utils::sanitize_user_id(user_id)
+    )
+}
 pub const ATTRIBUTION_SLACK_SECS: i64 = 300;
 pub const OVERRIDES_FILE_NAME: &str = "attribution-overrides.json";
 
@@ -598,6 +608,22 @@ mod tests {
         let plain = resolve_effective(algo, None);
         assert!(plain.filtered);
         assert_eq!(plain.override_action, None);
+    }
+
+    #[test]
+    fn test_account_attribution_setting_key() {
+        let k = account_attribution_setting_key("user_Example#1");
+        assert_eq!(k, "cursor_local_attribution_enabled::user_Example_1");
+        // 与全局键不冲突，且 sanitize 幂等
+        assert_ne!(k, ATTRIBUTION_SETTING_KEY);
+        assert_eq!(
+            account_attribution_setting_key(&k["cursor_local_attribution_enabled::".len()..]),
+            k
+        );
+        assert_eq!(
+            account_attribution_setting_key(""),
+            format!("{}::{}", ATTRIBUTION_SETTING_KEY, "_unknown")
+        );
     }
 
     #[test]
