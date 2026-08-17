@@ -1,5 +1,16 @@
 [
   {
+    "version": "0.7.52",
+    "date": "2026-08-17",
+    "commits": [
+      {
+        "hash": "b6c044b",
+        "subject": "feat(cursor): 精准归因支持按账号独立开关",
+        "date": "2026-08-17"
+      }
+    ]
+  },
+  {
     "version": "0.7.51",
     "date": "2026-08-14",
     "commits": [
