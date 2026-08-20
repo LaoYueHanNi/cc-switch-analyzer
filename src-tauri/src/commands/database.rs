@@ -331,7 +331,7 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
 
     // DSH:增量扫描(若存在 DSH 源,按当前模式扫插件数据或会话日志)。
     // scanner 内部按 mtime 跳过未变文件,开销可接受
-    let dsh_plugin_mode = {
+    let (dsh_plugin_mode, dsh_plugin_dir) = {
         let has_dsh = {
             let sources = state.data_sources.read().map_err(|e| e.to_string())?;
             sources
@@ -342,12 +342,13 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
             if let Ok(app_db) = state.app_db.lock() {
                 let use_plugin = crate::services::dsh_scanner::dsh_use_plugin(&app_db);
                 let _ = crate::services::dsh_scanner::scan_dsh_by_mode(&app_db);
-                use_plugin
+                let plugin_dir = crate::services::dsh_scanner::resolve_dsh_plugin_dir(&app_db).ok();
+                (use_plugin, plugin_dir)
             } else {
-                false
+                (false, None)
             }
         } else {
-            false
+            (false, None)
         }
     };
 
@@ -361,7 +362,7 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         let mut mtimes = state.db_file_mtimes.lock().map_err(|e| e.to_string())?;
         let mut any_changed = false;
         for entry in sources.iter() {
-            let mtime = source_mtime(&entry.path, &entry.db_type, dsh_plugin_mode)
+            let mtime = source_mtime(&entry.path, &entry.db_type, dsh_plugin_mode, dsh_plugin_dir.as_deref())
                 .and_then(|m| m.modified().ok());
             let prev = mtimes.get(&entry.path).copied();
             if mtime != prev {
@@ -628,7 +629,12 @@ fn cursor_should_auto_load() -> bool {
     crate::utils::any_cursor_usage_csv_exists()
 }
 
-pub(crate) fn source_mtime(path: &str, db_type: &crate::services::data_source::DbType, dsh_use_plugin: bool) -> Option<std::fs::Metadata> {
+pub(crate) fn source_mtime(
+    path: &str,
+    db_type: &crate::services::data_source::DbType,
+    dsh_use_plugin: bool,
+    dsh_plugin_dir: Option<&std::path::Path>,
+) -> Option<std::fs::Metadata> {
     use crate::services::data_source::DbType;
     match db_type {
         DbType::Cursor => {
@@ -658,13 +664,13 @@ pub(crate) fn source_mtime(path: &str, db_type: &crate::services::data_source::D
         }
         DbType::Dsh => {
             // DSH 数据源 path 是 pricing.db;内容变化发生在当前模式的源目录
-            // (插件模式:~/.dsh/token-usage;会话模式:~/.dsh/sessions),
+            // (插件模式:自定义目录或 ~/.dsh/token-usage;会话模式:~/.dsh/sessions),
             // 取最新源文件 mtime;无文件时回退目录 mtime
             if dsh_use_plugin {
-                match crate::utils::get_default_dsh_plugin_dir() {
-                    Ok(dir) => crate::services::dsh_plugin_scanner::latest_plugin_file_mtime(&dir)
-                        .or_else(|| std::fs::metadata(&dir).ok()),
-                    Err(_) => std::fs::metadata(path).ok(),
+                match dsh_plugin_dir {
+                    Some(dir) => crate::services::dsh_plugin_scanner::latest_plugin_file_mtime(dir)
+                        .or_else(|| std::fs::metadata(dir).ok()),
+                    None => std::fs::metadata(path).ok(),
                 }
             } else {
                 match crate::utils::get_default_dsh_dir() {
@@ -707,7 +713,9 @@ pub struct DshSettings {
     pub use_plugin: bool,
     /// DSH 数据目录(~/.dsh,存在时)
     pub data_dir: Option<String>,
-    /// 插件数据目录(计算路径,可能不存在)
+    /// 用户自定义的插件数据目录(未设置为 None,空串视为未设置)
+    pub custom_data_dir: Option<String>,
+    /// 插件数据目录(实际生效:自定义目录或计算默认路径,可能不存在)
     pub plugin_data_dir: Option<String>,
     /// 插件是否已安装(插件数据目录存在)
     pub plugin_installed: bool,
@@ -723,7 +731,11 @@ fn collect_dsh_settings(app_db: &crate::services::app_db::AppDbService) -> DshSe
         .ok()
         .filter(|p| p.is_dir())
         .map(|p| p.to_string_lossy().to_string());
-    let plugin_data_dir = crate::utils::get_default_dsh_plugin_dir()
+    let custom_data_dir = app_db
+        .get_setting(crate::services::dsh_scanner::SETTING_DSH_PLUGIN_DATA_DIR)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let plugin_data_dir = crate::services::dsh_scanner::resolve_dsh_plugin_dir(app_db)
         .ok()
         .map(|p| p.to_string_lossy().to_string());
     let plugin_installed = plugin_data_dir
@@ -738,6 +750,7 @@ fn collect_dsh_settings(app_db: &crate::services::app_db::AppDbService) -> DshSe
     DshSettings {
         use_plugin,
         data_dir,
+        custom_data_dir,
         plugin_data_dir,
         plugin_installed,
         usage_files,
@@ -757,6 +770,51 @@ pub fn set_dsh_plugin_mode(use_plugin: bool, state: State<AppState>) -> Result<D
     crate::services::dsh_scanner::set_dsh_use_plugin(&app_db, use_plugin)?;
     log::info!("[DB] DSH 数据来源切换: {}", if use_plugin { "插件数据" } else { "会话扫描" });
     Ok(collect_dsh_settings(&app_db))
+}
+
+/// 设置 dsh-token-usage 插件数据目录。
+///
+/// - `Some(dir)`:目录必须存在,规范化后写入 settings(不校验目录内容,
+///   允许先配目录再装插件)
+/// - `None` / 空串:清空设置,恢复默认解析(`$DSH_HOME/token-usage` / `~/.dsh/token-usage`)
+///
+/// 只写设置不触发扫描,由前端按当前模式决定是否立即扫描(与切换模式的风格一致)。
+#[tauri::command]
+pub fn set_dsh_plugin_data_dir(
+    dir: Option<String>,
+    state: State<AppState>,
+) -> Result<DshSettings, String> {
+    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+    let normalized = match dir.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(d) => {
+            let canonical = canonicalize_dir(d)?;
+            log::info!("[DB] DSH 插件数据目录自定义: {}", canonical.display());
+            canonical.to_string_lossy().to_string()
+        }
+        None => {
+            log::info!("[DB] DSH 插件数据目录恢复默认");
+            String::new()
+        }
+    };
+    app_db.set_setting(crate::services::dsh_scanner::SETTING_DSH_PLUGIN_DATA_DIR, &normalized)?;
+    Ok(collect_dsh_settings(&app_db))
+}
+
+/// 目录校验:canonicalize 确保存在且为目录,并去掉 Windows `\\?\` 前缀
+fn canonicalize_dir(dir: &str) -> Result<std::path::PathBuf, String> {
+    let canonical = std::fs::canonicalize(dir)
+        .map_err(|e| format!("目录不存在或无法访问: {} ({})", dir, e))?;
+    if !canonical.is_dir() {
+        return Err(format!("路径不是目录: {}", canonical.display()));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let s = canonical.to_string_lossy().to_string();
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            return Ok(std::path::PathBuf::from(stripped));
+        }
+    }
+    Ok(canonical)
 }
 
 #[tauri::command]

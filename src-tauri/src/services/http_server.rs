@@ -309,11 +309,13 @@ fn query_today_data(
         return Err("no_database_loaded".to_string());
     }
 
-    // DSH mtime 计算需知道当前模式；TM 服务无 app_db 句柄，按插件目录是否存在推断。
+    // DSH mtime 计算需知道当前模式；TM 服务无 app_db 句柄，按默认插件目录是否存在推断
+    // (用户自定义插件目录时可能推断不准)。
     // 即便推断不准也不影响数据新鲜度——DSH 源每次都实时读取 pricing.db。
-    let dsh_use_plugin = crate::utils::get_default_dsh_plugin_dir()
-        .ok()
-        .map(|d| std::path::Path::new(&d).is_dir())
+    let dsh_plugin_dir = crate::utils::get_default_dsh_plugin_dir().ok();
+    let dsh_use_plugin = dsh_plugin_dir
+        .as_ref()
+        .map(|d| d.is_dir())
         .unwrap_or(false);
 
     // 观测各源当前内容 mtime（开销远低于重解析）
@@ -322,7 +324,8 @@ fn query_today_data(
         .map(|(p, t)| {
             (
                 p.clone(),
-                source_mtime(p, t, dsh_use_plugin).and_then(|m| m.modified().ok()),
+                source_mtime(p, t, dsh_use_plugin, dsh_plugin_dir.as_deref())
+                    .and_then(|m| m.modified().ok()),
             )
         })
         .collect();

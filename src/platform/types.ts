@@ -265,7 +265,9 @@ export interface DshSettings {
   usePlugin: boolean
   /** DSH 数据目录(~/.dsh,存在时) */
   dataDir: string | null
-  /** 插件数据目录(计算路径,可能不存在) */
+  /** 用户自定义的插件数据目录(未设置为 null) */
+  customDataDir: string | null
+  /** 插件数据目录(实际生效:自定义目录或计算默认路径,可能不存在) */
   pluginDataDir: string | null
   /** 插件是否已安装(插件数据目录存在) */
   pluginInstalled: boolean
@@ -294,6 +296,7 @@ export interface PlatformAdapter {
   scanDshNow(): Promise<DshScanResult>
   getDshSettings(): Promise<DshSettings>
   setDshPluginMode(usePlugin: boolean): Promise<DshSettings>
+  setDshPluginDataDir(dir: string | null): Promise<DshSettings>
   openPluginRepo(): Promise<void>
   getFilterOptions(): Promise<{ providers: { id: string; name: string }[]; models: string[]; dateRange: { min: number; max: number } }>
   // 查询

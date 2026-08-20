@@ -70,6 +70,34 @@
             </button>
           </div>
         </div>
+        <div class="dsh-plugin-row">
+          <span class="path-label">数据目录</span>
+          <span class="source-path" :title="dshSettings.pluginDataDir || ''">
+            {{ dshSettings.pluginDataDir || '~/.dsh/token-usage' }}
+          </span>
+          <span v-if="dshSettings.customDataDir" class="dsh-custom-tag">自定义</span>
+          <div class="path-actions">
+            <button
+              type="button"
+              class="icon-btn"
+              title="选择插件数据目录（usage 文件所在目录）"
+              :disabled="dshDirBusy"
+              @click="onPickDshPluginDir"
+            >
+              <n-icon size="14"><folder-open-outline /></n-icon>
+            </button>
+            <button
+              v-if="dshSettings.customDataDir"
+              type="button"
+              class="icon-btn"
+              title="恢复默认目录"
+              :disabled="dshDirBusy"
+              @click="onResetDshPluginDir"
+            >
+              <n-icon size="14"><refresh-outline /></n-icon>
+            </button>
+          </div>
+        </div>
         <p class="dsh-plugin-status">
           <span :class="['dsh-plugin-state', dshSettings.pluginInstalled ? 'ok' : 'warn']">
             {{ dshSettings.pluginInstalled ? '已安装' : '未安装' }}
@@ -91,7 +119,7 @@
           <span class="tm-label">使用此插件数据</span>
           <span class="tm-hint">{{ dshSettings.usePlugin ? '扫描插件记录（按天 JSONL）' : '扫描会话日志（session.jsonl.zstd）' }}</span>
         </div>
-        <p class="dsh-plugin-hint">两种来源按请求 ID 去重，切换不清空已导入数据；未使用插件数据时沿用会话扫描。</p>
+        <p class="dsh-plugin-hint">两种来源按请求 ID 去重，切换不清空已导入数据；未使用插件数据时沿用会话扫描。插件自定义数据目录时在此选择其 usage-*.jsonl 所在目录。</p>
       </div>
 
       <!-- Cursor：Hook 第一行 + 账号行 -->
@@ -338,7 +366,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { NModal, NIcon, NButton, NSwitch, NInput, useMessage } from 'naive-ui'
-import { CloseOutline, CopyOutline, CreateOutline, OpenOutline, SyncOutline } from '@vicons/ionicons5'
+import { CloseOutline, CopyOutline, CreateOutline, FolderOpenOutline, OpenOutline, RefreshOutline, SyncOutline } from '@vicons/ionicons5'
 import CompactDialog from '@/components/common/CompactDialog.vue'
 import CursorCsvPreviewDialog from '@/components/layout/CursorCsvPreviewDialog.vue'
 import { useDatabaseStore } from '@/stores/database'
@@ -365,12 +393,14 @@ const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy
 const dshSettings = ref<DshSettings>({
   usePlugin: false,
   dataDir: null,
+  customDataDir: null,
   pluginDataDir: null,
   pluginInstalled: false,
   usageFiles: 0,
   totalRecords: 0,
 })
 const dshModeBusy = ref(false)
+const dshDirBusy = ref(false)
 
 async function loadDshSettings(): Promise<void> {
   try {
@@ -411,27 +441,71 @@ async function onCopyInstallCmd(): Promise<void> {
   message.success('安装命令已复制')
 }
 
+/// DSH 数据来源变化(模式切换/目录切换)后的统一生效流程:
+/// 按当前模式扫描入库 → 刷新数据源列表与各视图
+async function applyDshSourceChange(): Promise<void> {
+  if (dshSettings.value.usePlugin) {
+    const result = await platformAdapter.scanDshNow()
+    console.log('[DSH] 插件数据扫描完成', result)
+  }
+  const sources = await platformAdapter.listDatabases()
+  dbStore.setSources(sources)
+  await refreshAfterToggle()
+}
+
 async function onToggleDshPlugin(use: boolean): Promise<void> {
   dshModeBusy.value = true
   try {
     const settings = await platformAdapter.setDshPluginMode(use)
     dshSettings.value = settings
-    if (use) {
-      if (!settings.pluginInstalled) {
-        message.warning('未检测到插件数据目录，请先安装 dsh-token-usage 插件后重试')
-      }
-      const result = await platformAdapter.scanDshNow()
-      console.log('[DSH] 插件数据扫描完成', result)
+    if (use && !settings.pluginInstalled) {
+      message.warning('未检测到插件数据目录，请先安装 dsh-token-usage 插件后重试')
     }
-    const sources = await platformAdapter.listDatabases()
-    dbStore.setSources(sources)
-    await refreshAfterToggle()
+    await applyDshSourceChange()
   } catch (e) {
     console.error('[DSH] 切换插件模式失败', e)
     message.error(typeof e === 'string' ? e : String((e as any)?.message || e || '切换失败'))
     await loadDshSettings()
   } finally {
     dshModeBusy.value = false
+  }
+}
+
+async function onPickDshPluginDir(): Promise<void> {
+  const dir = await platformAdapter.pickDirectory('选择 dsh-token-usage 数据目录')
+  if (!dir) return
+  dshDirBusy.value = true
+  try {
+    const settings = await platformAdapter.setDshPluginDataDir(dir)
+    dshSettings.value = settings
+    if (settings.pluginInstalled && settings.usageFiles === 0) {
+      message.warning('该目录下未发现 usage-*.jsonl 数据文件，请确认选择的是插件写入的数据目录')
+    } else {
+      message.success(`插件数据目录已切换：${settings.pluginDataDir}`)
+    }
+    await applyDshSourceChange()
+  } catch (e) {
+    console.error('[DSH] 设置插件数据目录失败', e)
+    message.error(typeof e === 'string' ? e : String((e as any)?.message || e || '设置失败'))
+    await loadDshSettings()
+  } finally {
+    dshDirBusy.value = false
+  }
+}
+
+async function onResetDshPluginDir(): Promise<void> {
+  dshDirBusy.value = true
+  try {
+    const settings = await platformAdapter.setDshPluginDataDir(null)
+    dshSettings.value = settings
+    message.success(`插件数据目录已恢复默认：${settings.pluginDataDir}`)
+    await applyDshSourceChange()
+  } catch (e) {
+    console.error('[DSH] 恢复默认插件数据目录失败', e)
+    message.error(typeof e === 'string' ? e : String((e as any)?.message || e || '恢复失败'))
+    await loadDshSettings()
+  } finally {
+    dshDirBusy.value = false
   }
 }
 
@@ -1448,6 +1522,16 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 
 .dsh-plugin-state.warn {
   color: var(--color-cost, #e17055);
+}
+
+.dsh-custom-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 3px;
+  color: var(--primary-color, #18a058);
+  background: color-mix(in srgb, var(--primary-color, #18a058) 14%, transparent);
 }
 
 .dsh-plugin-mode-row {

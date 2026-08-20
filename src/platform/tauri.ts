@@ -88,6 +88,9 @@ export const platformAdapter: PlatformAdapter = {
   async setDshPluginMode(usePlugin: boolean): Promise<DshSettings> {
     return invoke<DshSettings>('set_dsh_plugin_mode', { usePlugin })
   },
+  async setDshPluginDataDir(dir: string | null): Promise<DshSettings> {
+    return invoke<DshSettings>('set_dsh_plugin_data_dir', { dir })
+  },
   async openPluginRepo(): Promise<void> {
     return invoke<void>('open_plugin_repo')
   },

@@ -35,6 +35,10 @@ pub const DSH_SOURCE: &str = "dsh";
 /// 数据来源模式设置 key(settings 表):"1" 使用插件数据,其余走会话扫描
 pub const SETTING_DSH_USE_PLUGIN: &str = "dsh_use_plugin";
 
+/// 插件数据目录自定义设置 key(settings 表):非空时覆盖默认解析
+/// (插件新版支持自定义数据目录,用户在此显式指定其路径)
+pub const SETTING_DSH_PLUGIN_DATA_DIR: &str = "dsh_plugin_data_dir";
+
 /// 一条已解析的用量行(会话事件解析 / 插件记录解析的统一结构)
 #[derive(Debug, Clone)]
 pub struct ParsedRow {
@@ -348,7 +352,7 @@ pub fn set_dsh_use_plugin(app_db: &AppDbService, use_plugin: bool) -> Result<(),
 /// 按当前模式扫描 DSH 数据并增量入库(插件数据 / 会话扫描)。
 pub fn scan_dsh_by_mode(app_db: &AppDbService) -> Result<DshScanResult, String> {
     if dsh_use_plugin(app_db) {
-        let dir = crate::utils::get_default_dsh_plugin_dir()?;
+        let dir = resolve_dsh_plugin_dir(app_db)?;
         crate::services::dsh_plugin_scanner::scan_plugin_in(app_db, &dir)
     } else {
         scan_dsh(app_db)
@@ -358,7 +362,7 @@ pub fn scan_dsh_by_mode(app_db: &AppDbService) -> Result<DshScanResult, String> 
 /// 当前模式下 DSH 数据目录是否存在(用于数据源注册判断)。
 pub fn dsh_source_dir_available(app_db: &AppDbService) -> bool {
     if dsh_use_plugin(app_db) {
-        crate::utils::get_default_dsh_plugin_dir()
+        resolve_dsh_plugin_dir(app_db)
             .map(|d| d.is_dir())
             .unwrap_or(false)
     } else {
@@ -366,6 +370,22 @@ pub fn dsh_source_dir_available(app_db: &AppDbService) -> bool {
             .map(|d| d.is_dir())
             .unwrap_or(false)
     }
+}
+
+/// 解析插件数据目录:settings 自定义目录非空时完全覆盖默认解析,
+/// 否则回落 [`crate::utils::get_default_dsh_plugin_dir`]
+/// (`$DSH_HOME/token-usage` 或 `~/.dsh/token-usage`)。
+///
+/// 自定义目录可能已不存在(如被删除),此时仍返回该路径,
+/// 由调用方按 `plugin_installed` 等存在性状态呈现。
+pub fn resolve_dsh_plugin_dir(app_db: &AppDbService) -> Result<PathBuf, String> {
+    if let Some(custom) = app_db.get_setting(SETTING_DSH_PLUGIN_DATA_DIR) {
+        let custom = custom.trim().to_string();
+        if !custom.is_empty() {
+            return Ok(PathBuf::from(custom));
+        }
+    }
+    crate::utils::get_default_dsh_plugin_dir()
 }
 
 #[cfg(test)]
@@ -549,6 +569,62 @@ mod tests {
         assert!(dsh_use_plugin(&db));
         set_dsh_use_plugin(&db, false).unwrap();
         assert!(!dsh_use_plugin(&db));
+    }
+
+    #[test]
+    fn test_resolve_plugin_dir_custom_overrides_default() {
+        let db = AppDbService::new_in_memory().unwrap();
+        let default = crate::utils::get_default_dsh_plugin_dir().unwrap();
+
+        // 未设置 → 默认解析
+        assert_eq!(resolve_dsh_plugin_dir(&db).unwrap(), default);
+
+        // 非空自定义目录 → 完全覆盖默认(即使目录不存在也直接用)
+        let custom = if cfg!(windows) { r"C:\my-usage" } else { "/tmp/my-usage" };
+        db.set_setting(SETTING_DSH_PLUGIN_DATA_DIR, custom).unwrap();
+        assert_eq!(resolve_dsh_plugin_dir(&db).unwrap(), PathBuf::from(custom));
+
+        // 空白串视为未设置 → 回落默认
+        db.set_setting(SETTING_DSH_PLUGIN_DATA_DIR, "  ").unwrap();
+        assert_eq!(resolve_dsh_plugin_dir(&db).unwrap(), default);
+    }
+
+    /// 设置自定义目录后,插件模式扫描按自定义目录执行;清空后回落默认目录(无数据可扫)
+    #[test]
+    fn test_scan_by_mode_uses_custom_plugin_dir() {
+        let db = AppDbService::new_in_memory().unwrap();
+        set_dsh_use_plugin(&db, true).unwrap();
+
+        // 自定义目录:一条插件记录
+        let custom_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            custom_dir.path().join("usage-2026-08-20.jsonl"),
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "requestId": "c1", "time": 2_000_000u64, "sessionId": "s1",
+                    "model": "m", "usage": {"inputTokens": 10, "outputTokens": 5}
+                })
+            ),
+        )
+        .unwrap();
+        db.set_setting(SETTING_DSH_PLUGIN_DATA_DIR, custom_dir.path().to_str().unwrap())
+            .unwrap();
+
+        assert!(dsh_source_dir_available(&db));
+        let r = scan_dsh_by_mode(&db).unwrap();
+        assert_eq!(r.files_scanned, 1);
+        assert_eq!(r.imported, 1);
+
+        // 清空自定义 → 回落默认目录;自定义目录已入库的记录保留
+        // (默认目录是否存在因机器而异,不断言 imported == 0)
+        db.set_setting(SETTING_DSH_PLUGIN_DATA_DIR, "").unwrap();
+        assert_eq!(
+            resolve_dsh_plugin_dir(&db).unwrap(),
+            crate::utils::get_default_dsh_plugin_dir().unwrap()
+        );
+        let r2 = scan_dsh_by_mode(&db).unwrap();
+        assert!(r2.total_records >= 1);
     }
 
     /// 真实数据验证(扫描 ~/.dsh 到内存库,只读不改源文件)
