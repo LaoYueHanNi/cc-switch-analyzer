@@ -32,12 +32,14 @@ export function useRealtimePolling() {
     isFetchingBusy = true
     try {
       if (prevMaxCreatedAt === 0) {
+        // 首屏:后端按 created_at 全局倒序并截断 500,data[0] 即全局最新,作为增量游标
         const data: RealtimeRequestLog[] = await platformAdapter.queryRealtimeLogs() ?? []
         if (data.length > 0) {
           prevMaxCreatedAt = data[0].createdAt
         }
         logs.value = data
       } else {
+        // 增量:since 之后的新记录同样有序返回,fresh[0] 为最新,游标单调推进
         const fresh: RealtimeRequestLog[] = await platformAdapter.queryRealtimeLogs(prevMaxCreatedAt) ?? []
         if (fresh.length > 0) {
           if (!silent) {

@@ -73,6 +73,8 @@ export interface RealtimeRequestLog {
   sessionId: string
   model: string
   providerId: string
+  /** 所属数据源 canonical 名（如 "CCS"），用于实时 Tab 行首数据源标记 */
+  dbType: string
   createdAt: number
   inputTokens: number
   outputTokens: number

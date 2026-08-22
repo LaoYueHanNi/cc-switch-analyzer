@@ -300,11 +300,64 @@ impl DataSource for MinimaxDbService {
         Ok(Vec::new())
     }
 
+    /// 实时记录：从 session_request_logs 取最近请求（流式去重管道由此读取）。
+    /// since 为秒级游标（增量轮询）；None 时截断到最近 SESSION_TOP_N 条。
     fn get_recent_request_logs_raw(
         &self,
-        _since: Option<i64>,
+        since: Option<i64>,
     ) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)>, String> {
-        Ok(Vec::new())
+        let db = self.db()?;
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
+            Some(s) => (
+                format!(
+                    "SELECT session_id, model, provider_id, created_at,
+                            input_tokens, output_tokens, cache_read, cache_creation, latency
+                     FROM session_request_logs
+                     WHERE source = '{}' AND created_at > ?
+                     ORDER BY created_at DESC",
+                    PROVIDER_ID
+                ),
+                vec![Box::new(s)],
+            ),
+            None => (
+                format!(
+                    "SELECT session_id, model, provider_id, created_at,
+                            input_tokens, output_tokens, cache_read, cache_creation, latency
+                     FROM session_request_logs
+                     WHERE source = '{}'
+                     ORDER BY created_at DESC
+                     LIMIT {}",
+                    PROVIDER_ID,
+                    crate::utils::SESSION_TOP_N
+                ),
+                vec![],
+            ),
+        };
+        let mut stmt = db
+            .prepare(&sql)
+            .map_err(|e| format!("查询 MiniMax 最近请求日志失败: {}", e))?;
+        let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt
+            .query_map(refs.as_slice(), |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    row.get::<_, Option<i64>>(7)?.unwrap_or(0),
+                    row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+                    false,
+                ))
+            })
+            .map_err(|e| format!("查询 MiniMax 最近请求日志失败: {}", e))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| format!("读取 MiniMax 最近请求日志失败: {}", e))?);
+        }
+        Ok(out)
     }
 
     fn get_filtered_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> {
@@ -318,5 +371,95 @@ impl DataSource for MinimaxDbService {
             project_attribution: false,
             incremental_scan: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 建一张带 session_request_logs 表的临时应用库（先建库插入再只读打开，与 external_db 测试同模式）
+    fn temp_app_db() -> (std::path::PathBuf, String) {
+        let path = std::env::temp_dir().join(format!(
+            "ccsa_mm_db_test_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session_request_logs (
+                request_id TEXT PRIMARY KEY, source TEXT, session_id TEXT, model TEXT,
+                provider_id TEXT, input_tokens INTEGER, output_tokens INTEGER,
+                cache_read INTEGER, cache_creation INTEGER,
+                created_at INTEGER NOT NULL, latency INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_request_logs
+             (request_id, source, session_id, model, provider_id, input_tokens, output_tokens,
+              cache_read, cache_creation, created_at, latency)
+             VALUES (?1, 'MiniMax', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            rusqlite::params![
+                "r-old", "s1", "MiniMax-Text-01", "MiniMax", 100, 200, 50, 10, 1000, 300,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_request_logs
+             (request_id, source, session_id, model, provider_id, input_tokens, output_tokens,
+              cache_read, cache_creation, created_at, latency)
+             VALUES (?1, 'MiniMax', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            rusqlite::params![
+                "r-new", "s1", "MiniMax-M2", "MiniMax", 400, 500, 60, 20, 2000, 900,
+            ],
+        )
+        .unwrap();
+        // 其他源的记录不应返回
+        conn.execute(
+            "INSERT INTO session_request_logs
+             (request_id, source, session_id, model, provider_id, input_tokens, output_tokens,
+              cache_read, cache_creation, created_at, latency)
+             VALUES (?1, 'DSH', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            rusqlite::params![
+                "r-dsh", "s9", "deepseek-chat", "DSH", 1, 1, 0, 0, 1500, 10,
+            ],
+        )
+        .unwrap();
+        drop(conn);
+        let path_str = path.to_string_lossy().to_string();
+        (path, path_str)
+    }
+
+    #[test]
+    fn recent_request_logs_raw_orders_desc_and_filters_since() {
+        let (path, path_str) = temp_app_db();
+        let mut svc = MinimaxDbService::new();
+        svc.open(&path_str).unwrap();
+
+        // 全量：按 created_at 倒序，仅本源记录，末位 is_codex=false
+        let all = svc.get_recent_request_logs_raw(None).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].3, 2000);
+        assert_eq!(all[1].3, 1000);
+        assert!(!all[0].9);
+        assert_eq!(all[0].2, "MiniMax");
+
+        // 增量：since 之后（秒级 >）仅新记录
+        let fresh = svc.get_recent_request_logs_raw(Some(1000)).unwrap();
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].3, 2000);
+
+        // 列映射：input/output/cache_read/cache_creation/latency 与写入一致
+        assert_eq!(all[0].4, 400);
+        assert_eq!(all[0].5, 500);
+        assert_eq!(all[0].6, 60);
+        assert_eq!(all[0].7, 20);
+        assert_eq!(all[0].8, 900);
+
+        std::fs::remove_file(&path).ok();
     }
 }

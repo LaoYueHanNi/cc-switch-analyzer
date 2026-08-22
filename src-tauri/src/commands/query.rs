@@ -10,6 +10,7 @@ use crate::services::precompute::*;
 use crate::services::dedup::*;
 use crate::services::pipeline::*;
 use crate::services::session_title::{resolve_session_projects, find_jsonl_batch};
+use crate::utils::SESSION_TOP_N;
 
 macro_rules! require_sources {
     ($sources:expr) => {
@@ -302,7 +303,7 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
 
-    drop(sources);
+drop(sources);
 
     // CCS 会话同步过滤：实时流式日志与统计查询口径一致，
     // 按 settings 中的 ccs_filter_session_enabled / ccs_filter_session_apps 广播到数据源
@@ -333,6 +334,7 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     let provider_to_db = build_provider_to_db_map(&sources);
 
 
+
     let all_raw = run_streaming_dedup(&sources, since);
     drop(sources);
 
@@ -349,7 +351,7 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
     let tz_offset = (chrono::Local::now().offset().local_minus_utc() / 3600) as i64;
 
-    let result: Vec<RealtimeRequestLog> = all_raw.into_iter().map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms, is_codex)| {
+    let mut result: Vec<RealtimeRequestLog> = all_raw.into_iter().map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms, is_codex)| {
         let session_id = if is_codex {
             codex_ts_mapping.get(&created_at).cloned().unwrap_or(session_id)
         } else {
@@ -368,14 +370,21 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
                 (0.0, 0.0, 0.0, 0.0)
             };
         let context_tier_threshold = pricing.get_matched_tier_threshold(&model, created_at, context_size);
+        let db_type = provider_to_db.get(&provider_id).cloned().unwrap_or_else(|| provider_id.clone());
         RealtimeRequestLog {
-            session_id, model, provider_id, created_at,
+            session_id, model, provider_id, db_type, created_at,
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             latency_ms, input_cost, output_cost, cache_read_cost, cache_creation_cost,
             total_cost: input_cost + output_cost + cache_read_cost + cache_creation_cost,
             context_tier_threshold,
         }
     }).collect();
+
+    // 各数据源经 channel 并发混流,到达顺序无序;全局按时间倒序并截断到最近
+    // SESSION_TOP_N 条,保证「最近 500 条」语义,同时让轮询游标 data[0]/fresh[0]
+    // 取到全局最新记录(见 useRealtimePolling)。
+    result.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    result.truncate(SESSION_TOP_N as usize);
 
     Ok(result)
 }

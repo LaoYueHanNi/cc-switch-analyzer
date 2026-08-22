@@ -40,38 +40,34 @@
       <span class="refresh-time">{{ lastRefreshTime || '-' }}</span>
     </div>
 
-    <!-- 请求日志列表 -->
-    <div v-if="logs.length > 0" class="log-list">
-      <template v-for="(group, gi) in visibleGroups" :key="group.sessionId">
-        <!-- Session 分组头 -->
-        <div class="session-header" :class="{ 'session-new': groupHasNew(group) }" @click="toggleGroup(group.sessionId)">
-          <span class="sh-arrow" :class="{ collapsed: collapsedSessions.has(group.sessionId) }">▾</span>
-          <span class="sh-project" v-if="getProject(group.sessionId)" :title="getProject(group.sessionId)">{{ getProject(group.sessionId) }}</span>
-          <span class="sh-id" :class="{ 'sh-id-zcode': group.sessionId === 'ZCode' }">{{ group.sessionId === 'ZCode' ? 'ZCode' : shortSessionId(group.sessionId) }}</span>
-          <span class="sh-title" v-if="getTitle(group.sessionId)" :title="getTitle(group.sessionId)">{{ getTitle(group.sessionId) }}</span>
-          <span class="sh-ctx">ctx {{ formatNum(group.maxContextWidth) }}</span>
-          <span class="sh-count">{{ group.rows.length }} 次<template v-if="groupTierLabel(group)">（{{ groupTierLabel(group) }}）</template></span>
-          <span class="sh-cost">{{ formatCost(group.cost) }}</span>
-          <span class="sh-time">{{ formatTime(group.rows[group.rows.length - 1].createdAt) }} ~ {{ formatTime(group.rows[0].createdAt) }}</span>
-        </div>
-        <template v-if="!collapsedSessions.has(group.sessionId)">
-        <div class="session-body">
-        <!-- 表头 -->
-        <div class="log-header">
-          <span class="col-time">时间</span>
-          <span class="col-model">模型</span>
-          <span class="col-token c-input">输入</span>
-          <span class="col-token c-output">输出</span>
-          <span class="col-token c-cache-r">缓存读</span>
-          <span class="col-token c-cache-w">缓存写</span>
-          <span class="col-total">总token</span>
-          <span class="col-cost">费用</span>
-          <span class="col-tier">档位</span>
-          <span class="col-latency">延迟</span>
-        </div>
-        <!-- 数据行 -->
-        <div class="session-rows">
-        <div class="log-row" :class="{ 'log-new': row.isNew }" v-for="(row, ri) in visibleRows(group)" :key="row.createdAt + row.model + ri">
+    <!-- 请求日志列表:平铺单表,每行最左侧标记数据源 -->
+    <div v-if="sortedLogs.length > 0" class="log-list">
+      <!-- 表头 -->
+      <div class="log-header">
+        <span class="col-source">数据源</span>
+        <span class="col-time">时间</span>
+        <span class="col-model">模型</span>
+        <span class="col-token c-input">输入</span>
+        <span class="col-token c-output">输出</span>
+        <span class="col-token c-cache-r">缓存读</span>
+        <span class="col-token c-cache-w">缓存写</span>
+        <span class="col-total">总token</span>
+        <span class="col-cost">费用</span>
+        <span class="col-tier">档位</span>
+        <span class="col-latency">延迟</span>
+      </div>
+      <!-- 数据行 -->
+      <div class="session-rows">
+        <div
+          class="log-row"
+          :class="{ 'log-new': row.isNew }"
+          v-for="(row, i) in sortedLogs"
+          :key="`${row.createdAt}-${row.model}-${row.dbType}-${i}`"
+        >
+          <span class="col-source">
+            <span class="source-dot" :class="dotClass(row.dbType)" />
+            <span class="source-name">{{ row.dbType }}</span>
+          </span>
           <span class="col-time">{{ formatTime(row.createdAt) }}</span>
           <span class="col-model" :title="row.model">{{ shortModel(row.model) }}</span>
           <span class="col-token c-input">
@@ -96,18 +92,7 @@
           <span class="col-tier" v-else>-</span>
           <span class="col-latency">{{ formatLatency(row.latencyMs) }}</span>
         </div>
-        <button
-          v-if="hasMoreRows(group)"
-          type="button"
-          class="show-more-btn"
-          @click="expandGroupRows(group.sessionId)"
-        >
-          展开全部 {{ group.rows.length }} 条
-        </button>
-        </div>
-        </div>
-        </template>
-      </template>
+      </div>
     </div>
 
     <div v-else class="realtime-empty">
@@ -118,48 +103,26 @@
 
 <script setup lang="ts">
 defineOptions({ name: 'RealtimeToken' })
-import { computed, ref, onMounted, onActivated, onDeactivated, watch } from 'vue'
+import { computed, onMounted, onActivated, onDeactivated, watch } from 'vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useRealtimePolling } from '@/composables/useRealtimePolling'
-import { useSessionTitles } from '@/composables/useSessionTitles'
-import { formatNum, formatCost, formatPercent, shortSessionId } from '@/utils/format'
-import type { RealtimeRequestLog } from '@/types/database'
+import { formatNum, formatCost, formatPercent } from '@/utils/format'
 
 const dbStore = useDatabaseStore()
 const { logs, lastRefreshTime, startPolling, stopPolling, refreshNow } = useRealtimePolling()
-const { sessionTitles, getTitle, getProject, getSource, fetchTitles } = useSessionTitles()
 
-const collapsedSessions = ref<Set<string>>(new Set())
-const expandedRowLimits = ref<Set<string>>(new Set())
-const ROW_LIMIT = 40
-
-function visibleRows(group: SessionGroup): RealtimeRequestLog[] {
-  if (expandedRowLimits.value.has(group.sessionId) || group.rows.length <= ROW_LIMIT) {
-    return group.rows
+// 数据源圆点配色(与设置页 slot key 命名一致)
+function dotClass(dbType: string): string {
+  const map: Record<string, string> = {
+    'CCS': 'cc-switch', 'OpenCode': 'opencode', 'AIProxy': 'ai-proxy',
+    'Cursor': 'cursor', 'ZCode': 'z-code', 'Proma': 'proma',
+    'DSH': 'dsh', 'MiniMax': 'minimax',
   }
-  return group.rows.slice(0, ROW_LIMIT)
+  return map[dbType] ?? dbType.toLowerCase()
 }
 
-function hasMoreRows(group: SessionGroup): boolean {
-  return group.rows.length > ROW_LIMIT && !expandedRowLimits.value.has(group.sessionId)
-}
-
-function expandGroupRows(sessionId: string): void {
-  const next = new Set(expandedRowLimits.value)
-  next.add(sessionId)
-  expandedRowLimits.value = next
-}
-
-function toggleGroup(sessionId: string): void {
-  const next = new Set(collapsedSessions.value)
-  if (next.has(sessionId)) next.delete(sessionId)
-  else next.add(sessionId)
-  collapsedSessions.value = next
-}
-
-function groupHasNew(group: SessionGroup): boolean {
-  return group.rows.some(r => r.isNew)
-}
+// 平铺列表:按时间倒序(后端已全局排序+截断 500,此处兜底再排)
+const sortedLogs = computed(() => [...logs.value].sort((a, b) => b.createdAt - a.createdAt))
 
 const hasNewData = computed(() => logs.value.some(r => r.isNew))
 
@@ -173,18 +136,16 @@ const summaryStats = computed(() => {
   let inputTokens = 0
   let cacheReadTokens = 0
   let cacheCreationTokens = 0
-  for (const group of visibleGroups.value) {
-    for (const r of group.rows) {
-      cost += r.totalCost
-      tokens += r.inputTokens + r.outputTokens + r.cacheReadTokens + r.cacheCreationTokens
-      inputCost += r.inputCost
-      outputCost += r.outputCost
-      cacheReadCost += r.cacheReadCost
-      cacheCreationCost += r.cacheCreationCost
-      inputTokens += r.inputTokens
-      cacheReadTokens += r.cacheReadTokens
-      cacheCreationTokens += r.cacheCreationTokens
-    }
+  for (const r of logs.value) {
+    cost += r.totalCost
+    tokens += r.inputTokens + r.outputTokens + r.cacheReadTokens + r.cacheCreationTokens
+    inputCost += r.inputCost
+    outputCost += r.outputCost
+    cacheReadCost += r.cacheReadCost
+    cacheCreationCost += r.cacheCreationCost
+    inputTokens += r.inputTokens
+    cacheReadTokens += r.cacheReadTokens
+    cacheCreationTokens += r.cacheCreationTokens
   }
   return {
     totalCost: cost,
@@ -205,53 +166,6 @@ const totalCacheReadCost = computed(() => summaryStats.value.totalCacheReadCost)
 const totalCacheCreationCost = computed(() => summaryStats.value.totalCacheCreationCost)
 const cacheHitRate = computed(() => summaryStats.value.cacheHitRate)
 
-interface SessionGroup {
-  sessionId: string
-  rows: RealtimeRequestLog[]
-  cost: number
-  maxContextWidth: number
-}
-
-const sessionGroups = computed<SessionGroup[]>(() => {
-  const map = new Map<string, RealtimeRequestLog[]>()
-  for (const log of logs.value) {
-    // ZCode 请求不按会话分组，聚合为单一 "ZCode" 组展示最近记录
-    const sid = log.providerId === 'ZCode' ? 'ZCode' : (log.sessionId || 'unknown')
-    if (!map.has(sid)) map.set(sid, [])
-    map.get(sid)!.push(log)
-  }
-  // 每组按时间倒序
-  const groups: SessionGroup[] = []
-  for (const [sessionId, rows] of map) {
-    rows.sort((a, b) => b.createdAt - a.createdAt)
-    groups.push({
-      sessionId,
-      rows,
-      cost: rows.reduce((s, r) => s + r.totalCost, 0),
-      maxContextWidth: Math.max(0, ...rows.map(r => r.inputTokens + r.cacheReadTokens))
-    })
-  }
-  // 按组内最新时间倒序
-  groups.sort((a, b) => b.rows[0].createdAt - a.rows[0].createdAt)
-  return groups
-})
-
-const visibleGroups = computed<SessionGroup[]>(() => {
-  return sessionGroups.value.filter(g => {
-    if (g.rows.length > 1) return true
-    // 标题尚未查询，暂不过滤，避免闪烁
-    const titleInfo = sessionTitles.value.get(g.sessionId)
-    if (!titleInfo) return true
-    return titleInfo.source !== ''
-  })
-})
-
-watch(() => logs.value.length, (len, prev) => {
-  if (len > 0 && prev === 0 && sessionGroups.value.length > 1) {
-    collapsedSessions.value = new Set(sessionGroups.value.slice(1).map(g => g.sessionId))
-  }
-})
-
 function formatTime(epoch: number): string {
   const d = new Date(epoch * 1000)
   const mm = String(d.getMonth() + 1).padStart(2, '0')
@@ -259,23 +173,6 @@ function formatTime(epoch: number): string {
   const hh = String(d.getHours()).padStart(2, '0')
   const mi = String(d.getMinutes()).padStart(2, '0')
   return `${mm}/${dd} ${hh}:${mi}`
-}
-
-function groupTierLabel(group: SessionGroup): string {
-  const tiers = new Map<number, number>()
-  for (const r of group.rows) {
-    const key = r.contextTierThreshold || 0
-    tiers.set(key, (tiers.get(key) || 0) + r.totalCost)
-  }
-  if (!Array.from(tiers.keys()).some(k => k > 0)) return ''
-  const total = Array.from(tiers.values()).reduce((s, v) => s + v, 0)
-  if (total <= 0) return ''
-  const sorted = Array.from(tiers.entries()).sort((a, b) => a[0] - b[0])
-  return sorted.map(([threshold, cost]) => {
-    const pct = Math.round(cost / total * 100)
-    const name = threshold === 0 ? '基础' : `≥${Math.round(threshold / 1000)}K`
-    return `${name} ${pct}%`
-  }).join(' ')
 }
 
 function shortModel(name: string): string {
@@ -287,11 +184,6 @@ function formatLatency(ms: number): string {
   if (ms >= 1000) return (ms / 1000).toFixed(1) + 's'
   return ms + 'ms'
 }
-
-watch(logs, () => {
-  const ids = [...new Set(logs.value.map(r => r.sessionId).filter(Boolean))]
-  if (ids.length > 0) fetchTitles(ids)
-})
 
 onMounted(() => {
   if (dbStore.hasDatabase) startPolling()
@@ -351,82 +243,8 @@ watch(() => dbStore.hasDatabase, (val) => {
   background: var(--bg-card); border-radius: 6px; border: 1px solid var(--border-main); font-size: 12px;
 }
 
-/* Session 分组头 */
-.session-header {
-  display: flex; align-items: center;
-  padding: 5px 10px; gap: 6px;
-  background: var(--bg-card-alt);
-  border-bottom: 1px solid var(--border-main);
-  border-top: 1px solid var(--border-main);
-  position: sticky; top: 0; z-index: 2;
-  cursor: pointer;
-  user-select: none;
-}
-.session-header:hover { background: var(--bg-hover); }
-.session-new { animation: row-flash 1.5s ease-out; }
-.sh-arrow {
-  width: 14px; flex-shrink: 0;
-  font-size: 10px; color: var(--text-muted); transition: transform var(--transition-speed);
-}
-.sh-arrow.collapsed { transform: rotate(-90deg); }
-.sh-project {
-  width: 100px; flex-shrink: 0;
-  font-size: 10px; color: var(--text-faint);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.sh-id {
-  width: 65px; flex-shrink: 0;
-  font-size: 12px; font-weight: 700; color: var(--color-blue);
-}
-.sh-title {
-  flex: 1; min-width: 0;
-  font-size: 11px; color: var(--text-secondary); font-weight: 500;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.sh-ctx {
-  width: auto; min-width: 40px; flex-shrink: 0; text-align: right;
-  font-size: 10px; color: var(--text-muted);
-}
-.sh-count {
-  width: auto; min-width: 45px; flex-shrink: 0; text-align: right;
-  font-size: 10px; color: var(--text-muted);
-}
-.sh-cost {
-  width: 70px; flex-shrink: 0; text-align: right;
-  font-size: 11px; font-weight: 600; color: var(--color-cost);
-}
-.sh-time {
-  width: 145px; flex-shrink: 0; text-align: right;
-  font-size: 10px; color: var(--text-faint);
-}
-
-.session-body {
-  border-bottom: 1px solid var(--border-main);
-  /* 折叠体多且不在视口内时跳过渲染/布局开销，替代重量级虚拟滚动方案 */
-  content-visibility: auto;
-  contain-intrinsic-size: 0 200px;
-}
-
 .session-rows {
-  max-height: 270px;
-  overflow-y: auto;
-}
-
-.show-more-btn {
-  display: block;
-  width: 100%;
-  padding: 6px 10px;
-  border: none;
-  border-top: 1px solid var(--border-faint);
-  background: var(--bg-card);
-  color: var(--text-muted);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.show-more-btn:hover {
-  color: var(--text-primary);
-  background: var(--bg-hover);
+  content-visibility: auto;
 }
 
 .log-header {
@@ -440,6 +258,7 @@ watch(() => dbStore.hasDatabase, (val) => {
 .log-row {
   display: flex; align-items: center; padding: 4px 10px;
   border-bottom: 1px solid var(--border-faint);
+  content-visibility: auto;
 }
 .log-row:nth-child(even) { background: var(--bg-card-alt); }
 
@@ -451,6 +270,31 @@ watch(() => dbStore.hasDatabase, (val) => {
   0% { background: var(--bg-flash); }
   100% { background: transparent; }
 }
+
+/* 列宽 - 数据源 */
+.col-source {
+  width: 92px; flex-shrink: 0;
+  display: flex; align-items: center; gap: 5px;
+  color: var(--text-primary);
+}
+.col-source .source-name {
+  font-size: 11px; font-weight: 600; color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 数据源圆点配色 */
+.source-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.source-dot.cc-switch { background: var(--color-blue); }
+.source-dot.opencode { background: var(--color-amber); }
+.source-dot.ai-proxy { background: var(--color-green); }
+.source-dot.z-code { background: #00cec9; }
+.source-dot.proma { background: #ff9f43; }
+.source-dot.dsh { background: #e84393; }
+/* 深灰在黑夜模式下与卡片背景融为一体,改用主题变量随明暗自动适配 */
+.source-dot.minimax { background: var(--text-muted); }
+.source-dot.cursor { background: #6c5ce7; }
 
 /* 列宽 - 基础 */
 .col-time { width: 80px; flex-shrink: 0; color: var(--text-primary); font-weight: 500; }

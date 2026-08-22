@@ -182,6 +182,9 @@ pub struct RealtimeRequestLog {
     pub session_id: String,
     pub model: String,
     pub provider_id: String,
+    /// 记录所属数据源 canonical 名(如 "CCS")，用于实时 Tab 行首数据源标记；
+    /// 动态供应商经 provider→数据源映射归并
+    pub db_type: String,
     pub created_at: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
