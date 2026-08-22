@@ -127,9 +127,11 @@ fn parse_plugin_line(line: &str) -> Option<ParsedRow> {
         output_tokens,
         cache_read,
         cache_creation,
-        created_at,
-    })
-}
+            created_at,
+            project: String::new(),
+            latency: 0,
+        })
+    }
 
 /// 对指定插件数据目录执行扫描(可测入口,不依赖固定路径)。
 pub fn scan_plugin_in(app_db: &AppDbService, dir: &Path) -> Result<DshScanResult, String> {

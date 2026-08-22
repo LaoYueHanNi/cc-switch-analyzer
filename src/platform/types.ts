@@ -304,6 +304,7 @@ export interface PlatformAdapter {
   refreshDatabase(): Promise<RefreshResult>
   scanDshNow(): Promise<DshScanResult>
   scanMinimaxNow(): Promise<DshScanResult>
+  scanPromaNow(): Promise<DshScanResult>
   getDshSettings(): Promise<DshSettings>
   setDshPluginMode(usePlugin: boolean): Promise<DshSettings>
   setDshPluginDataDir(dir: string | null): Promise<DshSettings>

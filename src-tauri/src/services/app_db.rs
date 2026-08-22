@@ -96,6 +96,9 @@ impl AppDbService {
         if version < 12 {
             self.migrate_v12()?;
         }
+        if version < 13 {
+            self.migrate_v13()?;
+        }
 
         Ok(())
     }
@@ -398,7 +401,8 @@ impl AppDbService {
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 cache_read INTEGER NOT NULL DEFAULT 0,
                 cache_creation INTEGER NOT NULL DEFAULT 0,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                latency INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_srl_source  ON session_request_logs(source);
             CREATE INDEX IF NOT EXISTS idx_srl_created ON session_request_logs(created_at);
@@ -437,6 +441,26 @@ impl AppDbService {
         )
         .map_err(|e| format!("迁移 v12 (数据源标识规范化) 失败: {}", e))?;
         self.set_schema_version(12)?;
+        Ok(())
+    }
+
+    /// v13: session_request_logs 增加 latency 列（毫秒），
+    /// 支持扫描型数据源保留延迟字段（如 Proma 的 durationMs）
+    fn migrate_v13(&mut self) -> Result<(), String> {
+        let has_col = self
+            .db
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('session_request_logs') WHERE name='latency'",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(|e| format!("检查 session_request_logs 列失败: {}", e))?;
+        if !has_col {
+            self.db
+                .execute_batch("ALTER TABLE session_request_logs ADD COLUMN latency INTEGER NOT NULL DEFAULT 0;")
+                .map_err(|e| format!("迁移 v13 (session_request_logs.latency) 失败: {}", e))?;
+        }
+        self.set_schema_version(13)?;
         Ok(())
     }
 
@@ -676,8 +700,11 @@ impl AppDbService {
             .ok()
     }
 
-    /// 插入一条会话请求日志(INSERT OR IGNORE,主键 request_id 去重)。返回是否实际写入。
+    /// 插入一条会话请求日志(主键 request_id 去重)。返回是否实际写入/更新。
     /// 接收已开事务的连接,供 scanner 批量提交。
+    ///
+    /// 冲突时按四维 token 总和"取更大者"更新（复刻 Proma 分片快照
+    /// 取最大语义）；对 request_id 唯一的源(DSH/MiniMax)行为等同 IGNORE。
     pub fn insert_session_log_on_conn(
         conn: &Connection,
         source: &str,
@@ -690,13 +717,23 @@ impl AppDbService {
         cache_read: i64,
         cache_creation: i64,
         created_at: i64,
+        latency: i64,
     ) -> Result<bool, String> {
         let changed = conn
             .execute(
-                "INSERT OR IGNORE INTO session_request_logs
+                "INSERT INTO session_request_logs
                     (request_id, source, session_id, model, provider_id,
-                     input_tokens, output_tokens, cache_read, cache_creation, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     input_tokens, output_tokens, cache_read, cache_creation, created_at, latency)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(request_id) DO UPDATE SET
+                   input_tokens = excluded.input_tokens,
+                   output_tokens = excluded.output_tokens,
+                   cache_read = excluded.cache_read,
+                   cache_creation = excluded.cache_creation,
+                   latency = excluded.latency
+                 WHERE (excluded.input_tokens + excluded.output_tokens + excluded.cache_read + excluded.cache_creation)
+                     > (session_request_logs.input_tokens + session_request_logs.output_tokens
+                        + session_request_logs.cache_read + session_request_logs.cache_creation)",
                 params![
                     request_id,
                     source,
@@ -707,7 +744,8 @@ impl AppDbService {
                     output_tokens,
                     cache_read,
                     cache_creation,
-                    created_at
+                    created_at,
+                    latency
                 ],
             )
             .map_err(|e| format!("插入会话日志失败: {}", e))?;
@@ -1356,6 +1394,23 @@ impl AppDbService {
         Ok(())
     }
 
+    /// 事务内写入会话项目归属（扫描器增量入库用）。
+    /// 仅填充缺失的 project_dir，不覆盖已有记录（避免丢失已解析的 title/source）。
+    pub fn save_session_project_on_conn(
+        conn: &rusqlite::Connection,
+        session_id: &str,
+        project_dir: &str,
+        source: &str,
+    ) -> Result<(), String> {
+        conn.execute(
+            "INSERT INTO sessions (session_id, project_dir, title, source) VALUES (?, ?, '', ?)
+             ON CONFLICT(session_id) DO UPDATE SET
+               project_dir = CASE WHEN sessions.project_dir = '' THEN excluded.project_dir ELSE sessions.project_dir END",
+            params![session_id, project_dir, source],
+        ).map_err(|e| format!("保存 session 项目归属失败: {}", e))?;
+        Ok(())
+    }
+
     // ========== 云端定价缓存 ==========
 
     /// 将云端定价数据写入缓存（事务替换）
@@ -1806,7 +1861,8 @@ impl AppDbService {
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 cache_read INTEGER NOT NULL DEFAULT 0,
                 cache_creation INTEGER NOT NULL DEFAULT 0,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                latency INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_srl_source  ON session_request_logs(source);
             CREATE INDEX IF NOT EXISTS idx_srl_created ON session_request_logs(created_at);
@@ -1820,7 +1876,7 @@ impl AppDbService {
                 last_synced_at INTEGER NOT NULL
             );"
         ).map_err(|e| format!("初始化内存表失败: {}", e))?;
-        self.set_setting("schema_version", "12")?;
+        self.set_setting("schema_version", "13")?;
         Ok(())
     }
 }
@@ -1846,7 +1902,7 @@ mod tests {
     #[test]
     fn test_schema_version() {
         let db = create_db();
-        assert_eq!(db.get_setting("schema_version").unwrap(), "12");
+        assert_eq!(db.get_setting("schema_version").unwrap(), "13");
     }
 
     #[test]

@@ -1,8 +1,9 @@
-//! MiniMax Code 数据源(只读)
+//! Proma 数据源(只读)
 //!
-//! 以只读连接打开应用自有库 pricing.db,从 session_request_logs 中读取 source='minimax'
-//! 的记录(由 minimax_scanner 扫描入库)。聚合复用 pipeline::aggregate_*(与 DSH 相同),
-//! 模式为「SQL 取记录 + 内存聚合」的混合型数据源。
+//! 以只读连接打开应用自有库 pricing.db,从 session_request_logs 中读取
+//! source='Proma' 的记录(由 proma_scanner 扫描入库)。聚合复用
+//! pipeline::aggregate_*(与 DSH/MiniMax 相同),模式为「SQL 取记录 +
+//! 内存聚合」的混合型数据源。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -17,15 +18,15 @@ use crate::services::pipeline::{
     aggregate_provider_model_tokens, aggregate_summary,
 };
 
-const PROVIDER_ID: &str = "MiniMax";
-const PROVIDER_NAME: &str = "MiniMax";
+const PROVIDER_ID: &str = "Proma";
+const PROVIDER_NAME: &str = "Proma";
 
-pub struct MinimaxDbService {
+pub struct PromaDbService {
     db: Option<Mutex<Connection>>,
     db_path: String,
 }
 
-impl MinimaxDbService {
+impl PromaDbService {
     pub fn new() -> Self {
         Self {
             db: None,
@@ -40,8 +41,8 @@ impl MinimaxDbService {
             OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
         .map_err(|e| {
-            log::error!("[MINIMAX] 打开数据库失败 (path={}): {}", file_path, e);
-            "打开 MiniMax 数据库失败,请检查应用库路径".to_string()
+            log::error!("[PROMA] 打开数据库失败 (path={}): {}", file_path, e);
+            "打开 Proma 数据库失败,请检查应用库路径".to_string()
         })?;
         self.db_path = file_path.to_string();
         self.db = Some(Mutex::new(conn));
@@ -60,12 +61,12 @@ impl MinimaxDbService {
     fn db(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
         self.db
             .as_ref()
-            .ok_or_else(|| "MiniMax 数据库未打开".to_string())?
+            .ok_or_else(|| "Proma 数据库未打开".to_string())?
             .lock()
-            .map_err(|e| format!("MiniMax 数据库锁失败: {}", e))
+            .map_err(|e| format!("Proma 数据库锁失败: {}", e))
     }
 
-    /// 按 FilterParams 过滤查询 MiniMax 记录(SQL 取全量 source='minimax' + 内存过滤)。
+    /// 按 FilterParams 过滤查询 Proma 记录(SQL 取全量 + 内存过滤)。
     fn filtered_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> {
         let db = self.db()?;
         let mut stmt = db
@@ -73,17 +74,17 @@ impl MinimaxDbService {
                 "SELECT session_id, model, provider_id, created_at,
                         input_tokens, output_tokens, cache_read, cache_creation, latency
                  FROM session_request_logs
-                 WHERE source = 'MiniMax'
+                 WHERE source = 'Proma'
                  ORDER BY created_at",
             )
-            .map_err(|e| format!("查询 MiniMax 记录失败: {}", e))?;
+            .map_err(|e| format!("查询 Proma 记录失败: {}", e))?;
         let rows = stmt
             .query_map([], |row| {
                 Ok(RawRecord {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                    db_type: "MiniMax".to_string(),
+                    db_type: "Proma".to_string(),
                     created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                     input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
                     output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
@@ -93,10 +94,10 @@ impl MinimaxDbService {
                     is_codex: false,
                 })
             })
-            .map_err(|e| format!("查询 MiniMax 记录失败: {}", e))?;
+            .map_err(|e| format!("查询 Proma 记录失败: {}", e))?;
         let mut out = Vec::new();
         for r in rows {
-            let rec = r.map_err(|e| format!("读取 MiniMax 记录失败: {}", e))?;
+            let rec = r.map_err(|e| format!("读取 Proma 记录失败: {}", e))?;
             if record_matches_params(&rec, params) {
                 out.push(rec);
             }
@@ -129,7 +130,7 @@ fn record_matches_params(record: &RawRecord, params: &FilterParams) -> bool {
     true
 }
 
-impl DataSource for MinimaxDbService {
+impl DataSource for PromaDbService {
     fn open(&mut self, path: &str) -> Result<(), String> {
         self.open(path)
     }
@@ -143,11 +144,11 @@ impl DataSource for MinimaxDbService {
     fn get_record_count(&self) -> Result<i64, String> {
         let db = self.db()?;
         db.query_row(
-            "SELECT COUNT(*) FROM session_request_logs WHERE source = 'MiniMax'",
+            "SELECT COUNT(*) FROM session_request_logs WHERE source = 'Proma'",
             [],
             |row| row.get(0),
         )
-        .map_err(|e| format!("查询 MiniMax 记录数失败: {}", e))
+        .map_err(|e| format!("查询 Proma 记录数失败: {}", e))
     }
 
     fn get_latest_timestamp(&self) -> Option<i64> {
@@ -156,7 +157,7 @@ impl DataSource for MinimaxDbService {
             .ok()
             .and_then(|db| {
                 db.query_row(
-                    "SELECT MAX(created_at) FROM session_request_logs WHERE source = 'MiniMax'",
+                    "SELECT MAX(created_at) FROM session_request_logs WHERE source = 'Proma'",
                     [],
                     |row| row.get::<_, Option<i64>>(0),
                 )
@@ -177,15 +178,15 @@ impl DataSource for MinimaxDbService {
         let mut stmt = db
             .prepare(
                 "SELECT DISTINCT model FROM session_request_logs
-                 WHERE source = 'MiniMax' AND model <> '' ORDER BY model",
+                 WHERE source = 'Proma' AND model <> '' ORDER BY model",
             )
-            .map_err(|e| format!("查询 MiniMax 模型失败: {}", e))?;
+            .map_err(|e| format!("查询 Proma 模型失败: {}", e))?;
         let rows = stmt
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| format!("查询 MiniMax 模型失败: {}", e))?;
+            .map_err(|e| format!("查询 Proma 模型失败: {}", e))?;
         let mut out = Vec::new();
         for r in rows {
-            out.push(r.map_err(|e| format!("读取 MiniMax 模型失败: {}", e))?);
+            out.push(r.map_err(|e| format!("读取 Proma 模型失败: {}", e))?);
         }
         Ok(out)
     }
@@ -195,7 +196,7 @@ impl DataSource for MinimaxDbService {
         let (min, max) = db
             .query_row(
                 "SELECT MIN(created_at), MAX(created_at)
-                 FROM session_request_logs WHERE source = 'MiniMax'",
+                 FROM session_request_logs WHERE source = 'Proma'",
                 [],
                 |row| {
                     Ok((
@@ -252,7 +253,7 @@ impl DataSource for MinimaxDbService {
         ))
     }
 
-    // 会话 tab、实时 tab 早期返回空(与 DSH 一致)
+    // 会话管理未声明(capabilities.session_management=false),会话相关查询返回空
     fn get_session_breakdown(&self, _params: &FilterParams) -> Result<Vec<SessionBreakdown>, String> {
         Ok(Vec::new())
     }
@@ -312,10 +313,10 @@ impl DataSource for MinimaxDbService {
     }
 
     fn capabilities(&self) -> SourceCapabilities {
-        // manifest.json 无项目字段（实勘确认），仅支持扫描入库
+        // workspace 项目名映射可得(实勘确认);扫描入库 + 增量
         SourceCapabilities {
             session_management: false,
-            project_attribution: false,
+            project_attribution: true,
             incremental_scan: true,
         }
     }

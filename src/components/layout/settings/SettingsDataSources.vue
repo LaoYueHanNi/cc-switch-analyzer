@@ -29,22 +29,22 @@
 
       <!-- 路径/状态 + 操作（Cursor 已并入账号行，此处仅其它数据源） -->
       <div v-if="slot.key !== 'cursor'" class="source-path-row">
-        <span class="path-label">{{ slot.key === 'dsh' || slot.key === 'minimax' ? '数据目录' : '数据库地址' }}</span>
+        <span class="path-label">{{ slot.key === 'dsh' || slot.key === 'minimax' || slot.key === 'proma' ? '数据目录' : '数据库地址' }}</span>
         <span class="source-path" :title="slot.path || ''">{{ slot.path || (slot.key === 'cc-switch' ? '未启用（可开启自动发现）' : '未选择') }}</span>
         <div class="path-actions">
           <button
             type="button"
             class="icon-btn"
-            :title="slot.key === 'dsh' || slot.key === 'minimax' ? '立即扫描' : (slot.path ? '更换数据库' : '选择数据库')"
+            :title="slot.key === 'dsh' || slot.key === 'minimax' || slot.key === 'proma' ? '立即扫描' : (slot.path ? '更换数据库' : '选择数据库')"
             @click="onSelect(slot.key)"
           >
             <n-icon size="14">
-              <sync-outline v-if="slot.key === 'dsh' || slot.key === 'minimax'" />
+              <sync-outline v-if="slot.key === 'dsh' || slot.key === 'minimax' || slot.key === 'proma'" />
               <create-outline v-else />
             </n-icon>
           </button>
           <button
-            v-if="slot.path && slot.key !== 'dsh' && slot.key !== 'minimax'"
+            v-if="slot.path && slot.key !== 'dsh' && slot.key !== 'minimax' && slot.key !== 'proma'"
             type="button"
             class="icon-btn danger"
             title="移除"
@@ -902,7 +902,13 @@ const slots = computed(() => [
   {
     key: 'proma',
     label: 'Proma',
-    path: dbStore.sources.find(s => s.dbType === 'Proma')?.path || '',
+    path: (() => {
+      const base = defaultPaths.value.proma || ''
+      const src = dbStore.sources.find(s => s.dbType === 'Proma')
+      return src && src.recordCount > 0
+        ? base + `  (已导入 ${src.recordCount} 条)`
+        : base
+    })(),
     defaultPath: defaultPaths.value.proma,
     sourceId: dbStore.sources.find(s => s.dbType === 'Proma')?.id || '',
     enabled: dbStore.sources.find(s => s.dbType === 'Proma')?.enabled ?? true,
@@ -980,6 +986,18 @@ async function onSelect(key: string): Promise<void> {
       dbStore.setSources(sources)
     } catch (e) {
       console.error('[MiniMax] 扫描失败', e)
+    }
+    return
+  }
+  // Proma 固定扫描 ~/.proma/agent-sessions,不走目录选择(扫描入库模式)
+  if (key === 'proma') {
+    try {
+      const result = await platformAdapter.scanPromaNow()
+      console.log('[Proma] 扫描完成', result)
+      const sources = await platformAdapter.listDatabases()
+      dbStore.setSources(sources)
+    } catch (e) {
+      console.error('[Proma] 扫描失败', e)
     }
     return
   }

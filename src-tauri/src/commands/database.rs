@@ -120,7 +120,14 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
         .and_then(|p| p.to_str().map(|s| s.to_string()))
         .filter(|p| crate::services::proma_dir::detect_proma_dir(p))
     {
-        defaults.push(PersistedSource { path: p, db_type: "Proma".to_string() });
+        // Proma 为扫描入库模式,注册的是应用库 pricing.db
+        let _ = p;
+        if let Ok(app_db_path) = crate::utils::get_app_db_path() {
+            defaults.push(PersistedSource {
+                path: app_db_path.to_string_lossy().to_string(),
+                db_type: "Proma".to_string(),
+            });
+        }
     }
     // DSH:当前模式数据目录存在(~/.dsh 或插件 token-usage 目录)则注册(读取路径为应用库 pricing.db,扫描在 auto_load_paths 统一执行)
     {
@@ -162,6 +169,10 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
     // 再扫描 MiniMax(若数据目录存在),保证 MinimaxDbService 打开时已有数据
     if let Ok(app_db) = state.app_db.lock() {
         let _ = crate::services::minimax_scanner::scan_minimax(&app_db);
+    }
+    // 再扫描 Proma(若数据目录存在),保证 PromaDbService 打开时已有数据
+    if let Ok(app_db) = state.app_db.lock() {
+        let _ = crate::services::proma_scanner::scan_proma(&app_db);
     }
 
     let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
@@ -279,6 +290,28 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
                         sources.push(entry);
                     }
                     Err(e) => log::error!("[DB] MiniMax 源加载失败: {}", e),
+                }
+            }
+        }
+    }
+
+    // Proma:若数据目录存在,补注册数据源(读取路径为应用库 pricing.db;数据已由开头 scan_proma 入库)
+    if crate::services::proma_scanner::proma_source_dir_available() {
+        let already = sources
+            .iter()
+            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Proma));
+        if !already {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                let path_str = p.to_string_lossy().to_string();
+                match crate::services::data_source::create_source_entry_with_type(
+                    &path_str,
+                    Some(&crate::services::data_source::DbType::Proma),
+                ) {
+                    Ok(entry) => {
+                        log::info!("[DB] 自动加载 Proma 源: {}", path_str);
+                        sources.push(entry);
+                    }
+                    Err(e) => log::error!("[DB] Proma 源加载失败: {}", e),
                 }
             }
         }
@@ -416,6 +449,21 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         if has_minimax {
             if let Ok(app_db) = state.app_db.lock() {
                 let _ = crate::services::minimax_scanner::scan_minimax(&app_db);
+            }
+        }
+    }
+
+    // Proma:增量扫描(若存在 Proma 源)。scanner 内部按 mtime 跳过未变文件,开销可接受
+    {
+        let has_proma = {
+            let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+            sources
+                .iter()
+                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Proma))
+        };
+        if has_proma {
+            if let Ok(app_db) = state.app_db.lock() {
+                let _ = crate::services::proma_scanner::scan_proma(&app_db);
             }
         }
     }
@@ -580,6 +628,56 @@ pub fn scan_minimax_now(state: State<AppState>) -> Result<crate::services::dsh_s
                         sources.push(entry);
                     }
                     Err(e) => log::error!("[DB] MiniMax 源注册失败: {}", e),
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn scan_proma_now(state: State<AppState>) -> Result<crate::services::dsh_scanner::DshScanResult, String> {
+    // 1. 扫描 Proma 会话日志入库(~/.proma/agent-sessions,增量)
+    let (result, proma_available) = {
+        if crate::services::proma_scanner::proma_source_dir_available() {
+            let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+            let result = crate::services::proma_scanner::scan_proma(&app_db)?;
+            (result, true)
+        } else {
+            // 目录不存在:仍返回现有记录数(与 DSH/MiniMax 目录缺失时行为一致)
+            let mut result = crate::services::dsh_scanner::DshScanResult {
+                files_scanned: 0,
+                imported: 0,
+                skipped: 0,
+                errors: 0,
+                total_records: 0,
+            };
+            if let Ok(app_db) = state.app_db.lock() {
+                result.total_records = app_db
+                    .get_session_log_count(crate::services::proma_scanner::PROMA_SOURCE)
+                    .unwrap_or(0);
+            }
+            (result, false)
+        }
+    };
+    // 2. 确保 Proma 源已注册(数据目录存在且尚未注册),否则扫描了也无数据源可读
+    if proma_available {
+        let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+        let already = sources
+            .iter()
+            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Proma));
+        if !already {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                let path_str = p.to_string_lossy().to_string();
+                match crate::services::data_source::create_source_entry_with_type(
+                    &path_str,
+                    Some(&crate::services::data_source::DbType::Proma),
+                ) {
+                    Ok(entry) => {
+                        log::info!("[DB] 注册 Proma 源: {}", path_str);
+                        sources.push(entry);
+                    }
+                    Err(e) => log::error!("[DB] Proma 源注册失败: {}", e),
                 }
             }
         }
@@ -800,24 +898,12 @@ pub(crate) fn source_mtime(
             std::fs::metadata(csv).ok()
         }
         DbType::Proma => {
-            // 内容变化发生在 agent-sessions 下的 jsonl，取最新文件 mtime；
-            // 无 jsonl 时回退目录自身 mtime
-            let sessions_dir = std::path::Path::new(path).join("agent-sessions");
-            let latest_file = std::fs::read_dir(&sessions_dir)
-                .ok()?
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
-                .filter_map(|p| {
-                    let meta = std::fs::metadata(&p).ok()?;
-                    let mtime = meta.modified().ok()?;
-                    Some((mtime, p))
-                })
-                .max_by_key(|(t, _)| *t)
-                .map(|(_, p)| p);
-            match latest_file {
-                Some(p) => std::fs::metadata(p).ok(),
-                None => std::fs::metadata(path).ok(),
+            // Proma 数据源 path 是 pricing.db;内容变化发生在 ~/.proma/agent-sessions,
+            // 取最新 jsonl mtime;无文件时回退目录 mtime
+            match crate::utils::get_default_proma_dir() {
+                Ok(dir) => crate::services::proma_scanner::latest_session_file_mtime(&dir)
+                    .or_else(|| std::fs::metadata(&dir).ok()),
+                Err(_) => std::fs::metadata(path).ok(),
             }
         }
         DbType::Dsh => {

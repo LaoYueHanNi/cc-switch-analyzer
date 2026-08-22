@@ -71,7 +71,7 @@ impl DshDbService {
         let mut stmt = db
             .prepare(
                 "SELECT session_id, model, provider_id, created_at,
-                        input_tokens, output_tokens, cache_read, cache_creation
+                        input_tokens, output_tokens, cache_read, cache_creation, latency
                  FROM session_request_logs
                  WHERE source = 'DSH'
                  ORDER BY created_at",
@@ -89,7 +89,7 @@ impl DshDbService {
                     output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
                     cache_read: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                     cache_creation: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
-                    latency: 0,
+                    latency: row.get::<_, Option<i64>>(8)?.unwrap_or(0),
                     is_codex: false,
                 })
             })

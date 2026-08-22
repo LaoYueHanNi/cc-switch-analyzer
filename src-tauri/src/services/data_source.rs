@@ -290,7 +290,7 @@ pub fn create_source_entry(path: &str) -> Result<SourceEntry, String> {
 
 /// 创建数据源条目。
 /// `explicit_type` 为 Some 时使用前端明确指定的类型（不依赖表名探测）；
-/// None 时回退到 `detect_db_type` 表名探测（auto-load 等场景）。
+/// None 时回退到 `detect_db_type` 表名探测（老格式 last_db_paths 一次性迁移兜底）。
 pub fn create_source_entry_with_type(path: &str, explicit_type: Option<&DbType>) -> Result<SourceEntry, String> {
     let path_obj = Path::new(path);
     if path_obj.is_dir() && super::cursor_csv::detect_cursor_cache(path) {
@@ -301,19 +301,6 @@ pub fn create_source_entry_with_type(path: &str, explicit_type: Option<&DbType>)
             id,
             path: path.to_string(),
             db_type: DbType::Cursor,
-            source,
-            enabled: true,
-        });
-    }
-
-    if path_obj.is_dir() && super::proma_dir::detect_proma_dir(path) {
-        let id = SOURCE_ID_COUNTER.fetch_add(1, Ordering::Relaxed).to_string();
-        let mut source = Box::new(super::proma_dir::PromaDirService::new()) as Box<dyn DataSource>;
-        source.open(path)?;
-        return Ok(SourceEntry {
-            id,
-            path: path.to_string(),
-            db_type: DbType::Proma,
             source,
             enabled: true,
         });
@@ -330,7 +317,8 @@ pub fn create_source_entry_with_type(path: &str, explicit_type: Option<&DbType>)
         DbType::AiProxy => Box::new(super::ai_proxy_db::AiProxyDbService::new()) as Box<dyn DataSource>,
         DbType::ZCode => Box::new(super::zcode_db::ZCodeDbService::new()) as Box<dyn DataSource>,
         DbType::Cursor => return Err("Cursor 数据源需使用缓存目录路径".to_string()),
-        DbType::Proma => return Err("Proma 数据源需使用数据目录路径".to_string()),
+        // Proma 与 DSH/MiniMax 同为扫描入库模式，读取路径为应用库 pricing.db
+        DbType::Proma => Box::new(super::proma_db::PromaDbService::new()) as Box<dyn DataSource>,
         DbType::Dsh => Box::new(super::dsh_db::DshDbService::new()) as Box<dyn DataSource>,
         DbType::Minimax => Box::new(super::minimax_db::MinimaxDbService::new()) as Box<dyn DataSource>,
     };

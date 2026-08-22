@@ -177,6 +177,7 @@ pub fn run() {
             commands::database::set_ccs_auto_discover,
             commands::database::scan_dsh_now,
             commands::database::scan_minimax_now,
+            commands::database::scan_proma_now,
             commands::database::dsh_settings,
             commands::database::set_dsh_plugin_mode,
             commands::database::set_dsh_plugin_data_dir,

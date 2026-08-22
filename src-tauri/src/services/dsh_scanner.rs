@@ -51,6 +51,10 @@ pub struct ParsedRow {
     pub cache_read: i64,
     pub cache_creation: i64,
     pub created_at: i64,
+    /// 项目归属(如 DSH session 事件的 cwd);空串表示无
+    pub project: String,
+    /// 延迟(毫秒);无则 0
+    pub latency: i64,
 }
 
 /// 扫描结果(序列化给前端)
@@ -82,12 +86,16 @@ fn read_log_file(path: &Path) -> Result<String, String> {
 
 /// 解析一行 DSH 会话事件。
 ///
-/// - `session` 事件:记录 session id 到 `current_session_id`,返回 None
+/// - `session` 事件:记录 session id 到 `current_session_id`,cwd 到 `current_cwd`,返回 None
 /// - `assistant/message` 事件:提取 usage + model,返回 Some(ParsedRow)
 /// - 其他事件(含 assistant/chunk 快照):返回 None
 ///
 /// 解析失败(非 JSON 等)返回 None,容忍不完整行。
-fn parse_dsh_line(line: &str, current_session_id: &mut Option<String>) -> Option<ParsedRow> {
+fn parse_dsh_line(
+    line: &str,
+    current_session_id: &mut Option<String>,
+    current_cwd: &mut Option<String>,
+) -> Option<ParsedRow> {
     let line = line.trim();
     if line.is_empty() {
         return None;
@@ -96,12 +104,14 @@ fn parse_dsh_line(line: &str, current_session_id: &mut Option<String>) -> Option
     let event_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
     if event_type == "session" {
-        if let Some(id) = v
-            .get("data")
-            .and_then(|d| d.get("id"))
-            .and_then(|i| i.as_str())
-        {
-            *current_session_id = Some(id.to_string());
+        if let Some(data) = v.get("data") {
+            if let Some(id) = data.get("id").and_then(|i| i.as_str()) {
+                *current_session_id = Some(id.to_string());
+            }
+            // 项目归属:session 事件携带的 cwd(实勘确认存在)
+            if let Some(cwd) = data.get("cwd").and_then(|c| c.as_str()) {
+                *current_cwd = Some(cwd.to_string());
+            }
         }
         return None;
     }
@@ -150,8 +160,10 @@ fn parse_dsh_line(line: &str, current_session_id: &mut Option<String>) -> Option
         cache_read,
         cache_creation,
         created_at,
-    })
-}
+            project: current_cwd.clone().unwrap_or_default(),
+            latency: 0,
+        })
+    }
 
 /// 返回文件 mtime 的纳秒时间戳(照搬 cc-switch metadata_modified_nanos)
 pub(crate) fn metadata_modified_nanos(metadata: &std::fs::Metadata) -> i64 {
@@ -267,12 +279,21 @@ pub fn scan_file_incremental(
                 msg.cache_read,
                 msg.cache_creation,
                 msg.created_at,
+                msg.latency,
             ) {
                 Ok(true) => imported += 1,
                 Ok(false) => skipped += 1,
                 Err(e) => {
                     log::warn!("[DSH-SYNC] 插入失败 ({}): {}", msg.request_id, e);
                     skipped += 1;
+                }
+            }
+            // 项目归属入库(仅当解析出 project 且关联到会话)
+            if !msg.project.is_empty() {
+                if let Some(sid) = msg.session_id.as_deref() {
+                    if !sid.is_empty() {
+                        let _ = AppDbService::save_session_project_on_conn(&tx, sid, &msg.project, source);
+                    }
                 }
             }
         }
@@ -308,8 +329,9 @@ pub fn scan_dsh_in(app_db: &AppDbService, dsh_dir: &Path) -> Result<DshScanResul
     let mut errors = 0u32;
     for f in &files {
         let mut current_session_id: Option<String> = None;
+        let mut current_cwd: Option<String> = None;
         match scan_file_incremental(app_db, DSH_SOURCE, f, |line| {
-            parse_dsh_line(line, &mut current_session_id)
+            parse_dsh_line(line, &mut current_session_id, &mut current_cwd)
         }) {
             Ok((imp, skp)) => {
                 imported += imp;
@@ -420,7 +442,8 @@ mod tests {
     fn test_parse_assistant_message() {
         let line = assistant_msg("m1", "deepseek-v4-flash", 1786629109285, 14175, 220, 195072, 0);
         let mut sid = None;
-        let m = parse_dsh_line(&line, &mut sid).expect("应解析出消息");
+        let mut cwd = None;
+        let m = parse_dsh_line(&line, &mut sid, &mut cwd).expect("应解析出消息");
         assert_eq!(m.request_id, "m1");
         assert_eq!(m.model, "deepseek-v4-flash");
         assert_eq!(m.input_tokens, 14175);
@@ -443,7 +466,7 @@ mod tests {
             }
         })
         .to_string();
-        let m = parse_dsh_line(&line, &mut None).expect("应解析出消息");
+        let m = parse_dsh_line(&line, &mut None, &mut None).expect("应解析出消息");
         assert_eq!(m.model, "fallback-model");
     }
 
@@ -455,7 +478,7 @@ mod tests {
             "data": { "chunk": { "type": "usage", "usage": { "inputTokens": 999 } } }
         })
         .to_string();
-        assert!(parse_dsh_line(&line, &mut None).is_none());
+        assert!(parse_dsh_line(&line, &mut None, &mut None).is_none());
     }
 
     #[test]
@@ -467,20 +490,24 @@ mod tests {
         })
         .to_string();
         let mut sid = None;
-        assert!(parse_dsh_line(&line, &mut sid).is_none());
+        let mut cwd = None;
+        assert!(parse_dsh_line(&line, &mut sid, &mut cwd).is_none());
         assert_eq!(sid.as_deref(), Some("sess-abc"));
+        // session 事件的 cwd 应被记录（项目归属）
+        assert_eq!(cwd.as_deref(), Some("/tmp"));
 
-        // 后续 assistant/message 应带上该 session_id
+        // 后续 assistant/message 应带上该 session_id 与 cwd
         let msg = assistant_msg("m3", "m", 1000, 1, 0, 0, 0);
-        let m = parse_dsh_line(&msg, &mut sid).expect("应解析出消息");
+        let m = parse_dsh_line(&msg, &mut sid, &mut cwd).expect("应解析出消息");
         assert_eq!(m.session_id.as_deref(), Some("sess-abc"));
+        assert_eq!(m.project, "/tmp");
     }
 
     #[test]
     fn test_parse_invalid_json_returns_none() {
-        assert!(parse_dsh_line("not json", &mut None).is_none());
-        assert!(parse_dsh_line("", &mut None).is_none());
-        assert!(parse_dsh_line("   ", &mut None).is_none());
+        assert!(parse_dsh_line("not json", &mut None, &mut None).is_none());
+        assert!(parse_dsh_line("", &mut None, &mut None).is_none());
+        assert!(parse_dsh_line("   ", &mut None, &mut None).is_none());
     }
 
     #[test]
