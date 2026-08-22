@@ -250,6 +250,7 @@ export interface DefaultPaths {
   zCode: string | null
   proma: string | null
   dsh: string | null
+  minimax: string | null
 }
 
 export interface DshScanResult {
@@ -294,6 +295,7 @@ export interface PlatformAdapter {
   pickDatabaseFile(defaultPath?: string): Promise<string | null>
   refreshDatabase(): Promise<RefreshResult>
   scanDshNow(): Promise<DshScanResult>
+  scanMinimaxNow(): Promise<DshScanResult>
   getDshSettings(): Promise<DshSettings>
   setDshPluginMode(usePlugin: boolean): Promise<DshSettings>
   setDshPluginDataDir(dir: string | null): Promise<DshSettings>

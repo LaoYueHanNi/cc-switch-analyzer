@@ -106,6 +106,15 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
             }
         }
     }
+    // MiniMax Code v2:数据目录存在(~/.minimax/v2/sessions)则注册(读取路径为应用库 pricing.db,扫描在 auto_load_paths 统一执行)
+    if crate::services::minimax_scanner::minimax_source_dir_available() {
+        if let Ok(p) = crate::utils::get_app_db_path() {
+            defaults.push(PersistedSource {
+                path: p.to_string_lossy().to_string(),
+                db_type: "MiniMax".to_string(),
+            });
+        }
+    }
     if !defaults.is_empty() {
         return auto_load_paths(&state, defaults);
     }
@@ -117,6 +126,10 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
     // 先扫描 DSH(若当前模式数据目录存在),保证 DshDbService 打开时已有数据
     if let Ok(app_db) = state.app_db.lock() {
         let _ = crate::services::dsh_scanner::scan_dsh_by_mode(&app_db);
+    }
+    // 再扫描 MiniMax(若数据目录存在),保证 MinimaxDbService 打开时已有数据
+    if let Ok(app_db) = state.app_db.lock() {
+        let _ = crate::services::minimax_scanner::scan_minimax(&app_db);
     }
 
     let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
@@ -209,6 +222,28 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
                         }
                         Err(e) => log::error!("[DB] DSH 源加载失败: {}", e),
                     }
+                }
+            }
+        }
+    }
+
+    // MiniMax:若数据目录存在,补注册数据源(读取路径为应用库 pricing.db;数据已由开头 scan_minimax 入库)
+    if crate::services::minimax_scanner::minimax_source_dir_available() {
+        let already = sources
+            .iter()
+            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Minimax));
+        if !already {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                let path_str = p.to_string_lossy().to_string();
+                match crate::services::data_source::create_source_entry_with_type(
+                    &path_str,
+                    Some(&crate::services::data_source::DbType::Minimax),
+                ) {
+                    Ok(entry) => {
+                        log::info!("[DB] 自动加载 MiniMax 源: {}", path_str);
+                        sources.push(entry);
+                    }
+                    Err(e) => log::error!("[DB] MiniMax 源加载失败: {}", e),
                 }
             }
         }
@@ -329,6 +364,21 @@ pub fn list_databases(state: State<AppState>) -> Result<Vec<SourceInfo>, String>
 pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String> {
     let _ = crate::commands::cursor::sync_and_reload_if_needed(&state);
 
+    // MiniMax:增量扫描(若存在 MiniMax 源)。scanner 内部按 mtime 跳过未变文件,开销可接受
+    {
+        let has_minimax = {
+            let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+            sources
+                .iter()
+                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Minimax))
+        };
+        if has_minimax {
+            if let Ok(app_db) = state.app_db.lock() {
+                let _ = crate::services::minimax_scanner::scan_minimax(&app_db);
+            }
+        }
+    }
+
     // DSH:增量扫描(若存在 DSH 源,按当前模式扫插件数据或会话日志)。
     // scanner 内部按 mtime 跳过未变文件,开销可接受
     let (dsh_plugin_mode, dsh_plugin_dir) = {
@@ -439,6 +489,56 @@ pub fn scan_dsh_now(state: State<AppState>) -> Result<crate::services::dsh_scann
                         sources.push(entry);
                     }
                     Err(e) => log::error!("[DB] DSH 源注册失败: {}", e),
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn scan_minimax_now(state: State<AppState>) -> Result<crate::services::dsh_scanner::DshScanResult, String> {
+    // 1. 扫描 MiniMax 会话日志入库(~/.minimax/v2/sessions,增量)
+    let (result, minimax_available) = {
+        if crate::services::minimax_scanner::minimax_source_dir_available() {
+            let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+            let result = crate::services::minimax_scanner::scan_minimax(&app_db)?;
+            (result, true)
+        } else {
+            // 目录不存在:仍返回现有记录数(与 DSH 目录缺失时行为一致)
+            let mut result = crate::services::dsh_scanner::DshScanResult {
+                files_scanned: 0,
+                imported: 0,
+                skipped: 0,
+                errors: 0,
+                total_records: 0,
+            };
+            if let Ok(app_db) = state.app_db.lock() {
+                result.total_records = app_db
+                    .get_session_log_count(crate::services::minimax_scanner::MINIMAX_SOURCE)
+                    .unwrap_or(0);
+            }
+            (result, false)
+        }
+    };
+    // 2. 确保 MiniMax 源已注册(数据目录存在且尚未注册),否则扫描了也无数据源可读
+    if minimax_available {
+        let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+        let already = sources
+            .iter()
+            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Minimax));
+        if !already {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                let path_str = p.to_string_lossy().to_string();
+                match crate::services::data_source::create_source_entry_with_type(
+                    &path_str,
+                    Some(&crate::services::data_source::DbType::Minimax),
+                ) {
+                    Ok(entry) => {
+                        log::info!("[DB] 注册 MiniMax 源: {}", path_str);
+                        sources.push(entry);
+                    }
+                    Err(e) => log::error!("[DB] MiniMax 源注册失败: {}", e),
                 }
             }
         }
@@ -602,6 +702,7 @@ pub struct DefaultPaths {
     pub z_code: Option<String>,
     pub proma: Option<String>,
     pub dsh: Option<String>,
+    pub minimax: Option<String>,
 }
 
 #[tauri::command]
@@ -622,7 +723,10 @@ pub fn get_default_paths() -> Result<DefaultPaths, String> {
     let dsh = crate::utils::get_default_dsh_dir().ok()
         .filter(|p| p.is_dir())
         .map(|p| p.to_string_lossy().to_string());
-    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code, proma, dsh })
+    let minimax = crate::utils::get_default_minimax_dir().ok()
+        .filter(|p| p.join("v2").join("sessions").is_dir())
+        .map(|p| p.to_string_lossy().to_string());
+    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code, proma, dsh, minimax })
 }
 
 fn cursor_should_auto_load() -> bool {
@@ -678,6 +782,15 @@ pub(crate) fn source_mtime(
                         .or_else(|| std::fs::metadata(&dir).ok()),
                     Err(_) => std::fs::metadata(path).ok(),
                 }
+            }
+        }
+        DbType::Minimax => {
+            // MiniMax 数据源 path 是 pricing.db;内容变化发生在 ~/.minimax/v2/sessions,
+            // 取最新 messages.jsonl mtime;无文件时回退目录 mtime
+            match crate::utils::get_default_minimax_dir() {
+                Ok(dir) => crate::services::minimax_scanner::latest_session_file_mtime(&dir)
+                    .or_else(|| std::fs::metadata(&dir).ok()),
+                Err(_) => std::fs::metadata(path).ok(),
             }
         }
         _ => std::fs::metadata(path).ok(),

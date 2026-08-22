@@ -82,6 +82,9 @@ export const platformAdapter: PlatformAdapter = {
   async scanDshNow(): Promise<DshScanResult> {
     return invoke<DshScanResult>('scan_dsh_now')
   },
+  async scanMinimaxNow(): Promise<DshScanResult> {
+    return invoke<DshScanResult>('scan_minimax_now')
+  },
   async getDshSettings(): Promise<DshSettings> {
     return invoke<DshSettings>('dsh_settings')
   },

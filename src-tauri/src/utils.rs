@@ -74,6 +74,12 @@ pub fn get_default_dsh_dir() -> Result<std::path::PathBuf, String> {
     Ok(home.join(".dsh"))
 }
 
+/// 获取默认 MiniMax Code 数据目录路径(~/.minimax,桌面端 Mavis 的 v2 运行数据)
+pub fn get_default_minimax_dir() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "无法获取 HOME 目录".to_string())?;
+    Ok(home.join(".minimax"))
+}
+
 /// 获取 DSH token-usage 插件数据目录路径。
 ///
 /// 解析规则与插件 resolveDataDir 保持一致:

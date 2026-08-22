@@ -11,6 +11,8 @@ pub mod cursor_sync;
 pub mod dsh_db;
 pub mod dsh_plugin_scanner;
 pub mod dsh_scanner;
+pub mod minimax_db;
+pub mod minimax_scanner;
 pub mod data_source;
 pub mod dedup;
 pub mod external_db;

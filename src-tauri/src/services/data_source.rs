@@ -121,6 +121,7 @@ pub enum DbType {
     ZCode,
     Proma,
     Dsh,
+    Minimax,
 }
 
 impl DbType {
@@ -133,6 +134,7 @@ impl DbType {
             DbType::ZCode => "ZCode",
             DbType::Proma => "Proma",
             DbType::Dsh => "DSH",
+            DbType::Minimax => "MiniMax",
         }
     }
 
@@ -146,6 +148,7 @@ impl DbType {
             "ZCode" => Some(DbType::ZCode),
             "Proma" => Some(DbType::Proma),
             "DSH" => Some(DbType::Dsh),
+            "MiniMax" => Some(DbType::Minimax),
             _ => None,
         }
     }
@@ -292,6 +295,7 @@ pub fn create_source_entry_with_type(path: &str, explicit_type: Option<&DbType>)
         DbType::Cursor => return Err("Cursor 数据源需使用缓存目录路径".to_string()),
         DbType::Proma => return Err("Proma 数据源需使用数据目录路径".to_string()),
         DbType::Dsh => Box::new(super::dsh_db::DshDbService::new()) as Box<dyn DataSource>,
+        DbType::Minimax => Box::new(super::minimax_db::MinimaxDbService::new()) as Box<dyn DataSource>,
     };
     source.open(path)?;
     Ok(SourceEntry { id, path: path.to_string(), db_type, source, enabled: true })

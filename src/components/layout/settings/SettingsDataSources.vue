@@ -23,22 +23,22 @@
 
       <!-- 路径/状态 + 操作（Cursor 已并入账号行，此处仅其它数据源） -->
       <div v-if="slot.key !== 'cursor'" class="source-path-row">
-        <span class="path-label">{{ slot.key === 'dsh' ? '数据目录' : '数据库地址' }}</span>
+        <span class="path-label">{{ slot.key === 'dsh' || slot.key === 'minimax' ? '数据目录' : '数据库地址' }}</span>
         <span class="source-path" :title="slot.path || ''">{{ slot.path || '未选择' }}</span>
         <div class="path-actions">
           <button
             type="button"
             class="icon-btn"
-            :title="slot.key === 'dsh' ? '立即扫描' : (slot.path ? '更换数据库' : '选择数据库')"
+            :title="slot.key === 'dsh' || slot.key === 'minimax' ? '立即扫描' : (slot.path ? '更换数据库' : '选择数据库')"
             @click="onSelect(slot.key)"
           >
             <n-icon size="14">
-              <sync-outline v-if="slot.key === 'dsh'" />
+              <sync-outline v-if="slot.key === 'dsh' || slot.key === 'minimax'" />
               <create-outline v-else />
             </n-icon>
           </button>
           <button
-            v-if="slot.path && slot.key !== 'dsh'"
+            v-if="slot.path && slot.key !== 'dsh' && slot.key !== 'minimax'"
             type="button"
             class="icon-btn danger"
             title="移除"
@@ -904,6 +904,20 @@ const slots = computed(() => [
     sourceId: dbStore.sources.find(s => s.dbType === 'DSH')?.id || '',
     enabled: dbStore.sources.find(s => s.dbType === 'DSH')?.enabled ?? true,
   },
+  {
+    key: 'minimax',
+    label: 'MiniMax',
+    path: (() => {
+      const base = defaultPaths.value.minimax || ''
+      const src = dbStore.sources.find(s => s.dbType === 'MiniMax')
+      return src && src.recordCount > 0
+        ? base + `  (已导入 ${src.recordCount} 条)`
+        : base
+    })(),
+    defaultPath: defaultPaths.value.minimax,
+    sourceId: dbStore.sources.find(s => s.dbType === 'MiniMax')?.id || '',
+    enabled: dbStore.sources.find(s => s.dbType === 'MiniMax')?.enabled ?? true,
+  },
 ])
 
 // slot key → 后端 dbType 字面量映射
@@ -914,6 +928,7 @@ const DB_TYPE_MAP: Record<string, string> = {
   'z-code': 'ZCode',
   'proma': 'Proma',
   'dsh': 'DSH',
+  'minimax': 'MiniMax',
 }
 
 async function onSelect(key: string): Promise<void> {
@@ -927,6 +942,18 @@ async function onSelect(key: string): Promise<void> {
       await loadDshSettings()
     } catch (e) {
       console.error('[DSH] 扫描失败', e)
+    }
+    return
+  }
+  // MiniMax 固定扫描 ~/.minimax/v2/sessions,不走目录选择
+  if (key === 'minimax') {
+    try {
+      const result = await platformAdapter.scanMinimaxNow()
+      console.log('[MiniMax] 扫描完成', result)
+      const sources = await platformAdapter.listDatabases()
+      dbStore.setSources(sources)
+    } catch (e) {
+      console.error('[MiniMax] 扫描失败', e)
     }
     return
   }
@@ -1055,6 +1082,10 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 
 .source-dot.dsh {
   background: #e84393;
+}
+
+.source-dot.minimax {
+  background: #2d3436;
 }
 
 .source-dot.cursor {

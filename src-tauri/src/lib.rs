@@ -174,6 +174,7 @@ pub fn run() {
             commands::database::get_filter_options,
             commands::database::get_default_paths,
             commands::database::scan_dsh_now,
+            commands::database::scan_minimax_now,
             commands::database::dsh_settings,
             commands::database::set_dsh_plugin_mode,
             commands::database::set_dsh_plugin_data_dir,
