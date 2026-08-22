@@ -36,26 +36,17 @@ function toTauriParams(params: FilterParams): TauriFilterParams {
 }
 
 export const platformAdapter: PlatformAdapter = {
-  // 数据库 — Tauri 在前端开对话框，再传路径给后端
-  async selectDatabase(): Promise<DbResult | null> {
-    const selected = await open({
-      title: '选择数据库文件',
-      filters: [{ name: 'SQLite 数据库', extensions: ['db', 'sqlite', 'sqlite3'] }],
-      multiple: false
-    })
-    if (!selected) return null
-    const filePath = typeof selected === 'string' ? selected : (selected as any).path
-    const sources = await invoke<SourceInfo[]>('load_database', { filePath })
-    // 兼容旧接口：返回第一个 source 的 DbResult
-    if (sources.length === 0) return null
-    const info = sources[0]
-    return { path: info.path, recordCount: info.recordCount, dateRange: { min: 0, max: 0 }, providers: [], models: [] }
-  },
   async autoLoadDatabase(): Promise<SourceInfo[]> {
     return invoke<SourceInfo[]>('auto_load_database')
   },
   async addDatabase(filePath: string, dbType?: string): Promise<SourceInfo[]> {
     return invoke<SourceInfo[]>('add_database', { filePath, dbType })
+  },
+  async getCcsAutoDiscover(): Promise<boolean> {
+    return invoke<boolean>('get_ccs_auto_discover')
+  },
+  async setCcsAutoDiscover(enabled: boolean): Promise<void> {
+    return invoke<void>('set_ccs_auto_discover', { enabled })
   },
   async removeDatabase(sourceId: string): Promise<SourceInfo[]> {
     return invoke<SourceInfo[]>('remove_database', { sourceId })

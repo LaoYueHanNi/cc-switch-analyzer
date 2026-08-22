@@ -30,31 +30,6 @@ export function useDatabase() {
     }
   }
 
-  async function selectDatabase(): Promise<boolean> {
-    dbStore.setLoading(true)
-    try {
-      const result = await platformAdapter.selectDatabase()
-      if (!result) {
-        dbStore.setLoading(false)
-        return false
-      }
-
-      // selectDatabase 内部已经 load 了，从后端刷新 source 列表
-      const sources = await platformAdapter.listDatabases()
-      queryStore.reset()
-      await updateFilterOptions()
-      await loadPricing()
-      dbStore.setSources(sources)
-
-      platformAdapter.fetchCloudPricing().then(() => loadPricing()).catch(() => {})
-      return true
-    } catch (err: any) {
-      console.error('[useDatabase] 异常:', err)
-      dbStore.setError(err.message || '数据库加载失败')
-      return false
-    }
-  }
-
   async function addDatabase(filePath: string, dbType?: string): Promise<boolean> {
     try {
       const sources = await platformAdapter.addDatabase(filePath, dbType)
@@ -152,7 +127,6 @@ export function useDatabase() {
 
   return {
     autoLoadDatabase,
-    selectDatabase,
     addDatabase,
     removeDatabase,
     refreshDatabase,

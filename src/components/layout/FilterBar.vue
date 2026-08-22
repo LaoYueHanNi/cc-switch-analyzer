@@ -2,7 +2,7 @@
   <div class="filter-bar">
     <div class="filter-row">
       <div class="filter-group">
-        <span class="filter-label">供应商</span>
+        <span class="filter-label">数据源</span>
         <CompactSelect
           :model-value="filterStore.providerId"
           :options="providerSelectOptions"

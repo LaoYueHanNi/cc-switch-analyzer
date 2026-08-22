@@ -46,11 +46,14 @@ pub fn get_session_titles(
 
     if uncached.is_empty() { return Ok(result); }
 
-    // 2. 从各数据源获取标题 (title, project, source_tag)
+    // 2. 从声明会话管理能力的数据源获取标题 (title, project, source_tag)
     let mut resolved: HashMap<String, (String, String, String)> = HashMap::new();
     {
         let data_sources = state.data_sources.read().map_err(|e| e.to_string())?;
         for source_entry in data_sources.iter() {
+            if !source_entry.source.capabilities().session_management {
+                continue;
+            }
             let remaining: Vec<String> = uncached.iter()
                 .filter(|id| !resolved.contains_key(*id))
                 .cloned()
@@ -92,6 +95,10 @@ pub fn get_session_titles(
                 |ids| {
                     let mut map: HashMap<String, Vec<i64>> = HashMap::new();
                     for entry in data_sources.iter() {
+                        // Codex 用量经 CCS 代理记录，时间戳匹配仅取 CCS 源
+                        if !matches!(entry.db_type, crate::services::data_source::DbType::ExternalDb) {
+                            continue;
+                        }
                         if let Ok(timestamps) = entry.source.get_session_timestamps(ids) {
                             for (sid, times) in timestamps {
                                 map.entry(sid).or_default().extend(times);

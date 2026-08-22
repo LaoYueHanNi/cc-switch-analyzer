@@ -156,7 +156,7 @@ let pendingResumeSessionId = ''
 let pendingResumeProjectDir = ''
 
 const ccswitchDbPath = computed(() =>
-  dbStore.sources.find(s => s.dbType === 'CC-Switch')?.path
+  dbStore.sources.find(s => s.dbType === 'CCS')?.path
 )
 
 const taskId = computed(() => Number(route.params.id))

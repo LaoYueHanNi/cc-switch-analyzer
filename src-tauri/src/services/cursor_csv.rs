@@ -19,7 +19,7 @@ use crate::services::pipeline::{
 };
 use crate::utils::{self, SESSION_TOP_N, REALTIME_WINDOW_SEC};
 
-const PROVIDER_ID: &str = "cursor";
+const PROVIDER_ID: &str = "Cursor";
 
 pub struct CursorCsvService {
     cache_dir: String,
@@ -483,6 +483,7 @@ pub fn parse_cursor_csv_file(path: &Path, user_id: &str) -> Result<Vec<RawRecord
             session_id: format!("cursor-{}-{}", uid, day_key),
             model: model.to_string(),
             provider_id: PROVIDER_ID.to_string(),
+            db_type: "Cursor".to_string(),
             created_at,
             input_tokens: input_without_cache_write.max(0),
             output_tokens: output_tokens.max(0),
@@ -871,7 +872,7 @@ mod tests {
         let records = parse_cursor_csv_file(&path, "userA").unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].model, "gpt-4o");
-        assert_eq!(records[0].provider_id, "cursor");
+        assert_eq!(records[0].provider_id, "Cursor");
         assert_eq!(records[0].input_tokens, 5);
         assert_eq!(records[0].output_tokens, 15);
         assert_eq!(records[0].cache_creation, 5);

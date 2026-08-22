@@ -9,6 +9,8 @@ export const useFilterStore = defineStore('filter', () => {
   const activeQuickDays = ref<number | null>(1)
   const providerId = ref('')
   const modelId = ref('')
+  // 供应商筛选选项：自 0.7.54 起为数据源粒度（值为数据源 canonical 名，如 "CCS"/"OpenCode"），
+  // 不再暴露数据源内部 provider_id（CCS UUID、OpenCode providerID 等）
   const providerOptions = ref<{ label: string; value: string }[]>([])
   const modelOptions = ref<{ label: string; value: string }[]>([])
   const dateRangeMin = ref<number | null>(null)

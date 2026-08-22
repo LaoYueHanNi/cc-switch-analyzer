@@ -128,9 +128,9 @@ import type { ProjectGroupStats, ProjectSessionDetail } from '@/platform/types'
 const dbStore = useDatabaseStore()
 const filterStore = useFilterStore()
 
-// CC-Switch 数据库路径
+// CCS 数据库路径
 const ccswitchDbPath = computed(() =>
-  dbStore.sources.find(s => s.dbType === 'CC-Switch')?.path
+  dbStore.sources.find(s => s.dbType === 'CCS')?.path
 )
 
 const providerMenu = useProviderContextMenu('SessionAnalysis')

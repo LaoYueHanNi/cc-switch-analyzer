@@ -173,6 +173,8 @@ pub fn run() {
             commands::database::refresh_database,
             commands::database::get_filter_options,
             commands::database::get_default_paths,
+            commands::database::get_ccs_auto_discover,
+            commands::database::set_ccs_auto_discover,
             commands::database::scan_dsh_now,
             commands::database::scan_minimax_now,
             commands::database::dsh_settings,

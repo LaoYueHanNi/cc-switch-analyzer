@@ -957,6 +957,7 @@ impl ZCodeDbService {
                 session_id: String::new(), // ZCode 不参与会话归类，session_id 置空
                 model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                db_type: "ZCode".to_string(),
                 created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                 input_tokens: fresh_input(raw_input, cache_read),
                 output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),

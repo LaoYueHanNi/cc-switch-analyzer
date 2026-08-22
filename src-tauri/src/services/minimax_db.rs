@@ -10,14 +10,14 @@ use std::sync::Mutex;
 use rusqlite::{Connection, OpenFlags};
 
 use crate::models::*;
-use crate::services::data_source::DataSource;
+use crate::services::data_source::{DataSource, SourceCapabilities};
 use crate::services::pipeline::{
     aggregate_combined_records, aggregate_daily_trend, aggregate_hourly_trend,
     aggregate_model_breakdown, aggregate_model_context_tier_buckets, aggregate_provider_breakdown,
     aggregate_provider_model_tokens, aggregate_summary,
 };
 
-const PROVIDER_ID: &str = "minimax";
+const PROVIDER_ID: &str = "MiniMax";
 const PROVIDER_NAME: &str = "MiniMax";
 
 pub struct MinimaxDbService {
@@ -73,7 +73,7 @@ impl MinimaxDbService {
                 "SELECT session_id, model, provider_id, created_at,
                         input_tokens, output_tokens, cache_read, cache_creation
                  FROM session_request_logs
-                 WHERE source = 'minimax'
+                 WHERE source = 'MiniMax'
                  ORDER BY created_at",
             )
             .map_err(|e| format!("查询 MiniMax 记录失败: {}", e))?;
@@ -83,6 +83,7 @@ impl MinimaxDbService {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    db_type: "MiniMax".to_string(),
                     created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                     input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
                     output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
@@ -142,7 +143,7 @@ impl DataSource for MinimaxDbService {
     fn get_record_count(&self) -> Result<i64, String> {
         let db = self.db()?;
         db.query_row(
-            "SELECT COUNT(*) FROM session_request_logs WHERE source = 'minimax'",
+            "SELECT COUNT(*) FROM session_request_logs WHERE source = 'MiniMax'",
             [],
             |row| row.get(0),
         )
@@ -155,7 +156,7 @@ impl DataSource for MinimaxDbService {
             .ok()
             .and_then(|db| {
                 db.query_row(
-                    "SELECT MAX(created_at) FROM session_request_logs WHERE source = 'minimax'",
+                    "SELECT MAX(created_at) FROM session_request_logs WHERE source = 'MiniMax'",
                     [],
                     |row| row.get::<_, Option<i64>>(0),
                 )
@@ -176,7 +177,7 @@ impl DataSource for MinimaxDbService {
         let mut stmt = db
             .prepare(
                 "SELECT DISTINCT model FROM session_request_logs
-                 WHERE source = 'minimax' AND model <> '' ORDER BY model",
+                 WHERE source = 'MiniMax' AND model <> '' ORDER BY model",
             )
             .map_err(|e| format!("查询 MiniMax 模型失败: {}", e))?;
         let rows = stmt
@@ -194,7 +195,7 @@ impl DataSource for MinimaxDbService {
         let (min, max) = db
             .query_row(
                 "SELECT MIN(created_at), MAX(created_at)
-                 FROM session_request_logs WHERE source = 'minimax'",
+                 FROM session_request_logs WHERE source = 'MiniMax'",
                 [],
                 |row| {
                     Ok((
@@ -308,5 +309,14 @@ impl DataSource for MinimaxDbService {
 
     fn get_filtered_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> {
         self.filtered_records(params)
+    }
+
+    fn capabilities(&self) -> SourceCapabilities {
+        // manifest.json 无项目字段（实勘确认），仅支持扫描入库
+        SourceCapabilities {
+            session_management: false,
+            project_attribution: false,
+            incremental_scan: true,
+        }
     }
 }

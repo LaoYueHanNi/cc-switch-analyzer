@@ -30,7 +30,7 @@ use serde_json::Value;
 use crate::services::app_db::AppDbService;
 
 /// DSH 数据源标识(也用作 provider_id 与 session_request_logs.source)
-pub const DSH_SOURCE: &str = "dsh";
+pub const DSH_SOURCE: &str = "DSH";
 
 /// 数据来源模式设置 key(settings 表):"1" 使用插件数据,其余走会话扫描
 pub const SETTING_DSH_USE_PLUGIN: &str = "dsh_use_plugin";
@@ -647,7 +647,7 @@ mod tests {
         let has_model: bool = db
             .conn()
             .query_row(
-                "SELECT COUNT(*) > 0 FROM session_request_logs WHERE source='dsh' AND model <> ''",
+                "SELECT COUNT(*) > 0 FROM session_request_logs WHERE source='DSH' AND model <> ''",
                 [],
                 |row| row.get(0),
             )
@@ -656,7 +656,7 @@ mod tests {
         // 打印模型分布
         let mut stmt = db
             .conn()
-            .prepare("SELECT model, COUNT(*), SUM(input_tokens), SUM(output_tokens) FROM session_request_logs WHERE source='dsh' GROUP BY model ORDER BY 2 DESC")
+            .prepare("SELECT model, COUNT(*), SUM(input_tokens), SUM(output_tokens) FROM session_request_logs WHERE source='DSH' GROUP BY model ORDER BY 2 DESC")
             .unwrap();
         let rows = stmt.query_map([], |r| {
             Ok(format!(

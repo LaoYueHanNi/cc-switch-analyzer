@@ -108,7 +108,7 @@ const deleteTarget = ref<TaskWithStats | null>(null)
 const providerMenu = useProviderContextMenu('Task')
 
 const ccswitchDbPath = computed(() =>
-  dbStore.sources.find(s => s.dbType === 'CC-Switch')?.path
+  dbStore.sources.find(s => s.dbType === 'CCS')?.path
 )
 
 onMounted(() => {

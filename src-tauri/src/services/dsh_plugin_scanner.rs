@@ -384,7 +384,7 @@ mod tests {
         // 行内 time 决定入库时间(与文件名日期无关)
         let times: Vec<i64> = db
             .conn()
-            .prepare("SELECT created_at FROM session_request_logs WHERE source='dsh' ORDER BY created_at")
+            .prepare("SELECT created_at FROM session_request_logs WHERE source='DSH' ORDER BY created_at")
             .unwrap()
             .query_map([], |r| r.get(0))
             .unwrap()
@@ -445,7 +445,7 @@ mod tests {
         let has_model: bool = db
             .conn()
             .query_row(
-                "SELECT COUNT(*) > 0 FROM session_request_logs WHERE source='dsh' AND model <> ''",
+                "SELECT COUNT(*) > 0 FROM session_request_logs WHERE source='DSH' AND model <> ''",
                 [],
                 |row| row.get(0),
             )
@@ -453,7 +453,7 @@ mod tests {
         assert!(has_model, "应至少有一条带 model 的记录");
         let mut stmt = db
             .conn()
-            .prepare("SELECT model, COUNT(*), SUM(input_tokens), SUM(output_tokens) FROM session_request_logs WHERE source='dsh' GROUP BY model ORDER BY 2 DESC")
+            .prepare("SELECT model, COUNT(*), SUM(input_tokens), SUM(output_tokens) FROM session_request_logs WHERE source='DSH' GROUP BY model ORDER BY 2 DESC")
             .unwrap();
         let rows = stmt.query_map([], |r| {
             Ok(format!(

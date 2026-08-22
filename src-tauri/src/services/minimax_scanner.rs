@@ -32,7 +32,7 @@ use crate::services::app_db::AppDbService;
 use crate::services::dsh_scanner::{metadata_modified_nanos, scan_file_incremental, DshScanResult, ParsedRow};
 
 /// MiniMax 数据源标识(也用作 provider_id 与 session_request_logs.source)
-pub const MINIMAX_SOURCE: &str = "minimax";
+pub const MINIMAX_SOURCE: &str = "MiniMax";
 
 /// `~/.minimax` 下会话存储相对路径(v2 布局)
 const SESSIONS_REL: &str = "v2/sessions";
@@ -408,7 +408,7 @@ mod tests {
         // 验证 model 与 session_id 落库正确
         let mut stmt = db
             .conn()
-            .prepare("SELECT session_id, model FROM session_request_logs WHERE source='minimax' ORDER BY created_at")
+            .prepare("SELECT session_id, model FROM session_request_logs WHERE source='MiniMax' ORDER BY created_at")
             .unwrap();
         let rows: Vec<(String, String)> = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
@@ -442,7 +442,7 @@ mod tests {
         let has_model: bool = db
             .conn()
             .query_row(
-                "SELECT COUNT(*) > 0 FROM session_request_logs WHERE source='minimax' AND model <> ''",
+                "SELECT COUNT(*) > 0 FROM session_request_logs WHERE source='MiniMax' AND model <> ''",
                 [],
                 |row| row.get(0),
             )
@@ -451,7 +451,7 @@ mod tests {
         // 打印模型分布
         let mut stmt = db
             .conn()
-            .prepare("SELECT model, COUNT(*), SUM(input_tokens), SUM(output_tokens) FROM session_request_logs WHERE source='minimax' GROUP BY model ORDER BY 2 DESC")
+            .prepare("SELECT model, COUNT(*), SUM(input_tokens), SUM(output_tokens) FROM session_request_logs WHERE source='MiniMax' GROUP BY model ORDER BY 2 DESC")
             .unwrap();
         let rows = stmt.query_map([], |r| {
             Ok(format!(

@@ -9,7 +9,7 @@ use crate::services::cursor_hook_backup::{self, HookBackupResult};
 use crate::services::cursor_local_hook;
 use crate::services::cursor_local_hook::HookAlert;
 use crate::services::cursor_sync::{self, SyncCursorResult};
-use crate::services::data_source::{create_source_entry, DbType};
+use crate::services::data_source::DbType;
 use crate::utils;
 
 #[derive(serde::Serialize)]
@@ -263,7 +263,10 @@ pub fn ensure_all_cursor_sources_registered(state: &State<AppState>) -> Result<(
             }
             continue;
         }
-        match create_source_entry(&cache_str) {
+        match crate::services::data_source::create_source_entry_with_type(
+            &cache_str,
+            Some(&crate::services::data_source::DbType::Cursor),
+        ) {
             Ok(entry) => {
                 log::info!("[CURSOR] 注册数据源: {} (user={})", cache_str, acc.user_id);
                 sources.push(entry);

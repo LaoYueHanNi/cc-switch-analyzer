@@ -8,6 +8,31 @@ use crate::models::*;
 
 static SOURCE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+/// 数据源能力声明：每个数据源显式标记支持的能力，
+/// 管道与前端据此分流，取代散落的 None/Err/字符串特判。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceCapabilities {
+    /// 会话管理：数据进入 sessions 表管理流程（会话 Tab 展示、恢复、
+    /// 项目分组），实时 Tab 提供二级会话分组。不支持 ≠ 不取 session_id
+    /// （去重指纹、日志关联仍会使用）。
+    pub session_management: bool,
+    /// 原始数据可提供项目归属信息（cwd / workspace / directory）
+    pub project_attribution: bool,
+    /// 扫描入库 pricing.db 并支持增量（mtime + 行 offset）
+    pub incremental_scan: bool,
+}
+
+impl Default for SourceCapabilities {
+    fn default() -> Self {
+        Self {
+            session_management: false,
+            project_attribution: false,
+            incremental_scan: false,
+        }
+    }
+}
+
 pub trait DataSource: Send + Sync {
     fn open(&mut self, path: &str) -> Result<(), String>;
     fn close(&mut self);
@@ -53,6 +78,11 @@ pub trait DataSource: Send + Sync {
             on_record(record);
         }
         Ok(())
+    }
+
+    /// 数据源能力声明（默认全不支持，各服务按实际覆盖）
+    fn capabilities(&self) -> SourceCapabilities {
+        SourceCapabilities::default()
     }
 
     /// 数据源提供的标题来源标签，用于 UI 展示。
@@ -125,11 +155,16 @@ pub enum DbType {
 }
 
 impl DbType {
+    /// 数据源规范名（canonical name）：CCS / OpenCode / AIProxy / Cursor /
+    /// ZCode / Proma / DSH / MiniMax。该名称同时用作：
+    /// - 持久化 last_db_paths 的 db_type
+    /// - 固定型数据源的 provider_id / provider_name
+    /// - session_request_logs 入库的 source 列值
     pub fn label(&self) -> &'static str {
         match self {
-            DbType::ExternalDb => "CC-Switch",
+            DbType::ExternalDb => "CCS",
             DbType::OpenCode => "OpenCode",
-            DbType::AiProxy => "AI-Proxy",
+            DbType::AiProxy => "AIProxy",
             DbType::Cursor => "Cursor",
             DbType::ZCode => "ZCode",
             DbType::Proma => "Proma",
@@ -138,12 +173,13 @@ impl DbType {
         }
     }
 
-    /// 由 label 反查类型（前端明确指定时使用，不依赖表名探测）
+    /// 由 label 反查类型（前端明确指定时使用，不依赖表名探测）。
+    /// 兼容历史持久化值："CC-Switch" 与 "AI-Proxy"。
     pub fn from_label(label: &str) -> Option<DbType> {
         match label {
-            "CC-Switch" => Some(DbType::ExternalDb),
+            "CCS" | "CC-Switch" => Some(DbType::ExternalDb),
             "OpenCode" => Some(DbType::OpenCode),
-            "AI-Proxy" => Some(DbType::AiProxy),
+            "AIProxy" | "AI-Proxy" => Some(DbType::AiProxy),
             "Cursor" => Some(DbType::Cursor),
             "ZCode" => Some(DbType::ZCode),
             "Proma" => Some(DbType::Proma),
@@ -177,6 +213,7 @@ impl SourceEntry {
             db_type: self.db_type.label().to_string(),
             record_count: self.source.get_record_count().unwrap_or(0),
             enabled: self.enabled,
+            capabilities: self.source.capabilities(),
         }
     }
 }
@@ -321,20 +358,6 @@ pub fn merge_realtime_buckets(results: Vec<Vec<RealtimeBucket>>) -> Vec<Realtime
     let mut v: Vec<_> = map.into_values().collect();
     v.sort_by_key(|b| b.bucket);
     v
-}
-
-pub fn union_providers(results: Vec<Vec<Provider>>) -> Vec<Provider> {
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for list in results {
-        for p in list {
-            if seen.insert(p.id.clone()) {
-                out.push(p);
-            }
-        }
-    }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    out
 }
 
 pub fn union_models(results: Vec<Vec<String>>) -> Vec<String> {

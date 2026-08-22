@@ -93,6 +93,9 @@ impl AppDbService {
         if version < 11 {
             self.migrate_v11()?;
         }
+        if version < 12 {
+            self.migrate_v12()?;
+        }
 
         Ok(())
     }
@@ -412,6 +415,28 @@ impl AppDbService {
         )
         .map_err(|e| format!("迁移 v11 (session_request_logs/session_log_sync) 失败: {}", e))?;
         self.set_schema_version(11)?;
+        Ok(())
+    }
+
+    /// v12: 数据源标识规范化——source/provider_id 统一为 canonical 名
+    /// （'dsh'→'DSH'、'minimax'→'MiniMax'，与 DbType::label 对齐）。
+    /// request_id 主键前缀同步迁移（scanner 以 "{source}:" 生成主键），
+    /// 否则游标丢失触发重扫时同一消息会以两种前缀并存，绕过去重造成双计。
+    fn migrate_v12(&mut self) -> Result<(), String> {
+        self.db.execute_batch(
+            "UPDATE session_request_logs SET source = 'DSH', provider_id = 'DSH' WHERE source = 'dsh';
+             UPDATE session_log_sync SET source = 'DSH' WHERE source = 'dsh';
+             UPDATE session_request_logs SET source = 'MiniMax', provider_id = 'MiniMax' WHERE source = 'minimax';
+             UPDATE session_log_sync SET source = 'MiniMax' WHERE source = 'minimax';
+             -- GLOB 为大小写敏感匹配:避免 LIKE 对 ASCII 不敏感导致
+             -- 已规范化的 'DSH:x' 再次被切片成 'DSH::x'
+             UPDATE session_request_logs SET request_id = 'DSH:' || substr(request_id, 5)
+               WHERE request_id GLOB 'dsh:*';
+             UPDATE session_request_logs SET request_id = 'MiniMax:' || substr(request_id, 9)
+               WHERE request_id GLOB 'minimax:*';",
+        )
+        .map_err(|e| format!("迁移 v12 (数据源标识规范化) 失败: {}", e))?;
+        self.set_schema_version(12)?;
         Ok(())
     }
 
@@ -1795,7 +1820,7 @@ impl AppDbService {
                 last_synced_at INTEGER NOT NULL
             );"
         ).map_err(|e| format!("初始化内存表失败: {}", e))?;
-        self.set_setting("schema_version", "11")?;
+        self.set_setting("schema_version", "12")?;
         Ok(())
     }
 }
@@ -1821,7 +1846,44 @@ mod tests {
     #[test]
     fn test_schema_version() {
         let db = create_db();
-        assert_eq!(db.get_setting("schema_version").unwrap(), "11");
+        assert_eq!(db.get_setting("schema_version").unwrap(), "12");
+    }
+
+    #[test]
+    fn test_migrate_v12_normalizes_request_id_prefix() {
+        let mut db = create_db();
+        // 模拟存量库：旧小写前缀的 request_id / source / provider_id
+        db.conn()
+            .execute(
+                "INSERT INTO session_request_logs
+                    (request_id, source, session_id, model, provider_id,
+                     input_tokens, output_tokens, cache_read, cache_creation, created_at)
+                 VALUES
+                    ('dsh:m1', 'dsh', 's1', 'm', 'dsh', 1, 0, 0, 0, 100),
+                    ('minimax:mm1', 'minimax', 's2', 'm', 'minimax', 2, 0, 0, 0, 200),
+                    ('other:x', 'other', '', 'm', 'x', 3, 0, 0, 0, 300)",
+                [],
+            )
+            .unwrap();
+
+        // 版本降回 v11 后重新执行迁移链（v12 + v13）
+        db.set_setting("schema_version", "11").unwrap();
+        db.init_schema().unwrap();
+
+        let count = |conn: &rusqlite::Connection, sql: &str| -> i64 {
+            conn.query_row(sql, [], |row| row.get(0)).unwrap()
+        };
+        let conn = db.conn();
+        // request_id 前缀规范化，且不产生重复行
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs"), 3);
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE request_id = 'DSH:m1'"), 1);
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE request_id = 'MiniMax:mm1'"), 1);
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE request_id GLOB 'dsh:*'"), 0);
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE request_id GLOB 'minimax:*'"), 0);
+        // source/provider_id 同步规范化；非 DSH/MiniMax 记录不受影响
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE request_id = 'DSH:m1' AND source = 'DSH' AND provider_id = 'DSH'"), 1);
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE request_id = 'MiniMax:mm1' AND source = 'MiniMax' AND provider_id = 'MiniMax'"), 1);
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE request_id = 'other:x' AND source = 'other'"), 1);
     }
 
     #[test]

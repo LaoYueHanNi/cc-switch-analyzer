@@ -136,7 +136,7 @@ const mode = ref<ChartMode>('overview')
 /** 按模型模式下的二次分组：按定价 family 聚合 */
 const groupByFamily = ref(false)
 
-// 进入"按模型对比"时,自动清空顶栏的模型/供应商筛选(对比本身就要求全量)
+// 进入"按模型对比"时,自动清空顶栏的模型/数据源筛选(对比本身就要求全量)
 // 只清 modelId/providerId 两个字段,日期保留(避免影响用户的日期范围选择)
 watch(mode, (m) => {
   if (m === 'byModel' && (filterStore.modelId || filterStore.providerId)) {

@@ -607,6 +607,7 @@ impl OpenCodeDbService {
             "SELECT
                 session_id,
                 json_extract(data, '$.modelID') AS model,
+                json_extract(data, '$.providerID') AS provider_id,
                 (time_created / 1000) AS created_at,
                 CAST(json_extract(data, '$.tokens.input') AS INTEGER),
                 CAST(json_extract(data, '$.tokens.output') AS INTEGER),
@@ -634,12 +635,12 @@ impl OpenCodeDbService {
                 Ok(SessionRequestToken {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    provider_id: "opencode".to_string(),
-                    created_at: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
-                    input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                    output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
-                    cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                    cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 })
             })
             .map_err(|e| format!("查询会话请求Token失败: {}", e))?;
@@ -661,6 +662,7 @@ impl OpenCodeDbService {
             "SELECT
                 session_id,
                 json_extract(data, '$.modelID') AS model,
+                json_extract(data, '$.providerID') AS provider_id,
                 (time_created / 1000) AS created_at,
                 CAST(json_extract(data, '$.tokens.input') AS INTEGER),
                 CAST(json_extract(data, '$.tokens.output') AS INTEGER),
@@ -680,12 +682,12 @@ impl OpenCodeDbService {
                 Ok(SessionRequestToken {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    provider_id: "opencode".to_string(),
-                    created_at: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
-                    input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                    output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
-                    cache_read: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                    cache_creation: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    cache_read: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    cache_creation: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 })
             })
             .map_err(|e| format!("查询会话请求Token失败: {}", e))?;
@@ -1026,6 +1028,7 @@ impl OpenCodeDbService {
                 session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                db_type: "OpenCode".to_string(),
                 created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                 input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
                 output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
@@ -1109,5 +1112,12 @@ impl super::data_source::DataSource for OpenCodeDbService {
         session_ids: &[String],
     ) -> Option<Result<HashMap<String, (String, String)>, String>> {
         Some(self.get_session_titles_from_db(session_ids))
+    }
+    fn capabilities(&self) -> super::data_source::SourceCapabilities {
+        super::data_source::SourceCapabilities {
+            session_management: true,
+            project_attribution: true,
+            incremental_scan: false,
+        }
     }
 }

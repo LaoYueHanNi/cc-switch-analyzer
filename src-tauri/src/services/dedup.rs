@@ -336,6 +336,7 @@ mod tests {
             session_id: session_id.to_string(),
             model: model.to_string(),
             provider_id: provider_id.to_string(),
+            db_type: String::new(),
             created_at: 0,
             input_tokens: input,
             output_tokens: output,
@@ -352,13 +353,13 @@ mod tests {
         // AI Proxy: input=881（不含 cache_read）
         // 两边指纹应相同
         let ccs = raw_record("s1", "gpt-5.4-mini", "_codex_session", 881, 16857, 26624, true);
-        let aiproxy = raw_record("s1", "deepseek-v4-flash", "ai-proxy", 881, 16857, 26624, true);
+        let aiproxy = raw_record("s1", "deepseek-v4-flash", "AIProxy", 881, 16857, 26624, true);
 
         let result = dedup_records(vec![aiproxy, ccs]);
         assert_eq!(result.len(), 1);
         // 先到先保留：AI Proxy 在前，保留 target_model
         assert_eq!(result[0].model, "deepseek-v4-flash");
-        assert_eq!(result[0].provider_id, "ai-proxy");
+        assert_eq!(result[0].provider_id, "AIProxy");
     }
 
     #[test]
@@ -373,8 +374,8 @@ mod tests {
     #[test]
     fn codex_and_noncodex_never_cross() {
         // codex 和非 codex 即使 session_id/output_tokens 相同也不应交叉
-        let codex = raw_record("s1", "deepseek-v4-flash", "ai-proxy", 881, 200, 0, true);
-        let non_codex = raw_record("s1", "deepseek-v4-flash", "ai-proxy", 881, 200, 0, false);
+        let codex = raw_record("s1", "deepseek-v4-flash", "AIProxy", 881, 200, 0, true);
+        let non_codex = raw_record("s1", "deepseek-v4-flash", "AIProxy", 881, 200, 0, false);
 
         let result = dedup_records(vec![codex, non_codex]);
         assert_eq!(result.len(), 2);
@@ -383,8 +384,8 @@ mod tests {
     #[test]
     fn codex_fingerprint_ignores_model() {
         // codex 指纹不包含 model，不同 model 应去重
-        let a = raw_record("s1", "model-a", "ai-proxy", 100, 200, 0, true);
-        let b = raw_record("s1", "model-b", "ai-proxy", 100, 200, 0, true);
+        let a = raw_record("s1", "model-a", "AIProxy", 100, 200, 0, true);
+        let b = raw_record("s1", "model-b", "AIProxy", 100, 200, 0, true);
 
         let result = dedup_records(vec![a, b]);
         assert_eq!(result.len(), 1);
@@ -395,11 +396,11 @@ mod tests {
         // AI Proxy 排在前面应被优先保留（由调用方排序保证）
         // CCS: DB 读取时 input 已归一化为 1000-900=100
         let ccs = raw_record("s1", "gpt-5.4-mini", "_codex_session", 100, 500, 900, true);
-        let aiproxy = raw_record("s1", "deepseek-v4-flash", "ai-proxy", 100, 500, 900, true);
+        let aiproxy = raw_record("s1", "deepseek-v4-flash", "AIProxy", 100, 500, 900, true);
 
         let result = dedup_records(vec![aiproxy.clone(), ccs]);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].provider_id, "ai-proxy");
+        assert_eq!(result[0].provider_id, "AIProxy");
         // AI Proxy 的 input 不含 cache，是准确值
         assert_eq!(result[0].input_tokens, 100);
     }
@@ -412,7 +413,7 @@ mod tests {
             RequestFingerprint::new_codex(&r.session_id, r.input_tokens, r.output_tokens, r.cache_creation)
         };
         let fp_aiproxy = {
-            let r = raw_record("s1", "deepseek-v4-flash", "ai-proxy", 100, 200, 900, true);
+            let r = raw_record("s1", "deepseek-v4-flash", "AIProxy", 100, 200, 900, true);
             RequestFingerprint::new_codex(&r.session_id, r.input_tokens, r.output_tokens, r.cache_creation)
         };
         assert_eq!(fp_ccs, fp_aiproxy);

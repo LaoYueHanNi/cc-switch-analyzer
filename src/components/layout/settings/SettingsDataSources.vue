@@ -13,6 +13,12 @@
           @update:value="onToggleAllCursor"
         />
         <n-switch
+          v-else-if="slot.key === 'cc-switch' && !slot.path"
+          size="small"
+          :value="ccsAutoDiscover"
+          @update:value="onToggleCcsDiscover"
+        />
+        <n-switch
           v-else
           size="small"
           :value="slot.enabled"
@@ -24,7 +30,7 @@
       <!-- 路径/状态 + 操作（Cursor 已并入账号行，此处仅其它数据源） -->
       <div v-if="slot.key !== 'cursor'" class="source-path-row">
         <span class="path-label">{{ slot.key === 'dsh' || slot.key === 'minimax' ? '数据目录' : '数据库地址' }}</span>
-        <span class="source-path" :title="slot.path || ''">{{ slot.path || '未选择' }}</span>
+        <span class="source-path" :title="slot.path || ''">{{ slot.path || (slot.key === 'cc-switch' ? '未启用（可开启自动发现）' : '未选择') }}</span>
         <div class="path-actions">
           <button
             type="button"
@@ -386,9 +392,28 @@ const DSH_INSTALL_CMD = 'dsh plugin --profile web add github:LaoYueHanNi/dsh-tok
 const emptyQuad = (): TokenQuad => ({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 })
 
 const dbStore = useDatabaseStore()
-const { addDatabase, removeDatabase, refreshAfterToggle } = useDatabase()
+const { addDatabase, removeDatabase, refreshAfterToggle, autoLoadDatabase } = useDatabase()
 
 const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null, cursor: null })
+
+// ===== CCS 自动发现（默认关闭，作为 CCS 数据源的独立子项配置）=====
+const ccsAutoDiscover = ref(false)
+
+async function loadCcsAutoDiscover(): Promise<void> {
+  try {
+    ccsAutoDiscover.value = await platformAdapter.getCcsAutoDiscover()
+  } catch { /* ignore */ }
+}
+
+async function onToggleCcsDiscover(enabled: boolean): Promise<void> {
+  try {
+    await platformAdapter.setCcsAutoDiscover(enabled)
+    ccsAutoDiscover.value = enabled
+    if (enabled) await autoLoadDatabase()
+  } catch (e) {
+    console.error('[CCS] 切换自动发现失败', e)
+  }
+}
 
 const dshSettings = ref<DshSettings>({
   usePlugin: false,
@@ -839,15 +864,16 @@ async function loadDefaultPaths(): Promise<void> {
   } catch { /* ignore */ }
 }
 loadDefaultPaths()
+loadCcsAutoDiscover()
 
 const slots = computed(() => [
   {
     key: 'cc-switch',
-    label: 'CC-Switch',
-    path: dbStore.sources.find(s => s.dbType === 'CC-Switch')?.path || '',
+    label: 'CCS',
+    path: dbStore.sources.find(s => s.dbType === 'CCS')?.path || '',
     defaultPath: defaultPaths.value.ccSwitch,
-    sourceId: dbStore.sources.find(s => s.dbType === 'CC-Switch')?.id || '',
-    enabled: dbStore.sources.find(s => s.dbType === 'CC-Switch')?.enabled ?? true,
+    sourceId: dbStore.sources.find(s => s.dbType === 'CCS')?.id || '',
+    enabled: dbStore.sources.find(s => s.dbType === 'CCS')?.enabled ?? true,
   },
   {
     key: 'opencode',
@@ -859,11 +885,11 @@ const slots = computed(() => [
   },
   {
     key: 'ai-proxy',
-    label: 'AI-Proxy',
-    path: dbStore.sources.find(s => s.dbType === 'AI-Proxy')?.path || '',
+    label: 'AIProxy',
+    path: dbStore.sources.find(s => s.dbType === 'AIProxy')?.path || '',
     defaultPath: defaultPaths.value.aiProxy,
-    sourceId: dbStore.sources.find(s => s.dbType === 'AI-Proxy')?.id || '',
-    enabled: dbStore.sources.find(s => s.dbType === 'AI-Proxy')?.enabled ?? true,
+    sourceId: dbStore.sources.find(s => s.dbType === 'AIProxy')?.id || '',
+    enabled: dbStore.sources.find(s => s.dbType === 'AIProxy')?.enabled ?? true,
   },
   {
     key: 'z-code',
@@ -920,11 +946,11 @@ const slots = computed(() => [
   },
 ])
 
-// slot key → 后端 dbType 字面量映射
+// slot key → 后端 dbType 字面量映射（canonical 名见 DbType::label）
 const DB_TYPE_MAP: Record<string, string> = {
-  'cc-switch': 'CC-Switch',
+  'cc-switch': 'CCS',
   'opencode': 'OpenCode',
-  'ai-proxy': 'AI-Proxy',
+  'ai-proxy': 'AIProxy',
   'z-code': 'ZCode',
   'proma': 'Proma',
   'dsh': 'DSH',

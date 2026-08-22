@@ -10,14 +10,14 @@ use std::sync::Mutex;
 use rusqlite::{Connection, OpenFlags};
 
 use crate::models::*;
-use crate::services::data_source::DataSource;
+use crate::services::data_source::{DataSource, SourceCapabilities};
 use crate::services::pipeline::{
     aggregate_combined_records, aggregate_daily_trend, aggregate_hourly_trend,
     aggregate_model_breakdown, aggregate_model_context_tier_buckets, aggregate_provider_breakdown,
     aggregate_provider_model_tokens, aggregate_summary,
 };
 
-const PROVIDER_ID: &str = "dsh";
+const PROVIDER_ID: &str = "DSH";
 const PROVIDER_NAME: &str = "DSH";
 
 pub struct DshDbService {
@@ -73,7 +73,7 @@ impl DshDbService {
                 "SELECT session_id, model, provider_id, created_at,
                         input_tokens, output_tokens, cache_read, cache_creation
                  FROM session_request_logs
-                 WHERE source = 'dsh'
+                 WHERE source = 'DSH'
                  ORDER BY created_at",
             )
             .map_err(|e| format!("查询 DSH 记录失败: {}", e))?;
@@ -83,6 +83,7 @@ impl DshDbService {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    db_type: "DSH".to_string(),
                     created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                     input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
                     output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
@@ -142,7 +143,7 @@ impl DataSource for DshDbService {
     fn get_record_count(&self) -> Result<i64, String> {
         let db = self.db()?;
         db.query_row(
-            "SELECT COUNT(*) FROM session_request_logs WHERE source = 'dsh'",
+            "SELECT COUNT(*) FROM session_request_logs WHERE source = 'DSH'",
             [],
             |row| row.get(0),
         )
@@ -155,7 +156,7 @@ impl DataSource for DshDbService {
             .ok()
             .and_then(|db| {
                 db.query_row(
-                    "SELECT MAX(created_at) FROM session_request_logs WHERE source = 'dsh'",
+                    "SELECT MAX(created_at) FROM session_request_logs WHERE source = 'DSH'",
                     [],
                     |row| row.get::<_, Option<i64>>(0),
                 )
@@ -176,7 +177,7 @@ impl DataSource for DshDbService {
         let mut stmt = db
             .prepare(
                 "SELECT DISTINCT model FROM session_request_logs
-                 WHERE source = 'dsh' AND model <> '' ORDER BY model",
+                 WHERE source = 'DSH' AND model <> '' ORDER BY model",
             )
             .map_err(|e| format!("查询 DSH 模型失败: {}", e))?;
         let rows = stmt
@@ -194,7 +195,7 @@ impl DataSource for DshDbService {
         let (min, max) = db
             .query_row(
                 "SELECT MIN(created_at), MAX(created_at)
-                 FROM session_request_logs WHERE source = 'dsh'",
+                 FROM session_request_logs WHERE source = 'DSH'",
                 [],
                 |row| {
                     Ok((
@@ -308,5 +309,13 @@ impl DataSource for DshDbService {
 
     fn get_filtered_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> {
         self.filtered_records(params)
+    }
+
+    fn capabilities(&self) -> SourceCapabilities {
+        SourceCapabilities {
+            session_management: false,
+            project_attribution: true,
+            incremental_scan: true,
+        }
     }
 }

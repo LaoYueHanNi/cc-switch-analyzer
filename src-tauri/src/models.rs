@@ -7,6 +7,9 @@ pub struct RawRecord {
     pub session_id: String,
     pub model: String,
     pub provider_id: String,
+    /// 记录所属数据源的 canonical 名（DbType::label），如 "CCS"/"OpenCode"。
+    /// 用于供应商一级聚合等按数据源归并的场景；空串表示未标注。
+    pub db_type: String,
     pub created_at: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
@@ -24,6 +27,10 @@ pub struct FilterParams {
     pub from_epoch: Option<i64>,
     pub to_epoch: Option<i64>,
     pub tz_offset: Option<i64>,
+    /// 数据源级筛选值：为数据源 canonical 名（如 "CCS"/"OpenCode"）时按数据源过滤
+    /// （scope_to_provider_source 只保留该源并剥离内部 provider 过滤）；
+    /// 其他值（历史内部 provider id，如 CCS UUID、OpenCode providerID）按源内
+    /// provider 过滤，由各数据源内部处理。
     pub provider_id: Option<String>,
     pub model_id: Option<String>,
 }
@@ -528,6 +535,7 @@ pub struct SourceInfo {
     pub db_type: String,
     pub record_count: i64,
     pub enabled: bool,
+    pub capabilities: crate::services::data_source::SourceCapabilities,
 }
 
 // ========== 会话管理：项目分组（第一屏） ==========

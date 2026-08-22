@@ -188,8 +188,8 @@ impl AiProxyDbService {
 
     pub fn get_providers(&self) -> Result<Vec<Provider>, String> {
         Ok(vec![Provider {
-            id: "ai-proxy".to_string(),
-            name: "AI Proxy".to_string(),
+            id: "AIProxy".to_string(),
+            name: "AIProxy".to_string(),
         }])
     }
 
@@ -299,8 +299,8 @@ impl AiProxyDbService {
         let (where_sql, binds) = Self::build_where_clause(params, false);
         let sql = format!(
             "SELECT
-                'AI Proxy' AS provider_name,
-                'ai-proxy' AS provider_id,
+                'AIProxy' AS provider_name,
+                'AIProxy' AS provider_id,
                 COUNT(*) AS requests,
                 COUNT(*) AS successes,
                 100.0 AS success_rate,
@@ -334,7 +334,7 @@ impl AiProxyDbService {
         let sql = format!(
             "SELECT
                 {} AS day,
-                'ai-proxy' AS provider_id,
+                'AIProxy' AS provider_id,
                 COALESCE(l.target_model, l.model),
                 COUNT(*) AS requests,
                 SUM(l.input_tokens) AS input_tokens,
@@ -375,7 +375,7 @@ impl AiProxyDbService {
         let (where_sql, binds) = Self::build_where_clause(params, true);
         let sql = format!(
             "SELECT
-                'ai-proxy' AS provider_id,
+                'AIProxy' AS provider_id,
                 COALESCE(l.target_model, l.model),
                 SUM(l.input_tokens) AS input_tokens,
                 SUM(l.output_tokens) AS output_tokens,
@@ -641,7 +641,7 @@ impl AiProxyDbService {
                 Ok(SessionRequestToken {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    provider_id: "ai-proxy".to_string(),
+                    provider_id: "AIProxy".to_string(),
                     created_at: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
                     input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                     output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
@@ -688,7 +688,7 @@ impl AiProxyDbService {
                 Ok(SessionRequestToken {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    provider_id: "ai-proxy".to_string(),
+                    provider_id: "AIProxy".to_string(),
                     created_at: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
                     input_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                     output_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
@@ -872,7 +872,7 @@ impl AiProxyDbService {
             Some(s) => (format!(
                 "SELECT session_id,
                        COALESCE(target_model, model),
-                       'AI Proxy',
+                       'AIProxy',
                        {ts_expr},
                        input_tokens,
                        output_tokens,
@@ -887,7 +887,7 @@ impl AiProxyDbService {
             None => (format!(
                 "SELECT session_id,
                        COALESCE(target_model, model),
-                       'AI Proxy',
+                       'AIProxy',
                        {ts_expr},
                        input_tokens,
                        output_tokens,
@@ -937,7 +937,7 @@ impl AiProxyDbService {
             Some(s) => (format!(
                 "SELECT session_id,
                        COALESCE(target_model, model),
-                       'AI Proxy',
+                       'AIProxy',
                        {ts_expr},
                        input_tokens,
                        output_tokens,
@@ -952,7 +952,7 @@ impl AiProxyDbService {
             None => (format!(
                 "SELECT session_id,
                        COALESCE(target_model, model),
-                       'AI Proxy',
+                       'AIProxy',
                        {ts_expr},
                        input_tokens,
                        output_tokens,
@@ -1002,7 +1002,7 @@ impl AiProxyDbService {
         let sql = format!(
             "SELECT session_id,
                     COALESCE(target_model, model),
-                    'ai-proxy',
+                    'AIProxy',
                     {ts_expr},
                     input_tokens,
                     output_tokens,
@@ -1027,6 +1027,7 @@ impl AiProxyDbService {
                 session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                db_type: "AIProxy".to_string(),
                 created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                 input_tokens,
                 output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),

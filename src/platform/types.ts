@@ -46,12 +46,19 @@ export interface DbResult {
   models: string[]
 }
 
+export interface SourceCapabilities {
+  sessionManagement: boolean
+  projectAttribution: boolean
+  incrementalScan: boolean
+}
+
 export interface SourceInfo {
   id: string
   path: string
   dbType: string
   recordCount: number
   enabled: boolean
+  capabilities: SourceCapabilities
 }
 
 export interface RefreshResult {
@@ -286,9 +293,10 @@ export interface TmServiceStatus {
 
 export interface PlatformAdapter {
   // 数据库
-  selectDatabase(): Promise<DbResult | null>
   autoLoadDatabase(): Promise<SourceInfo[]>
   addDatabase(filePath: string, dbType?: string): Promise<SourceInfo[]>
+  getCcsAutoDiscover(): Promise<boolean>
+  setCcsAutoDiscover(enabled: boolean): Promise<void>
   removeDatabase(sourceId: string): Promise<SourceInfo[]>
   toggleDatabase(sourceId: string): Promise<SourceInfo[]>
   listDatabases(): Promise<SourceInfo[]>

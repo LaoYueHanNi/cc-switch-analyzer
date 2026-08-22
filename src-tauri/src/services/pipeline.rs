@@ -22,6 +22,40 @@ pub fn collect_provider_names(sources: &[SourceEntry]) -> HashMap<String, String
     map
 }
 
+/// 构建 provider_id → 数据源 canonical 名映射（动态供应商归并到所属数据源，
+/// 如 CCS 的 UUID、OpenCode 的 providerID）。
+pub fn build_provider_to_db_map(sources: &[SourceEntry]) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for s in sources.iter().filter(|s| s.enabled) {
+        if let Ok(providers) = s.source.get_providers() {
+            for p in providers {
+                map.insert(p.id, s.db_type.label().to_string());
+            }
+        }
+    }
+    map
+}
+
+/// 数据源级过滤解析：当筛选的 provider_id 恰好等于某数据源 canonical 名
+/// （如 "CCS"/"OpenCode"）时，只保留该数据源并剥离内部 provider 过滤
+/// （该源返回全量记录）；空值或未命中（历史内部 provider id，如 CCS UUID、
+/// OpenCode providerID）时保持原 provider 过滤语义。
+pub fn scope_to_provider_source<'a>(
+    sources: &'a [SourceEntry],
+    params: &FilterParams,
+) -> (Vec<&'a SourceEntry>, FilterParams) {
+    let Some(pid) = params.provider_id.as_deref().filter(|p| !p.is_empty()) else {
+        return (sources.iter().collect(), params.clone());
+    };
+    if let Some(matched) = sources.iter().find(|s| s.enabled && s.db_type.label() == pid) {
+        let mut scoped = params.clone();
+        scoped.provider_id = None;
+        (vec![matched], scoped)
+    } else {
+        (sources.iter().collect(), params.clone())
+    }
+}
+
 /// 流式去重 Pipeline。
 ///
 /// 并行查询所有数据源，通过 channel 流式传输记录，
@@ -72,13 +106,15 @@ pub fn fetch_deduped_records(
     sources: &[SourceEntry],
     params: &FilterParams,
 ) -> Result<Vec<RawRecord>, String> {
-    let active: Vec<&SourceEntry> = sources.iter().filter(|s| s.enabled).collect();
+    // 数据源级过滤：provider_id 命中数据源 canonical 名时，只查询该源并剥离内部 provider 过滤
+    let (scoped, scoped_params) = scope_to_provider_source(sources, params);
+    let active: Vec<&SourceEntry> = scoped.into_iter().filter(|s| s.enabled).collect();
     if active.is_empty() {
         return Ok(Vec::new());
     }
     let all_records: Vec<Vec<RawRecord>> = std::thread::scope(|s| {
         let handles: Vec<_> = active.into_iter().map(|entry| {
-            let p = params.clone();
+            let p = scoped_params.clone();
             let label = entry.db_type.label().to_string();
             s.spawn(move || {
                 entry.source.get_filtered_records(&p).map_err(|e| {
@@ -98,10 +134,10 @@ pub fn fetch_deduped_records(
 
     let mut flat: Vec<RawRecord> = all_records.into_iter().flatten().collect();
 
-    // AI Proxy 优先：去重先到先保留，AI Proxy 有原始 target_model 和准确 input
+    // AIProxy 优先：去重先到先保留，AIProxy 有原始 target_model 和准确 input
     flat.sort_by(|a, b| {
-        let a_priority = a.provider_id == "ai-proxy";
-        let b_priority = b.provider_id == "ai-proxy";
+        let a_priority = a.provider_id == "AIProxy";
+        let b_priority = b.provider_id == "AIProxy";
         b_priority.cmp(&a_priority)
     });
     Ok(super::dedup::dedup_records(flat))
@@ -183,19 +219,22 @@ pub fn aggregate_model_breakdown(records: &[RawRecord]) -> Vec<ModelBreakdown> {
     v
 }
 
-/// 聚合供应商分组：GROUP BY provider_id, COUNT, AVG(latency), success_rate=100.0
-pub fn aggregate_provider_breakdown(records: &[RawRecord], provider_names: &HashMap<String, String>) -> Vec<ProviderBreakdown> {
+/// 聚合供应商分组（一级 = 数据源粒度）：
+/// GROUP BY db_type, COUNT, AVG(latency), success_rate=100.0
+/// CCS/OpenCode 等动态 provider 在此归并到所属数据源（二级明细仍保留在原始记录中）
+pub fn aggregate_provider_breakdown(records: &[RawRecord], _provider_names: &HashMap<String, String>) -> Vec<ProviderBreakdown> {
     struct Acc { requests: i64, latency_sum: f64 }
     let mut map: HashMap<String, Acc> = HashMap::new();
     for r in records {
-        let e = map.entry(r.provider_id.clone()).or_insert(Acc { requests: 0, latency_sum: 0.0 });
+        let key = if r.db_type.is_empty() { r.provider_id.clone() } else { r.db_type.clone() };
+        let e = map.entry(key).or_insert(Acc { requests: 0, latency_sum: 0.0 });
         e.requests += 1;
         e.latency_sum += r.latency as f64;
     }
     let mut v: Vec<ProviderBreakdown> = map.into_iter()
         .map(|(provider_id, acc)| {
             ProviderBreakdown {
-                provider_name: provider_names.get(&provider_id).cloned().unwrap_or_else(|| provider_id.clone()),
+                provider_name: provider_id.clone(),
                 provider_id,
                 requests: acc.requests,
                 successes: acc.requests,
@@ -206,6 +245,33 @@ pub fn aggregate_provider_breakdown(records: &[RawRecord], provider_names: &Hash
         .collect();
     v.sort_by(|a, b| b.requests.cmp(&a.requests));
     v
+}
+
+/// 将 provider_costs（二级 provider_id 粒度）归并到一级数据源粒度（db_type），
+/// 与 aggregate_provider_breakdown 的 key 规则保持一致：db_type 非空时用 db_type，
+/// 否则保留原 provider_id。修复 ByProvider 卡片按数据源名查 providerCosts 命中失败的问题
+/// （OpenCode 等动态 provider 的 provider_id 与 db_type 取值不一致时，查不到会回退 0）。
+pub fn merge_provider_costs_to_db_type(
+    records: &[RawRecord],
+    provider_costs: &mut HashMap<String, f64>,
+) {
+    let mut provider_to_db: HashMap<String, String> = HashMap::new();
+    for r in records {
+        if !r.db_type.is_empty() {
+            provider_to_db
+                .entry(r.provider_id.clone())
+                .or_insert_with(|| r.db_type.clone());
+        }
+    }
+    if provider_to_db.is_empty() {
+        return;
+    }
+    let mut merged: HashMap<String, f64> = HashMap::new();
+    for (pid, cost) in std::mem::take(provider_costs) {
+        let key = provider_to_db.get(&pid).cloned().unwrap_or(pid);
+        *merged.entry(key).or_insert(0.0) += cost;
+    }
+    *provider_costs = merged;
 }
 
 /// 聚合组合分组：GROUP BY (day, provider_id, model), COUNT, SUMs, SUM(latency)
@@ -494,6 +560,7 @@ mod tests {
             session_id: session_id.to_string(),
             model: model.to_string(),
             provider_id: provider_id.to_string(),
+            db_type: String::new(),
             created_at,
             input_tokens: input,
             output_tokens: output,
@@ -574,25 +641,64 @@ mod tests {
     // ===== aggregate_provider_breakdown =====
 
     #[test]
-    fn aggregate_provider_breakdown_maps_name_and_rate() {
-        let records = vec![
-            rec("s", "m", "p1", 0, 0, 0, 0, 0, 100),
-            rec("s", "m", "p1", 0, 0, 0, 0, 0, 300),
-            rec("s", "m", "p2", 0, 0, 0, 0, 0, 200),
-        ];
-        let mut names = HashMap::new();
-        names.insert("p1".to_string(), "Provider One".to_string());
-        let v = aggregate_provider_breakdown(&records, &names);
-        assert_eq!(v.len(), 2);
-        // p1(2) 在前，名字映射成功
-        assert_eq!(v[0].provider_id, "p1");
-        assert_eq!(v[0].provider_name, "Provider One");
+    fn aggregate_provider_breakdown_groups_by_db_type() {
+        // db_type 非空 → 一级聚合按数据源归并（动态 provider 合并）
+        let mut r1 = rec("s", "m", "prov-a", 0, 0, 0, 0, 0, 100);
+        r1.db_type = "CCS".to_string();
+        let mut r2 = rec("s", "m", "prov-b", 0, 0, 0, 0, 0, 300);
+        r2.db_type = "CCS".to_string();
+        let mut r3 = rec("s", "m", "DSH", 0, 0, 0, 0, 0, 200);
+        r3.db_type = "DSH".to_string();
+        // db_type 为空 → 回退 provider_id（兼容旧路径）
+        let r4 = rec("s", "m", "legacy", 0, 0, 0, 0, 0, 50);
+
+        let v = aggregate_provider_breakdown(&[r1, r2, r3, r4], &HashMap::new());
+        assert_eq!(v.len(), 3);
+        // CCS(2) 在前，两个动态 provider 归并为一行，名字即 canonical 名
+        assert_eq!(v[0].provider_id, "CCS");
+        assert_eq!(v[0].provider_name, "CCS");
         assert_eq!(v[0].requests, 2);
         assert!((v[0].avg_latency - 200.0).abs() < 1e-9);
         assert!((v[0].success_rate - 100.0).abs() < 1e-9);
-        // p2 无映射 → 回退 id
-        assert_eq!(v[1].provider_id, "p2");
-        assert_eq!(v[1].provider_name, "p2");
+        // DSH(1) 与 legacy(1) 请求数相同，排序稳定即可
+        let ids: Vec<&str> = v.iter().map(|x| x.provider_id.as_str()).collect();
+        assert!(ids.contains(&"DSH"));
+        assert!(ids.contains(&"legacy"));
+    }
+
+    // ===== merge_provider_costs_to_db_type =====
+
+    #[test]
+    fn merge_provider_costs_to_db_type_groups_by_db_type() {
+        // OpenCode 场景：provider_id ("opencode"/"anthropic") != db_type ("OpenCode") → 归并到 db_type
+        let mut r1 = rec("s", "m", "opencode", 0, 100, 0, 0, 0, 0);
+        r1.db_type = "OpenCode".to_string();
+        let mut r2 = rec("s", "m", "anthropic", 0, 50, 0, 0, 0, 0);
+        r2.db_type = "OpenCode".to_string();
+        // db_type 为空 → 保留原 provider_id（与 breakdown 回退规则一致）
+        let r3 = rec("s", "m", "legacy", 0, 10, 0, 0, 0, 0);
+
+        let mut costs: HashMap<String, f64> = HashMap::new();
+        costs.insert("opencode".to_string(), 1.5);
+        costs.insert("anthropic".to_string(), 2.5);
+        costs.insert("legacy".to_string(), 0.5);
+
+        merge_provider_costs_to_db_type(&[r1, r2, r3], &mut costs);
+        assert_eq!(costs.len(), 2);
+        assert!((costs.get("OpenCode").unwrap() - 4.0).abs() < 1e-9);
+        assert!((costs.get("legacy").unwrap() - 0.5).abs() < 1e-9);
+        assert!(costs.get("opencode").is_none());
+        assert!(costs.get("anthropic").is_none());
+    }
+
+    #[test]
+    fn merge_provider_costs_to_db_type_keeps_unchanged_when_no_db_type() {
+        let records = vec![rec("s", "m", "p1", 0, 1, 0, 0, 0, 0)];
+        let mut costs: HashMap<String, f64> = HashMap::new();
+        costs.insert("p1".to_string(), 3.0);
+        merge_provider_costs_to_db_type(&records, &mut costs);
+        assert_eq!(costs.len(), 1);
+        assert!((costs.get("p1").unwrap() - 3.0).abs() < 1e-9);
     }
 
     // ===== aggregate_provider_model_tokens =====
@@ -724,5 +830,100 @@ mod tests {
     fn aggregate_model_context_tier_buckets_empty_thresholds() {
         let records = vec![rec("s", "A", "p", 0, 1000, 0, 0, 0, 0)];
         assert!(aggregate_model_context_tier_buckets(&records, 0, &[], None).is_empty());
+    }
+
+    // ===== 数据源级过滤 (scope_to_provider_source) =====
+
+    use crate::services::data_source::{DataSource, DbType};
+
+    /// 最小假数据源：全部方法返回空默认值，仅供 scope 测试构造 SourceEntry。
+    struct FakeSource;
+    impl DataSource for FakeSource {
+        fn open(&mut self, _path: &str) -> Result<(), String> { Ok(()) }
+        fn close(&mut self) {}
+        fn is_open(&self) -> bool { true }
+        fn get_record_count(&self) -> Result<i64, String> { Ok(0) }
+        fn get_latest_timestamp(&self) -> Option<i64> { None }
+        fn get_providers(&self) -> Result<Vec<Provider>, String> { Ok(Vec::new()) }
+        fn get_models(&self) -> Result<Vec<String>, String> { Ok(Vec::new()) }
+        fn get_date_range(&self) -> Result<DateRange, String> { Ok(DateRange { min: 0, max: 0 }) }
+        fn get_summary(&self, _params: &FilterParams) -> Result<SummaryData, String> {
+            Ok(SummaryData { total_requests: 0, success_count: 0, total_input: 0, total_output: 0, total_cache_read: 0, total_cache_creation: 0, avg_latency: 0.0 })
+        }
+        fn get_model_breakdown(&self, _params: &FilterParams) -> Result<Vec<ModelBreakdown>, String> { Ok(Vec::new()) }
+        fn get_provider_breakdown(&self, _params: &FilterParams) -> Result<Vec<ProviderBreakdown>, String> { Ok(Vec::new()) }
+        fn get_combined_breakdown(&self, _params: &FilterParams) -> Result<Vec<CombinedBreakdownRow>, String> { Ok(Vec::new()) }
+        fn get_provider_model_tokens(&self, _params: &FilterParams) -> Result<Vec<ProviderModelToken>, String> { Ok(Vec::new()) }
+        fn get_daily_trend(&self, _params: &FilterParams) -> Result<Vec<DailyTrendRow>, String> { Ok(Vec::new()) }
+        fn get_hourly_trend(&self, _params: &FilterParams) -> Result<Vec<DailyTrendRow>, String> { Ok(Vec::new()) }
+        fn get_session_breakdown(&self, _params: &FilterParams) -> Result<Vec<SessionBreakdown>, String> { Ok(Vec::new()) }
+        fn get_session_max_context_widths(&self, _ids: &[String]) -> Result<HashMap<String, i64>, String> { Ok(HashMap::new()) }
+        fn get_session_model_tokens(&self, _params: &FilterParams) -> Result<Vec<SessionModelToken>, String> { Ok(Vec::new()) }
+        fn get_session_request_tokens(&self, _params: &FilterParams) -> Result<Vec<SessionRequestToken>, String> { Ok(Vec::new()) }
+        fn get_session_request_tokens_for_ids(&self, _params: &FilterParams, _session_ids: &[String]) -> Result<Vec<SessionRequestToken>, String> { Ok(Vec::new()) }
+        fn get_session_model_tokens_for_ids(&self, _params: &FilterParams, _session_ids: &[String]) -> Result<Vec<SessionModelToken>, String> { Ok(Vec::new()) }
+        fn get_session_timestamps(&self, _ids: &[String]) -> Result<HashMap<String, Vec<i64>>, String> { Ok(HashMap::new()) }
+        fn get_model_context_tier_buckets(&self, _params: &FilterParams, _thresholds: &[i64]) -> Result<Vec<ModelContextTierBucket>, String> { Ok(Vec::new()) }
+        fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String> { Ok(Vec::new()) }
+        fn get_recent_request_logs_raw(&self, _since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)>, String> { Ok(Vec::new()) }
+        fn get_filtered_records(&self, _params: &FilterParams) -> Result<Vec<RawRecord>, String> { Ok(Vec::new()) }
+    }
+
+    fn src(db_type: DbType, enabled: bool) -> SourceEntry {
+        SourceEntry {
+            id: db_type.label().to_string(),
+            path: String::new(),
+            db_type,
+            source: Box::new(FakeSource),
+            enabled,
+        }
+    }
+
+    fn params_with_provider(provider: Option<&str>) -> FilterParams {
+        FilterParams {
+            from_epoch: None,
+            to_epoch: None,
+            tz_offset: None,
+            provider_id: provider.map(|p| p.to_string()),
+            model_id: Some("m".to_string()),
+            ccs_filter_session_apps: None,
+        }
+    }
+
+    #[test]
+    fn scope_to_provider_source_hit_keeps_only_source_and_drops_inner_filter() {
+        let sources = vec![src(DbType::ExternalDb, true), src(DbType::OpenCode, true)];
+        let (scoped, scoped_params) = scope_to_provider_source(&sources, &params_with_provider(Some("CCS")));
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].db_type, DbType::ExternalDb);
+        // 内部 provider 过滤被剥离，其余筛选字段保留
+        assert!(scoped_params.provider_id.is_none());
+        assert_eq!(scoped_params.model_id.as_deref(), Some("m"));
+    }
+
+    #[test]
+    fn scope_to_provider_source_unmatched_keeps_legacy_provider_filter() {
+        // 历史内部 provider id（如 OpenCode providerID、CCS UUID）不匹配任何数据源名 → 保持原语义
+        let sources = vec![src(DbType::ExternalDb, true), src(DbType::OpenCode, true)];
+        let (scoped, scoped_params) = scope_to_provider_source(&sources, &params_with_provider(Some("anthropic")));
+        assert_eq!(scoped.len(), 2);
+        assert_eq!(scoped_params.provider_id.as_deref(), Some("anthropic"));
+    }
+
+    #[test]
+    fn scope_to_provider_source_empty_keeps_all_sources() {
+        let sources = vec![src(DbType::ExternalDb, true), src(DbType::OpenCode, true)];
+        let (scoped, scoped_params) = scope_to_provider_source(&sources, &params_with_provider(None));
+        assert_eq!(scoped.len(), 2);
+        assert!(scoped_params.provider_id.is_none());
+    }
+
+    #[test]
+    fn scope_to_provider_source_disabled_source_not_matched() {
+        // 命中的目标源被禁用 → 退化为全量 + 原 params（由 fetch 的 enabled 过滤兜底）
+        let sources = vec![src(DbType::ExternalDb, false), src(DbType::OpenCode, true)];
+        let (scoped, scoped_params) = scope_to_provider_source(&sources, &params_with_provider(Some("CCS")));
+        assert_eq!(scoped.len(), 2);
+        assert_eq!(scoped_params.provider_id.as_deref(), Some("CCS"));
     }
 }

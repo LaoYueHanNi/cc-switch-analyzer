@@ -1019,6 +1019,7 @@ impl ExternalDbService {
                 session_id,
                 model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 provider_id: provider_id.clone(),
+                db_type: "CCS".to_string(),
                 created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                 input_tokens,
                 output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
@@ -1061,6 +1062,14 @@ impl super::data_source::DataSource for ExternalDbService {
     fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)>, String> { self.get_recent_request_logs_raw(since) }
     fn stream_records(&self, since: Option<i64>, on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64, bool))) -> Result<(), String> { self.stream_records(since, on_record) }
     fn get_filtered_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> { self.get_filtered_raw_records(params) }
+    fn capabilities(&self) -> super::data_source::SourceCapabilities {
+        // CCS：会话管理覆盖 Claude Code / Codex / Grok Build 三个子终端
+        super::data_source::SourceCapabilities {
+            session_management: true,
+            project_attribution: true,
+            incremental_scan: false,
+        }
+    }
 }
 
 #[cfg(test)]

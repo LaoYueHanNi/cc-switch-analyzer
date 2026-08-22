@@ -14,12 +14,12 @@
     <!-- 无数据库提示 -->
     <div v-else-if="!dbStore.isLoaded" class="overlay no-db-overlay">
       <n-icon size="48" class="no-db-icon"><server-outline /></n-icon>
-      <p class="overlay-text">请选择 CC-Switch 数据库文件</p>
-      <n-button type="primary" size="medium" @click="onSelectDb">
+      <p class="overlay-text">未检测到数据源，请在设置中添加</p>
+      <n-button type="primary" size="medium" @click="showSetup = true">
         <template #icon>
           <n-icon><folder-open-outline /></n-icon>
         </template>
-        选择数据库
+        添加数据源
       </n-button>
       <p v-if="dbStore.error" class="error-text">错误：{{ dbStore.error }}</p>
     </div>
@@ -74,6 +74,7 @@
     </div>
 
     <UpdateNotification />
+    <SettingsDialog v-model:show="showSetup" />
   </div>
 </template>
 
@@ -94,8 +95,8 @@ import { useThemeStore } from '@/stores/theme'
 import { useDatabase } from '@/composables/useDatabase'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { useUpdaterStore } from '@/stores/updater'
-import { platformAdapter } from '@/platform'
 import Toolbar from './Toolbar.vue'
+import SettingsDialog from './SettingsDialog.vue'
 import FilterBar from './FilterBar.vue'
 import SummaryBar from './SummaryBar.vue'
 import UpdateNotification from './UpdateNotification.vue'
@@ -106,8 +107,9 @@ const dbStore = useDatabaseStore()
 const filterStore = useFilterStore()
 const queryStore = useQueryStore()
 const themeStore = useThemeStore()
-const { selectDatabase, autoLoadDatabase, refreshDatabase } = useDatabase()
+const { autoLoadDatabase, refreshDatabase } = useDatabase()
 const updaterStore = useUpdaterStore()
+const showSetup = ref(false)
 
 const navItems: { name: string; label: string; icon: Component }[] = [
   { name: 'by-model', label: '模型', icon: GridOutline },
@@ -126,10 +128,6 @@ const activeTab = computed(() => {
 
 function onTabChange(tabName: string): void {
   router.push({ name: tabName })
-}
-
-async function onSelectDb(): Promise<void> {
-  await selectDatabase()
 }
 
 // ===== 自动刷新 =====

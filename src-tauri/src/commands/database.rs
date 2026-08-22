@@ -2,10 +2,34 @@ use tauri::State;
 
 use crate::AppState;
 use crate::models::*;
-use crate::services::data_source::{create_source_entry, create_source_entry_with_type, DbType, PersistedSource, SourceEntry};
+use crate::services::data_source::{create_source_entry_with_type, create_source_entry, DbType, PersistedSource, SourceEntry};
 use crate::services::pipeline::run_streaming_dedup;
 
 // ========== 数据库操作命令 ==========
+
+/// CCS 自动发现开关（settings 键 ccs_auto_discover）。
+/// 缺省策略：老用户（存在 last_db_paths 等使用痕迹）保持开启；
+/// 全新安装默认关闭——应用定位为通用 token 平台，CCS 作为可选子项配置。
+fn ccs_auto_discover_enabled(app_db: &crate::services::app_db::AppDbService) -> bool {
+    match app_db.get_setting("ccs_auto_discover").as_deref() {
+        Some("on") => true,
+        Some("off") => false,
+        _ => app_db.get_setting("last_db_paths").is_some(),
+    }
+}
+
+#[tauri::command]
+pub fn get_ccs_auto_discover(state: State<AppState>) -> Result<bool, String> {
+    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+    Ok(ccs_auto_discover_enabled(&app_db))
+}
+
+#[tauri::command]
+pub fn set_ccs_auto_discover(enabled: bool, state: State<AppState>) -> Result<(), String> {
+    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+    let value = if enabled { "on" } else { "off" };
+    app_db.set_setting("ccs_auto_discover", value)
+}
 
 #[tauri::command]
 pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, String> {
@@ -57,30 +81,38 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
             return auto_load_paths(&state, entries);
         }
     }
-    // 自动探测默认路径
+    // 自动探测默认路径（代码注册时即明确类型，不依赖表名探测）
+    // CCS 需用户在设置中开启"自动发现"后才参与默认注册
+    let ccs_discover = state
+        .app_db
+        .lock()
+        .map(|db| ccs_auto_discover_enabled(&db))
+        .unwrap_or(false);
     let mut defaults: Vec<PersistedSource> = Vec::new();
-    if let Some(p) = crate::utils::get_default_db_path().ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()))
-        .filter(|p| std::path::Path::new(p).exists())
-    {
-        defaults.push(PersistedSource { path: p, db_type: String::new() });
+    if ccs_discover {
+        if let Some(p) = crate::utils::get_default_db_path().ok()
+            .and_then(|p| p.to_str().map(|s| s.to_string()))
+            .filter(|p| std::path::Path::new(p).exists())
+        {
+            defaults.push(PersistedSource { path: p, db_type: "CCS".to_string() });
+        }
     }
     if let Some(p) = crate::utils::get_default_opencode_db_path().ok()
         .and_then(|p| p.to_str().map(|s| s.to_string()))
         .filter(|p| std::path::Path::new(p).exists())
     {
-        defaults.push(PersistedSource { path: p, db_type: String::new() });
+        defaults.push(PersistedSource { path: p, db_type: "OpenCode".to_string() });
     }
     if let Some(p) = crate::utils::get_default_ai_proxy_db_path().ok()
         .and_then(|p| p.to_str().map(|s| s.to_string()))
         .filter(|p| std::path::Path::new(p).exists())
     {
-        defaults.push(PersistedSource { path: p, db_type: String::new() });
+        defaults.push(PersistedSource { path: p, db_type: "AIProxy".to_string() });
     }
     if cursor_should_auto_load() {
         if let Ok(caches) = crate::utils::list_cursor_account_caches() {
             for acc in caches {
-                defaults.push(PersistedSource { path: acc.path.to_string_lossy().to_string(), db_type: String::new() });
+                defaults.push(PersistedSource { path: acc.path.to_string_lossy().to_string(), db_type: "Cursor".to_string() });
             }
         }
     }
@@ -88,7 +120,7 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
         .and_then(|p| p.to_str().map(|s| s.to_string()))
         .filter(|p| crate::services::proma_dir::detect_proma_dir(p))
     {
-        defaults.push(PersistedSource { path: p, db_type: String::new() });
+        defaults.push(PersistedSource { path: p, db_type: "Proma".to_string() });
     }
     // DSH:当前模式数据目录存在(~/.dsh 或插件 token-usage 目录)则注册(读取路径为应用库 pricing.db,扫描在 auto_load_paths 统一执行)
     {
@@ -150,13 +182,13 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
                 }
             }
         }
-        // 优先使用持久化类型打开，避免表名探测误判（如 ZCode 含 message 表被识别为 OpenCode）；
-        // 持久化类型打开失败时 fallback 表名探测（Cursor 目录由 create_source_entry_with_type 内部识别，不走 db_type）
+        // 类型驱动打开：持久化条目自带 db_type（canonical 名），直接按类型打开，
+        // 不做表名探测（Cursor/Proma 目录型由 create_source_entry_with_type 内部识别）。
+        // 仅老格式条目（db_type 为空）回退一次探测，加载后 save_paths 会重写为新格式。
         let explicit = DbType::from_label(&entry.db_type);
-        let loaded = match create_source_entry_with_type(&entry.path, explicit.as_ref()) {
-            Ok(e) => Ok(e),
-            Err(_) if explicit.is_some() => create_source_entry(&entry.path),
-            Err(e) => Err(e),
+        let loaded = match explicit.as_ref() {
+            Some(t) => create_source_entry_with_type(&entry.path, Some(t)),
+            None => create_source_entry(&entry.path),
         };
         match loaded {
             Ok(loaded) => {
@@ -183,7 +215,10 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
             if already {
                 continue;
             }
-            match create_source_entry(&cache_str) {
+            match crate::services::data_source::create_source_entry_with_type(
+                &cache_str,
+                Some(&crate::services::data_source::DbType::Cursor),
+            ) {
                 Ok(entry) => {
                     log::info!(
                         "[DB] 自动加载 Cursor 账号: {} ({})",
@@ -276,12 +311,17 @@ fn path_equals_ignore_slash(a: &str, b: &str) -> bool {
 }
 
 #[tauri::command]
-pub fn load_database(file_path: String, state: State<AppState>) -> Result<Vec<SourceInfo>, String> {
+pub fn load_database(file_path: String, db_type: Option<String>, state: State<AppState>) -> Result<Vec<SourceInfo>, String> {
     let canonical = validate_db_path(&file_path)?;
     let canonical_str = canonical.to_string_lossy().to_string();
-    log::info!("[DB] load_database: {}", canonical_str);
+    log::info!("[DB] load_database: {} (type={:?})", canonical_str, db_type);
 
-    let entry = create_source_entry(&canonical_str)?;
+    // 类型驱动：调用方必须显式指定数据源类型，不做表名探测
+    let explicit = db_type
+        .as_deref()
+        .and_then(crate::services::data_source::DbType::from_label)
+        .ok_or_else(|| "必须指定有效的数据源类型 (dbType)".to_string())?;
+    let entry = create_source_entry_with_type(&canonical_str, Some(&explicit))?;
     log::info!("[DB] 打开成功 ({})", entry.db_type.label());
 
     let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
@@ -316,11 +356,12 @@ pub fn add_database(file_path: String, db_type: Option<String>, state: State<App
         }
     }
 
-    // 前端明确指定类型时优先使用，避免表名探测误判（如 ZCode 含 message 表被识别为 OpenCode）
+    // 类型驱动：调用方必须显式指定数据源类型，不做表名探测
     let explicit = db_type
         .as_deref()
-        .and_then(crate::services::data_source::DbType::from_label);
-    let entry = create_source_entry_with_type(&canonical_str, explicit.as_ref())?;
+        .and_then(crate::services::data_source::DbType::from_label)
+        .ok_or_else(|| "必须指定有效的数据源类型 (dbType)".to_string())?;
+    let entry = create_source_entry_with_type(&canonical_str, Some(&explicit))?;
     log::info!("[DB] 添加成功 ({})", entry.db_type.label());
 
     let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
@@ -558,18 +599,31 @@ pub fn get_filter_options(state: State<AppState>) -> Result<FilterOptions, Strin
         });
     }
 
-    let mut all_providers = Vec::new();
+    // 供应商筛选按数据源粒度：选项为各数据源 canonical 名（CCS / OpenCode / ...），
+    // 不再暴露数据源内部的 provider_id（CCS 的 UUID、OpenCode 的 providerID 等）；
+    // 聚合查询由 scope_to_provider_source 把命中的 provider_id 解析为数据源级过滤。
+    // 同一类型多个源（如多 Cursor 账号）按类型去重。
+    let mut seen_types = std::collections::HashSet::new();
+    let providers: Vec<Provider> = sources
+        .iter()
+        .filter(|s| s.enabled)
+        .filter(|s| seen_types.insert(s.db_type.label().to_string()))
+        .map(|s| Provider {
+            id: s.db_type.label().to_string(),
+            name: s.db_type.label().to_string(),
+        })
+        .collect();
+
     let mut all_models = Vec::new();
     let mut all_ranges = Vec::new();
 
     for entry in sources.iter().filter(|s| s.enabled) {
-        if let Ok(p) = entry.source.get_providers() { all_providers.push(p); }
         if let Ok(m) = entry.source.get_models() { all_models.push(m); }
         if let Ok(r) = entry.source.get_date_range() { all_ranges.push(r); }
     }
 
     Ok(FilterOptions {
-        providers: union_providers(all_providers),
+        providers,
         models: union_models(all_models),
         date_range: merge_date_range(all_ranges),
     })

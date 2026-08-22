@@ -81,6 +81,35 @@ where
     })
 }
 
+/// 数据源级过滤的并行查询：provider_id 命中数据源 canonical 名（如 "CCS"）时
+/// 只查询该源并剥离内部 provider 过滤（源返回全量）；否则保持原 provider 过滤语义。
+fn parallel_query_scoped<R, F>(
+    sources: &[SourceEntry],
+    params: &FilterParams,
+    label: &str,
+    query: F,
+) -> Vec<R>
+where
+    R: Send + 'static,
+    F: for<'a> Fn(&'a SourceEntry, &'a FilterParams) -> Result<R, String> + Sync + Clone + Send,
+{
+    let (scoped, scoped_params) = scope_to_provider_source(sources, params);
+    let params_cloned: Vec<FilterParams> = scoped.iter().map(|_| scoped_params.clone()).collect();
+    std::thread::scope(|s| {
+        let handles: Vec<_> = scoped.into_iter().zip(&params_cloned).map(|(entry, p)| {
+            let l = label.to_string();
+            let q = query.clone();
+            s.spawn(move || {
+                q(entry, p).map_err(|e| {
+                    log::warn!("[QUERY] {} 数据源({}) 查询失败: {}", l, entry.db_type.label(), e);
+                    e
+                }).ok()
+            })
+        }).collect();
+        handles.into_iter().filter_map(join_scoped).collect()
+    })
+}
+
 
 #[tauri::command]
 pub fn query_summary(params: FilterParams, state: State<AppState>) -> Result<SummaryData, String> {
@@ -166,36 +195,65 @@ pub fn query_session_model_tokens(params: FilterParams, state: State<AppState>) 
 
 #[tauri::command]
 pub fn query_session_request_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionRequestToken>, String> {
-    // 优先使用缓存（由 refresh_database 增量维护），按 params 过滤
-    {
-        let cache = state.request_cache.lock().map_err(|e| e.to_string())?;
-        if cache.len() > 0 {
-            let filtered: Vec<_> = cache.records().iter()
-                .filter(|r| {
-                    if let Some(from) = params.from_epoch {
-                        if from > 0 && r.created_at < from { return false; }
-                    }
-                    if let Some(to) = params.to_epoch {
-                        if to > 0 && r.created_at >= to { return false; }
-                    }
-                    if let Some(ref model) = params.model_id {
-                        if !model.is_empty() && r.model != *model { return false; }
-                    }
-                    if let Some(ref provider) = params.provider_id {
-                        if !provider.is_empty() && r.provider_id != *provider { return false; }
-                    }
-                    true
-                })
-                .cloned()
-                .collect();
-            return Ok(filtered);
-        }
-    }
-    // 缓存为空，回退到全量并行查询 + 去重
+
     crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-    let all: Vec<Vec<SessionRequestToken>> = parallel_query(&sources, params.clone(), "session_request_tokens", |e, p| e.source.get_session_request_tokens(p));
+    // 数据源级过滤：provider_id 命中数据源 canonical 名时只看该源。
+    // 缓存记录无 db_type 列，按 provider→数据源映射归并后再比对。
+    let source_hit = params
+        .provider_id
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        .map(|pid| sources.iter().any(|s| s.enabled && s.db_type.label() == pid))
+        .unwrap_or(false);
+    let provider_to_db = build_provider_to_db_map(&sources);
+
+    // 缓存记录不含 data_source 列，CCS 会话同步过滤依赖它 → 启用过滤时绕过缓存走全量查询
+    let ccs_filter_enabled = params
+        .ccs_filter_session_apps
+        .as_ref()
+        .map(|apps| !apps.is_empty())
+        .unwrap_or(false);
+    // 优先使用缓存（由 refresh_database 增量维护），按 params 过滤
+    if !ccs_filter_enabled {
+        {
+            let cache = state.request_cache.lock().map_err(|e| e.to_string())?;
+            if cache.len() > 0 {
+                let filtered: Vec<_> = cache.records().iter()
+                    .filter(|r| {
+                        if let Some(from) = params.from_epoch {
+                            if from > 0 && r.created_at < from { return false; }
+                        }
+                        if let Some(to) = params.to_epoch {
+                            if to > 0 && r.created_at >= to { return false; }
+                        }
+                        if let Some(ref model) = params.model_id {
+                            if !model.is_empty() && r.model != *model { return false; }
+                        }
+                        if let Some(ref provider) = params.provider_id {
+                            if !provider.is_empty() {
+                                if source_hit {
+                                    // 数据源级过滤：记录归并到所属数据源后比对
+                                    if provider_to_db.get(&r.provider_id).map(|db| db != provider).unwrap_or(true) {
+                                        return false;
+                                    }
+                                } else if r.provider_id != *provider {
+                                    return false;
+                                }
+                            }
+                        }
+                        true
+                    })
+                    .cloned()
+                    .collect();
+                return Ok(filtered);
+            }
+
+        }
+    }
+    // 缓存为空，回退到全量并行查询 + 去重（同样应用数据源级过滤）
+    let all: Vec<Vec<SessionRequestToken>> = parallel_query_scoped(&sources, &params, "session_request_tokens", |e, p| e.source.get_session_request_tokens(p));
     Ok(dedup_request_tokens(all.into_iter().flatten().collect()))
 }
 
@@ -243,6 +301,38 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
+
+    drop(sources);
+
+    // CCS 会话同步过滤：实时流式日志与统计查询口径一致，
+    // 按 settings 中的 ccs_filter_session_enabled / ccs_filter_session_apps 广播到数据源
+    // （仅 CCS 消费，其余源 no-op）。
+    let filter_apps: Option<Vec<String>> = {
+        let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+        if app_db.get_setting("ccs_filter_session_enabled").as_deref() != Some("1") {
+            None
+        } else {
+            app_db
+                .get_setting("ccs_filter_session_apps")
+                .and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok())
+                .filter(|a| !a.is_empty())
+        }
+    };
+    {
+        let mut sources_w = state.data_sources.write().map_err(|e| e.to_string())?;
+        for s in sources_w.iter_mut() {
+            s.source.set_ccs_filter_apps(filter_apps.as_deref());
+        }
+    }
+
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    require_sources!(sources);
+
+    // provider_id → 数据源 canonical 名映射：动态供应商(CCS/OpenCode 内部)归并到所属数据源，
+    // 供实时 Tab 一级分组
+    let provider_to_db = build_provider_to_db_map(&sources);
+
+
     let all_raw = run_streaming_dedup(&sources, since);
     drop(sources);
 
@@ -381,6 +471,11 @@ pub fn compute_precompute(
                 model_cost * (pmt_tokens as f64 / total_tokens as f64);
         }
     }
+
+    // providerCosts 归并到数据源粒度（db_type），与 providerBreakdown 的卡片 key 对齐：
+    // OpenCode 等动态 provider 的 provider_id 与 db_type 取值不一致时，
+    // 避免 ByProvider 按数据源名查 providerCosts 失败回退 0。
+    merge_provider_costs_to_db_type(&records, &mut precomputed.provider_costs);
 
     Ok(PrecomputeQueryResult {
         summary,
@@ -619,13 +714,25 @@ pub fn query_session_project_groups(
 
     // 1. 中心去重管道获取 session_breakdown
     let records = fetch_deduped_records(&sources, &params)?;
-    let all_sessions = aggregate_session_breakdown(&records);
+
+    // 会话管理分流：仅声明 session_management 能力的数据源进入会话流程
+    // （CCS 含 Claude Code/Codex/Grok Build 子终端 + OpenCode），其余源仅做用量统计
+    let mgmt_types: std::collections::HashSet<String> = sources.iter()
+        .filter(|s| s.source.capabilities().session_management)
+        .map(|s| s.db_type.label().to_string())
+        .collect();
+    let mgmt_records: Vec<RawRecord> = records.iter()
+        .filter(|r| mgmt_types.contains(&r.db_type))
+        .cloned()
+        .collect();
+
+    let all_sessions = aggregate_session_breakdown(&mgmt_records);
 
     if all_sessions.is_empty() { return Ok(vec![]); }
 
     // 1.5 Codex session 合并：CC-Switch 给每个请求分配独立 UUID，
     // 通过时间戳匹配到 Codex JSONL 的真实 session_id，合并同一会话的请求
-    let codex_mapping = crate::services::codex_sessions::build_codex_session_mapping(&records);
+    let codex_mapping = crate::services::codex_sessions::build_codex_session_mapping(&mgmt_records);
     let all_ids: Vec<String> = all_sessions.iter().map(|s| s.session_id.clone()).collect();
 
     // 2. 解析项目目录（用原始 session_id 查）
@@ -643,9 +750,9 @@ pub fn query_session_project_groups(
             .collect()
     };
 
-    // 3. 计算基础费用（复用中心管道已去重的请求级 token，避免二次查库）
+    // 3. 计算基础费用（复用中心管道已去重的请求级 token，避免二次查库；仅会话管理源）
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
-    let all_request_tokens: Vec<SessionRequestToken> = records.iter().map(|r| SessionRequestToken {
+    let all_request_tokens: Vec<SessionRequestToken> = mgmt_records.iter().map(|r| SessionRequestToken {
         session_id: r.session_id.clone(),
         model: r.model.clone(),
         provider_id: r.provider_id.clone(),

@@ -22,7 +22,7 @@ use std::sync::RwLock;
 use serde_json::Value;
 
 use crate::models::*;
-use crate::services::data_source::DataSource;
+use crate::services::data_source::{DataSource, SourceCapabilities};
 use crate::services::pipeline::{
     aggregate_combined_records, aggregate_daily_trend, aggregate_hourly_trend,
     aggregate_model_breakdown, aggregate_model_context_tier_buckets, aggregate_provider_breakdown,
@@ -30,7 +30,7 @@ use crate::services::pipeline::{
 };
 use crate::utils::{self, REALTIME_WINDOW_SEC, SESSION_TOP_N};
 
-const PROVIDER_ID: &str = "proma";
+const PROVIDER_ID: &str = "Proma";
 const PROVIDER_NAME: &str = "Proma";
 
 pub struct PromaDirService {
@@ -266,6 +266,7 @@ fn parse_sdk_message(v: &Value, fallback_seq: usize, by_id: &mut HashMap<String,
             session_id: String::new(), // Proma 不参与会话归类
             model,
             provider_id: PROVIDER_ID.to_string(),
+            db_type: "Proma".to_string(),
             created_at: created_ms / 1000,
             input_tokens: input,
             output_tokens: output,
@@ -307,6 +308,7 @@ fn parse_agent_message(v: &Value, fallback_seq: usize, by_id: &mut HashMap<Strin
             session_id: String::new(),
             model,
             provider_id: PROVIDER_ID.to_string(),
+            db_type: "Proma".to_string(),
             created_at: created_ms / 1000,
             input_tokens: input,
             output_tokens: output,
@@ -517,6 +519,15 @@ impl DataSource for PromaDirService {
     fn get_filtered_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> {
         Ok(self.filter_records(params))
     }
+
+    fn capabilities(&self) -> SourceCapabilities {
+        // agent-sessions.json 提供 workspaceId → 项目名映射（实勘确认）
+        SourceCapabilities {
+            session_management: false,
+            project_attribution: true,
+            incremental_scan: false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -574,7 +585,7 @@ mod tests {
         assert_eq!(records.len(), 1, "user 行不应产生记录");
         let r = &records[0];
         assert_eq!(r.model, "MiniMax-M3");
-        assert_eq!(r.provider_id, "proma");
+        assert_eq!(r.provider_id, "Proma");
         assert_eq!(r.created_at, 1786592741238 / 1000);
         assert_eq!(r.input_tokens, 100);
         assert_eq!(r.output_tokens, 50);
@@ -657,7 +668,7 @@ not-json-garbage
         let models = source.get_models().unwrap();
         assert_eq!(models, vec!["model-x"]);
         let providers = source.get_providers().unwrap();
-        assert_eq!(providers[0].id, "proma");
+        assert_eq!(providers[0].id, "Proma");
         assert_eq!(providers[0].name, "Proma");
         let summary = source
             .get_summary(&FilterParams {

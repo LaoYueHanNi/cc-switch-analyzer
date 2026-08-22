@@ -193,9 +193,13 @@ pub fn resolve_session_projects(
         return Ok((project_map, title_map));
     }
 
-    // 2. 从各数据源获取 (OpenCode: session.directory)
+    // 2. 从声明会话管理能力的数据源获取 (OpenCode: session.directory)。
+    // 不做会话管理的源（如 ZCode）不参与跨源标题/项目解析
     let mut resolved: HashMap<String, (String, String, String)> = HashMap::new();
     for source_entry in data_sources.iter() {
+        if !source_entry.source.capabilities().session_management {
+            continue;
+        }
         let remaining: Vec<String> = uncached.iter()
             .filter(|id| !resolved.contains_key(*id))
             .cloned()
@@ -228,11 +232,15 @@ pub fn resolve_session_projects(
         .cloned()
         .collect();
     if !remaining_for_codex.is_empty() {
+        // Codex 用量经 CCS 代理记录，时间戳匹配仅取 CCS 源
         let codex_resolved = crate::services::codex_sessions::resolve_codex_titles(
             &remaining_for_codex,
             |ids| {
                 let mut map: HashMap<String, Vec<i64>> = HashMap::new();
                 for entry in data_sources.iter() {
+                    if !matches!(entry.db_type, crate::services::data_source::DbType::ExternalDb) {
+                        continue;
+                    }
                     if let Ok(timestamps) = entry.source.get_session_timestamps(ids) {
                         for (sid, times) in timestamps {
                             map.entry(sid).or_default().extend(times);
