@@ -33,6 +33,12 @@ pub struct FilterParams {
     /// provider 过滤，由各数据源内部处理。
     pub provider_id: Option<String>,
     pub model_id: Option<String>,
+    /// CCS 会话日志同步写入记录的过滤：勾选的 app_type 列表
+    /// （opencode / claude / codex / grokbuild）。命中
+    /// `data_source != 'proxy'`（非代理转发、由会话日志同步写入）
+    /// 且 app_type 在列表内的记录被排除；None / 空列表 = 不过滤。
+    /// 仅 CCS（ExternalDb）数据源消费，其他数据源忽略。
+    pub ccs_filter_session_apps: Option<Vec<String>>,
 }
 
 // ========== 数据库元信息 ==========

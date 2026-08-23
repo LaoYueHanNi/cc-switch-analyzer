@@ -175,6 +175,8 @@ pub fn run() {
             commands::database::get_default_paths,
             commands::database::get_ccs_auto_discover,
             commands::database::set_ccs_auto_discover,
+            commands::database::get_ccs_session_filter,
+            commands::database::set_ccs_session_filter,
             commands::database::scan_dsh_now,
             commands::database::scan_minimax_now,
             commands::database::scan_proma_now,

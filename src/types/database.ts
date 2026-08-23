@@ -5,6 +5,7 @@ export interface FilterParams {
   toDate: Date | null
   providerId: string  // 空字符串 = 全部
   modelId: string     // 空字符串 = 全部
+  ccsFilterSessionApps?: string[]  // CCS 会话日志同步记录过滤（app_type 列表）
 }
 
 export interface Provider {

@@ -196,7 +196,6 @@ pub fn query_session_model_tokens(params: FilterParams, state: State<AppState>) 
 
 #[tauri::command]
 pub fn query_session_request_tokens(params: FilterParams, state: State<AppState>) -> Result<Vec<SessionRequestToken>, String> {
-
     crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
@@ -250,7 +249,6 @@ pub fn query_session_request_tokens(params: FilterParams, state: State<AppState>
                     .collect();
                 return Ok(filtered);
             }
-
         }
     }
     // 缓存为空，回退到全量并行查询 + 去重（同样应用数据源级过滤）
@@ -302,8 +300,7 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
-
-drop(sources);
+    drop(sources);
 
     // CCS 会话同步过滤：实时流式日志与统计查询口径一致，
     // 按 settings 中的 ccs_filter_session_enabled / ccs_filter_session_apps 广播到数据源
@@ -332,8 +329,6 @@ drop(sources);
     // provider_id → 数据源 canonical 名映射：动态供应商(CCS/OpenCode 内部)归并到所属数据源，
     // 供实时 Tab 一级分组
     let provider_to_db = build_provider_to_db_map(&sources);
-
-
 
     let all_raw = run_streaming_dedup(&sources, since);
     drop(sources);

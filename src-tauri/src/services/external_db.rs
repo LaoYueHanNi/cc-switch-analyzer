@@ -25,6 +25,11 @@ pub struct ExternalDbService {
     db: Option<Mutex<Connection>>,
     db_path: String,
     latest_timestamp: Option<i64>,
+    /// proxy_request_logs 是否有 data_source 列（旧版 cc-switch 无此列，
+    /// 会话日志同步过滤依赖它，缺列时静默跳过）
+    has_data_source_col: bool,
+    /// CCS 会话日志同步过滤的 app_type 列表（实时流式查询用），None/空 = 不过滤
+    ccs_filter_apps: Option<Vec<String>>,
 }
 
 impl ExternalDbService {
@@ -33,6 +38,8 @@ impl ExternalDbService {
             db: None,
             db_path: String::new(),
             latest_timestamp: None,
+            has_data_source_col: false,
+            ccs_filter_apps: None,
         }
     }
 
@@ -46,6 +53,9 @@ impl ExternalDbService {
             log::error!("[DB] 打开数据库失败 (path={}): {}", file_path, e);
             "打开数据库失败，请检查文件路径".to_string()
         })?;
+        self.has_data_source_col = conn
+            .prepare("SELECT data_source FROM proxy_request_logs LIMIT 0")
+            .is_ok();
         self.db_path = file_path.to_string();
         self.db = Some(Mutex::new(conn));
         self.latest_timestamp = self.get_latest_timestamp_internal();
@@ -121,7 +131,13 @@ impl ExternalDbService {
         }
     }
 
+    /// 构建动态 WHERE 子句。
+    ///
+    /// 额外支持 CCS 会话日志同步过滤：`params.ccs_filter_session_apps` 非空时，
+    /// 排除由会话日志同步写入（data_source != 'proxy'）且 app_type 命中的记录。
+    /// 需要 proxy_request_logs 有 data_source 列（旧版 cc-switch 缺列则跳过）。
     fn build_where_clause(
+        &self,
         params: &FilterParams,
         aliased: bool,
     ) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
@@ -157,6 +173,20 @@ impl ExternalDbService {
             if !model_id.is_empty() {
                 clauses.push(format!("{}model = ?", prefix));
                 binds.push(Box::new(model_id.clone()));
+            }
+        }
+        if let Some(ref session_apps) = params.ccs_filter_session_apps {
+            if !session_apps.is_empty() && self.has_data_source_col {
+                let placeholders: Vec<String> = session_apps.iter().map(|_| "?".to_string()).collect();
+                // 会话日志同步写入的记录（data_source != 'proxy'），按 app_type 排除
+                clauses.push(format!(
+                    "NOT ({prefix}data_source != 'proxy' AND {prefix}app_type IN ({}))",
+                    placeholders.join(","),
+                    prefix = prefix
+                ));
+                for app in session_apps {
+                    binds.push(Box::new(app.clone()));
+                }
             }
         }
 
@@ -243,7 +273,7 @@ impl ExternalDbService {
 
     pub fn get_summary(&self, params: &FilterParams) -> Result<SummaryData, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params, false);
+        let (where_sql, binds) = self.build_where_clause(params, false);
         let sql = format!(
             "SELECT
                 COUNT(*) AS total_requests,
@@ -277,7 +307,7 @@ impl ExternalDbService {
 
     pub fn get_model_breakdown(&self, params: &FilterParams) -> Result<Vec<ModelBreakdown>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params, true);
+        let (where_sql, binds) = self.build_where_clause(params, true);
         let sql = format!(
             "SELECT
                 l.model,
@@ -313,7 +343,7 @@ impl ExternalDbService {
 
     pub fn get_provider_breakdown(&self, params: &FilterParams) -> Result<Vec<ProviderBreakdown>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params, true);
+        let (where_sql, binds) = self.build_where_clause(params, true);
         let sql = format!(
             "SELECT
                 COALESCE(p.name, l.provider_id) AS provider_name,
@@ -351,7 +381,7 @@ impl ExternalDbService {
     /// 合并查询：一次 GROUP BY (day, provider_id, model) 替代 3 次独立查询
     pub fn get_combined_breakdown(&self, params: &FilterParams) -> Result<Vec<CombinedBreakdownRow>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params, true);
+        let (where_sql, binds) = self.build_where_clause(params, true);
         let day_expr = Self::tz_date_expr(params);
         let sql = format!(
             "SELECT
@@ -394,7 +424,7 @@ impl ExternalDbService {
 
     pub fn get_provider_model_tokens(&self, params: &FilterParams) -> Result<Vec<ProviderModelToken>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params, true);
+        let (where_sql, binds) = self.build_where_clause(params, true);
         let sql = format!(
             "SELECT
                 l.provider_id AS provider_id,
@@ -429,7 +459,7 @@ impl ExternalDbService {
 
     pub fn get_daily_trend(&self, params: &FilterParams) -> Result<Vec<DailyTrendRow>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params, true);
+        let (where_sql, binds) = self.build_where_clause(params, true);
         let sql = format!(
             "SELECT
                 date(l.created_at, 'unixepoch') AS day,
@@ -458,7 +488,7 @@ impl ExternalDbService {
 
     pub fn get_hourly_trend(&self, params: &FilterParams) -> Result<Vec<DailyTrendRow>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params, true);
+        let (where_sql, binds) = self.build_where_clause(params, true);
         let hour_expr = Self::tz_hour_expr(params);
         let sql = format!(
             "SELECT
@@ -488,7 +518,7 @@ impl ExternalDbService {
 
     pub fn get_session_breakdown(&self, params: &FilterParams) -> Result<Vec<SessionBreakdown>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params, true);
+        let (where_sql, binds) = self.build_where_clause(params, true);
         let sql = format!(
             "SELECT
                 l.session_id,
@@ -564,8 +594,8 @@ impl ExternalDbService {
 
     pub fn get_session_model_tokens(&self, params: &FilterParams) -> Result<Vec<SessionModelToken>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params, true);
-        let (sub_where, sub_binds) = Self::build_where_clause(params, false);
+        let (where_sql, binds) = self.build_where_clause(params, true);
+        let (sub_where, sub_binds) = self.build_where_clause(params, false);
         let sql = format!(
             "SELECT
                 l.session_id,
@@ -609,8 +639,8 @@ impl ExternalDbService {
 
     pub fn get_session_request_tokens(&self, params: &FilterParams) -> Result<Vec<SessionRequestToken>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params, true);
-        let (sub_where, sub_binds) = Self::build_where_clause(params, false);
+        let (where_sql, binds) = self.build_where_clause(params, true);
+        let (sub_where, sub_binds) = self.build_where_clause(params, false);
         let sql = format!(
             "SELECT
                 l.session_id,
@@ -662,7 +692,7 @@ impl ExternalDbService {
             return Ok(Vec::new());
         }
         let db = self.db()?;
-        let (where_sql, mut binds) = Self::build_where_clause(params, true);
+        let (where_sql, mut binds) = self.build_where_clause(params, true);
         let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
         for sid in session_ids {
             binds.push(Box::new(sid.clone()));
@@ -715,7 +745,7 @@ impl ExternalDbService {
             return Ok(Vec::new());
         }
         let db = self.db()?;
-        let (where_sql, mut binds) = Self::build_where_clause(params, true);
+        let (where_sql, mut binds) = self.build_where_clause(params, true);
         let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
         for sid in session_ids {
             binds.push(Box::new(sid.clone()));
@@ -765,7 +795,7 @@ impl ExternalDbService {
         tier_thresholds: &[i64],
     ) -> Result<Vec<ModelContextTierBucket>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params, true);
+        let (where_sql, binds) = self.build_where_clause(params, true);
         let day_expr = Self::tz_date_expr(params);
 
         // 构建 CASE 表达式：从高到低匹配
@@ -878,10 +908,27 @@ impl ExternalDbService {
         Self::collect_rows(rows, "读取实时趋势")
     }
 
+    /// CCS 会话同步过滤的 SQL 片段与绑定值；无 data_source 列或未配置时为空。
+    fn ccs_session_filter_clause(&self) -> (String, Vec<String>) {
+        let apps = self.ccs_filter_apps.clone().unwrap_or_default();
+        if apps.is_empty() || !self.has_data_source_col {
+            return (String::new(), Vec::new());
+        }
+        let placeholders: Vec<String> = apps.iter().map(|_| "?".to_string()).collect();
+        (
+            format!(
+                " AND NOT (data_source != 'proxy' AND app_type IN ({}))",
+                placeholders.join(",")
+            ),
+            apps,
+        )
+    }
+
     pub fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)>, String> {
         let db = self.db()?;
-        let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
-            Some(s) => ("
+        let (ccs_sql, ccs_binds) = self.ccs_session_filter_clause();
+        let (sql, mut params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
+            Some(s) => (format!("
                 SELECT session_id, model, provider_id, created_at,
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
@@ -889,21 +936,24 @@ impl ExternalDbService {
                 FROM proxy_request_logs
                 WHERE created_at > ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
-                  AND app_type != 'claude-desktop'
-                ORDER BY created_at DESC", vec![Box::new(s)]),
-            None => ("
+                  AND app_type != 'claude-desktop'{ccs_sql}
+                ORDER BY created_at DESC"), vec![Box::new(s)]),
+            None => (format!("
                 SELECT session_id, model, provider_id, created_at,
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
                        latency_ms, app_type
                 FROM proxy_request_logs
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
-                  AND app_type != 'claude-desktop'
+                  AND app_type != 'claude-desktop'{ccs_sql}
                 ORDER BY created_at DESC
-                LIMIT 500", vec![]),
+                LIMIT 500"), vec![]),
         };
+        for app in &ccs_binds {
+            params.push(Box::new(app.clone()));
+        }
 
-        let mut stmt = db.prepare(sql).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
         let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(params_refs.as_slice(), |row| {
             let app_type: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
@@ -934,8 +984,9 @@ impl ExternalDbService {
         on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64, bool)),
     ) -> Result<(), String> {
         let db = self.db()?;
-        let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
-            Some(s) => ("
+        let (ccs_sql, ccs_binds) = self.ccs_session_filter_clause();
+        let (sql, mut params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
+            Some(s) => (format!("
                 SELECT session_id, model, provider_id, created_at,
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
@@ -943,21 +994,24 @@ impl ExternalDbService {
                 FROM proxy_request_logs
                 WHERE created_at > ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
-                  AND app_type != 'claude-desktop'
-                ORDER BY created_at DESC", vec![Box::new(s)]),
-            None => ("
+                  AND app_type != 'claude-desktop'{ccs_sql}
+                ORDER BY created_at DESC"), vec![Box::new(s)]),
+            None => (format!("
                 SELECT session_id, model, provider_id, created_at,
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
                        latency_ms, app_type
                 FROM proxy_request_logs
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
-                  AND app_type != 'claude-desktop'
+                  AND app_type != 'claude-desktop'{ccs_sql}
                 ORDER BY created_at DESC
-                LIMIT 500", vec![]),
+                LIMIT 500"), vec![]),
         };
+        for app in &ccs_binds {
+            params.push(Box::new(app.clone()));
+        }
 
-        let mut stmt = db.prepare(sql).map_err(|e| format!("stream_records 准备失败: {}", e))?;
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("stream_records 准备失败: {}", e))?;
         let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let mut rows = stmt.query_map(params_refs.as_slice(), |row| {
             let app_type: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
@@ -988,7 +1042,7 @@ impl ExternalDbService {
 
     pub fn get_filtered_raw_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> {
         let db = self.db()?;
-        let (where_sql, binds) = Self::build_where_clause(params, false);
+        let (where_sql, binds) = self.build_where_clause(params, false);
         let sql = format!(
             "SELECT session_id, model, provider_id, created_at,
                     input_tokens, output_tokens,
@@ -1070,11 +1124,16 @@ impl super::data_source::DataSource for ExternalDbService {
             incremental_scan: false,
         }
     }
+
+    fn set_ccs_filter_apps(&mut self, apps: Option<&[String]>) {
+        self.ccs_filter_apps = apps.map(|a| a.to_vec());
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::data_source::DataSource;
 
     #[test]
     fn cache_inclusive_apps_normalize_fresh_input() {
@@ -1084,5 +1143,181 @@ mod tests {
         assert_eq!(normalize_input_tokens("claude", 200, 5000), 200);
         assert!(is_cache_inclusive_app("grokbuild"));
         assert!(!is_cache_inclusive_app("claude"));
+    }
+
+    /// 建一张带 data_source 列的临时 CCS 库，插入代理 + 三类会话同步记录
+    fn temp_ccs_db(with_data_source: bool) -> (std::path::PathBuf, String) {
+        let path = std::env::temp_dir().join(format!(
+            "ccsa_extdb_test_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let conn = Connection::open(&path).unwrap();
+        let ds_col = if with_data_source { ", data_source TEXT NOT NULL DEFAULT 'proxy'" } else { "" };
+        conn.execute_batch(&format!(
+            "CREATE TABLE proxy_request_logs (
+                request_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, app_type TEXT NOT NULL,
+                model TEXT NOT NULL, input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                latency_ms INTEGER NOT NULL, status_code INTEGER NOT NULL,
+                session_id TEXT, created_at INTEGER NOT NULL
+                {ds_col}
+            );"
+        ))
+        .unwrap();
+        let mut insert = conn
+            .prepare(&format!(
+                "INSERT INTO proxy_request_logs
+                 (request_id, provider_id, app_type, model, input_tokens, output_tokens,
+                  cache_read_tokens, cache_creation_tokens, latency_ms, status_code, session_id, created_at
+                  {}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12
+                  {})",
+                if with_data_source { ", data_source" } else { "" },
+                if with_data_source { ",?13" } else { "" }
+            ))
+            .unwrap();
+        let rows: Vec<(i64, &str, &str, &str, &str)> = vec![
+            (100, "claude", "proxy", "claude-3", "p1"),
+            (200, "claude", "session_log", "claude-3", "p2"),
+            (300, "opencode", "opencode_session", "gpt-5", "p3"),
+            (400, "codex", "codex_session", "gpt-5.4-codex", "p4"),
+        ];
+        for (ts, app, ds, model, pid) in rows {
+            let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+                Box::new(format!("req-{}-{}", ds, ts)),
+                Box::new(pid),
+                Box::new(app),
+                Box::new(model),
+                Box::new(ts),
+                Box::new(ts / 10),
+                Box::new(0),
+                Box::new(0),
+                Box::new(5),
+                Box::new(200),
+                Box::new(format!("s-{}-{}", app, ts)),
+                Box::new(ts),
+            ];
+            if with_data_source {
+                args.push(Box::new(ds));
+            }
+            let refs: Vec<&dyn rusqlite::types::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+            insert.execute(refs.as_slice()).unwrap();
+        }
+        drop(insert);
+        drop(conn);
+        let path_str = path.to_string_lossy().to_string();
+        (path, path_str)
+    }
+
+    #[test]
+    fn session_sync_filter_excludes_matching_apps() {
+        let (path, path_str) = temp_ccs_db(true);
+        let mut svc = ExternalDbService::new();
+        svc.open(&path_str).unwrap();
+
+        // 不过滤：4 条全部返回
+        let all = svc
+            .get_filtered_raw_records(&FilterParams {
+                from_epoch: None,
+                to_epoch: None,
+                tz_offset: None,
+                provider_id: None,
+                model_id: None,
+                ccs_filter_session_apps: None,
+            })
+            .unwrap();
+        assert_eq!(all.len(), 4);
+
+        // 过滤 claude + opencode 会话同步：仅剩 proxy 与 codex_session
+        let filtered = svc
+            .get_filtered_raw_records(&FilterParams {
+                from_epoch: None,
+                to_epoch: None,
+                tz_offset: None,
+                provider_id: None,
+                model_id: None,
+                ccs_filter_session_apps: Some(vec!["claude".into(), "opencode".into()]),
+            })
+            .unwrap();
+        assert_eq!(filtered.len(), 2);
+        let apps: Vec<&str> = filtered.iter().map(|r| r.model.as_str()).collect();
+        // 两条分别为 proxy(claude-3) 与 codex_session(gpt-5.4-codex)
+        assert!(apps.contains(&"claude-3"));
+        assert!(apps.contains(&"gpt-5.4-codex"));
+
+        // 空列表等价于不过滤
+        let empty = svc
+            .get_filtered_raw_records(&FilterParams {
+                from_epoch: None,
+                to_epoch: None,
+                tz_offset: None,
+                provider_id: None,
+                model_id: None,
+                ccs_filter_session_apps: Some(Vec::new()),
+            })
+            .unwrap();
+        assert_eq!(empty.len(), 4);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn stream_records_applies_ccs_session_filter() {
+        // 实时流式路径：set_ccs_filter_apps 后，会话同步记录不再流出
+        let (path, path_str) = temp_ccs_db(true);
+        let mut svc = ExternalDbService::new();
+        svc.open(&path_str).unwrap();
+
+        let collect = |svc: &ExternalDbService| {
+            let mut out = Vec::new();
+            svc.stream_records(None, &mut |r| out.push(r)).unwrap();
+            out
+        };
+
+        // 未设置过滤：4 条全部流出
+        let all = collect(&svc);
+        assert_eq!(all.len(), 4);
+
+        // 过滤 claude + opencode 会话同步：仅剩 proxy(claude) 与 codex_session
+        svc.set_ccs_filter_apps(Some(&["claude".to_string(), "opencode".to_string()]));
+        let filtered = collect(&svc);
+        assert_eq!(filtered.len(), 2);
+        // 按 created_at DESC：codex_session(400) 在前，proxy(100) 在后
+        assert_eq!(filtered[0].1, "gpt-5.4-codex");
+        assert_eq!(filtered[1].1, "claude-3");
+
+        // 清除过滤（None）恢复全量
+        svc.set_ccs_filter_apps(None);
+        assert_eq!(collect(&svc).len(), 4);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn session_sync_filter_skipped_without_data_source_col() {
+        // 旧版 cc-switch 无 data_source 列：过滤条件应被跳过，不报错
+        let (path, path_str) = temp_ccs_db(false);
+        let mut svc = ExternalDbService::new();
+        svc.open(&path_str).unwrap();
+        assert!(!svc.has_data_source_col);
+
+        let records = svc
+            .get_filtered_raw_records(&FilterParams {
+                from_epoch: None,
+                to_epoch: None,
+                tz_offset: None,
+                provider_id: None,
+                model_id: None,
+                ccs_filter_session_apps: Some(vec!["claude".into(), "opencode".into()]),
+            })
+            .unwrap();
+        assert_eq!(records.len(), 4);
+
+        std::fs::remove_file(&path).ok();
     }
 }

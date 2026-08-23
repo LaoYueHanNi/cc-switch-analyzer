@@ -3,7 +3,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import { check } from '@tauri-apps/plugin-updater'
-import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, CursorCsvPreviewPage, CursorOverrideAction, HookBackupResult, HookMergeResult, DefaultPaths, DshScanResult, DshSettings, TmServiceStatus } from './types'
+import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, CcsSessionFilter, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, CursorCsvPreviewPage, CursorOverrideAction, HookBackupResult, HookMergeResult, DefaultPaths, DshScanResult, DshSettings, TmServiceStatus } from './types'
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
 import type { PricingData, PricingFamily } from '@/types/pricing'
@@ -15,6 +15,7 @@ interface TauriFilterParams {
   tzOffset: number
   providerId?: string
   modelId?: string
+  ccsFilterSessionApps?: string[]
 }
 
 function localDateToEpoch(d: Date): number {
@@ -31,7 +32,8 @@ function toTauriParams(params: FilterParams): TauriFilterParams {
     toEpoch: params.toDate ? localDateToEpochEndExclusive(params.toDate) : undefined,
     tzOffset: -(new Date().getTimezoneOffset() / 60),
     providerId: params.providerId || undefined,
-    modelId: params.modelId || undefined
+    modelId: params.modelId || undefined,
+    ccsFilterSessionApps: params.ccsFilterSessionApps?.length ? params.ccsFilterSessionApps : undefined
   }
 }
 
@@ -47,6 +49,12 @@ export const platformAdapter: PlatformAdapter = {
   },
   async setCcsAutoDiscover(enabled: boolean): Promise<void> {
     return invoke<void>('set_ccs_auto_discover', { enabled })
+  },
+  async getCcsSessionFilter(): Promise<CcsSessionFilter> {
+    return invoke<CcsSessionFilter>('get_ccs_session_filter')
+  },
+  async setCcsSessionFilter(enabled: boolean, apps: string[]): Promise<CcsSessionFilter> {
+    return invoke<CcsSessionFilter>('set_ccs_session_filter', { enabled, apps })
   },
   async removeDatabase(sourceId: string): Promise<SourceInfo[]> {
     return invoke<SourceInfo[]>('remove_database', { sourceId })

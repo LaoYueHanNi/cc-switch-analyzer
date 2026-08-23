@@ -291,6 +291,7 @@ fn query_today_data(
         tz_offset: Some(tz_offset),
         provider_id: None,
         model_id: None,
+        ccs_filter_session_apps: None,
     };
 
     // 只在锁期间读取 (路径, 类型) 列表，释放后用于 staleness 判断

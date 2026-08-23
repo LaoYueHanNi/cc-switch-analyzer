@@ -71,6 +71,14 @@ export interface FilterParams {
   toDate: Date | null
   providerId: string
   modelId: string
+  /** CCS 会话日志同步写入记录过滤（app_type 列表，如 opencode/claude） */
+  ccsFilterSessionApps?: string[]
+}
+
+/** CCS 会话日志同步记录过滤配置（与后端 CcsSessionFilter 对应） */
+export interface CcsSessionFilter {
+  enabled: boolean
+  apps: string[]
 }
 
 export interface DailySlotData {
@@ -297,6 +305,8 @@ export interface PlatformAdapter {
   addDatabase(filePath: string, dbType?: string): Promise<SourceInfo[]>
   getCcsAutoDiscover(): Promise<boolean>
   setCcsAutoDiscover(enabled: boolean): Promise<void>
+  getCcsSessionFilter(): Promise<CcsSessionFilter>
+  setCcsSessionFilter(enabled: boolean, apps: string[]): Promise<CcsSessionFilter>
   removeDatabase(sourceId: string): Promise<SourceInfo[]>
   toggleDatabase(sourceId: string): Promise<SourceInfo[]>
   listDatabases(): Promise<SourceInfo[]>

@@ -31,6 +31,47 @@ pub fn set_ccs_auto_discover(enabled: bool, state: State<AppState>) -> Result<()
     app_db.set_setting("ccs_auto_discover", value)
 }
 
+/// CCS 会话日志同步记录过滤配置（settings 键 ccs_filter_session_enabled /
+/// ccs_filter_session_apps）。启用后，命中 apps（app_type 列表）的
+/// 会话同步写入记录（proxy_request_logs.data_source != 'proxy'）在统计中排除。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CcsSessionFilter {
+    pub enabled: bool,
+    pub apps: Vec<String>,
+}
+
+#[tauri::command]
+pub fn get_ccs_session_filter(state: State<AppState>) -> Result<CcsSessionFilter, String> {
+    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+    let enabled = app_db.get_setting("ccs_filter_session_enabled").as_deref() == Some("1");
+    let apps = app_db
+        .get_setting("ccs_filter_session_apps")
+        .and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok())
+        .unwrap_or_default();
+    Ok(CcsSessionFilter { enabled, apps })
+}
+
+#[tauri::command]
+pub fn set_ccs_session_filter(
+    enabled: bool,
+    apps: Vec<String>,
+    state: State<AppState>,
+) -> Result<CcsSessionFilter, String> {
+    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+    app_db.set_setting("ccs_filter_session_enabled", if enabled { "1" } else { "0" })?;
+    let apps_json = serde_json::to_string(&apps).unwrap_or_else(|_| "[]".to_string());
+    app_db.set_setting("ccs_filter_session_apps", &apps_json)?;
+    drop(app_db);
+    // 即时广播到数据源（实时流式查询等不再等待下一轮设置）
+    let filter_apps = if enabled && !apps.is_empty() { Some(apps.clone()) } else { None };
+    let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+    for s in sources.iter_mut() {
+        s.source.set_ccs_filter_apps(filter_apps.as_deref());
+    }
+    Ok(CcsSessionFilter { enabled, apps })
+}
+
 #[tauri::command]
 pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;

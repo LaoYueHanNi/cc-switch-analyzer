@@ -163,6 +163,8 @@ let unlistenCheckUpdate: (() => void) | null = null
 onMounted(async () => {
   syncLayoutHeight()
   window.addEventListener('resize', syncLayoutHeight)
+  // 加载 CCS 会话同步过滤配置后再查询，保证全局统计一致
+  await filterStore.loadCcsSessionFilter()
   await autoLoadDatabase()
   unlistenCheckUpdate = await platformAdapter.onCheckUpdateRequested(() => updaterStore.checkForUpdate())
 })

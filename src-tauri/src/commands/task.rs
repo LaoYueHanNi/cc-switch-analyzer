@@ -129,6 +129,7 @@ pub fn get_task_session_detail(
             tz_offset: None,
             provider_id: None,
             model_id: None,
+            ccs_filter_session_apps: None,
         },
         vec![session_id],
         state,
@@ -338,6 +339,7 @@ fn aggregate_by_session_ids(
         tz_offset: None,
         provider_id: None,
         model_id: None,
+        ccs_filter_session_apps: None,
     };
     // 从每个数据源拉该批 sessionid 的 request_tokens,合并去重
     let set: HashSet<String> = session_ids.iter().cloned().collect();

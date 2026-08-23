@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { FilterParams } from '@/types/database'
+import { platformAdapter } from '@/platform'
 
 // 筛选状态管理
 export const useFilterStore = defineStore('filter', () => {
@@ -16,12 +17,28 @@ export const useFilterStore = defineStore('filter', () => {
   const dateRangeMin = ref<number | null>(null)
   const dateRangeMax = ref<number | null>(null)
 
+  // CCS 会话日志同步写入记录过滤（设置页配置，全局查询生效）
+  const ccsFilterSessionApps = ref<string[]>([])
+
+  // 从后端设置加载 CCS 会话同步过滤
+  async function loadCcsSessionFilter(): Promise<void> {
+    try {
+      const cfg = await platformAdapter.getCcsSessionFilter()
+      ccsFilterSessionApps.value = cfg.enabled ? (cfg.apps ?? []) : []
+    } catch {
+      // ignore
+    }
+  }
+
   // 构建 FilterParams
   const filterParams = computed<FilterParams>(() => ({
     fromDate: fromDate.value,
     toDate: toDate.value,
     providerId: providerId.value || '',
-    modelId: modelId.value || ''
+    modelId: modelId.value || '',
+    ccsFilterSessionApps: ccsFilterSessionApps.value.length
+      ? [...ccsFilterSessionApps.value]
+      : undefined,
   }))
 
   // 设置筛选选项（数据库加载后调用）
@@ -65,6 +82,8 @@ export const useFilterStore = defineStore('filter', () => {
     modelOptions,
     dateRangeMin,
     dateRangeMax,
+    ccsFilterSessionApps,
+    loadCcsSessionFilter,
     filterParams,
     setOptions,
     setDateRange,

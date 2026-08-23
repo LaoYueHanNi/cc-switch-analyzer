@@ -55,6 +55,36 @@
         </div>
       </div>
 
+      <!-- CCS：过滤会话日志同步写入的记录（CC-Switch 从各终端会话日志解析写入的用量） -->
+      <div v-if="slot.key === 'cc-switch'" class="ccs-session-filter-section">
+        <div class="ccs-session-filter-title">过滤会话日志同步写入记录</div>
+        <div class="ccs-session-filter-row">
+          <n-switch
+            size="small"
+            :value="ccsFilter.enabled"
+            :disabled="ccsFilterBusy"
+            @update:value="onToggleCcsSessionFilter"
+          />
+          <span class="tm-label">启用过滤</span>
+          <span class="tm-hint">排除 CCS 从各终端会话日志同步写入的用量记录</span>
+        </div>
+        <div v-if="ccsFilter.enabled" class="ccs-session-filter-apps">
+          <label v-for="opt in CCS_SESSION_APPS" :key="opt.value" class="ccs-app-option">
+            <input
+              type="checkbox"
+              class="ccs-app-check"
+              :checked="ccsFilter.apps.includes(opt.value)"
+              :disabled="ccsFilterBusy"
+              @change="onToggleCcsFilterApp(opt.value)"
+            />
+            <span>{{ opt.label }}</span>
+          </label>
+        </div>
+        <p v-if="ccsFilter.enabled && !ccsFilter.apps.length" class="ccs-filter-warn">
+          未选择任何终端，过滤不会生效
+        </p>
+      </div>
+
       <!-- DSH：用量插件（可选）数据源切换 -->
       <div v-if="slot.key === 'dsh'" class="dsh-plugin-section">
         <div class="dsh-plugin-title">用量插件 dsh-token-usage（可选）</div>
@@ -376,10 +406,11 @@ import { CloseOutline, CopyOutline, CreateOutline, FolderOpenOutline, OpenOutlin
 import CompactDialog from '@/components/common/CompactDialog.vue'
 import CursorCsvPreviewDialog from '@/components/layout/CursorCsvPreviewDialog.vue'
 import { useDatabaseStore } from '@/stores/database'
+import { useFilterStore } from '@/stores/filter'
 import { useDatabase } from '@/composables/useDatabase'
 import { platformAdapter } from '@/platform'
 import { formatNum } from '@/utils/format'
-import type { CursorAccountInfo, CursorStatusInfo, DefaultPaths, DshSettings, TokenQuad } from '@/platform/types'
+import type { CursorAccountInfo, CursorStatusInfo, CcsSessionFilter, DefaultPaths, DshSettings, TokenQuad } from '@/platform/types'
 
 const props = defineProps<{ active: boolean }>()
 
@@ -413,6 +444,53 @@ async function onToggleCcsDiscover(enabled: boolean): Promise<void> {
   } catch (e) {
     console.error('[CCS] 切换自动发现失败', e)
   }
+}
+
+// ===== CCS 会话日志同步写入记录过滤 =====
+// 对应 cc-switch proxy_request_logs.data_source != 'proxy'（会话日志同步写入）的记录，
+// 按 app_type 区分终端类型排除，仅代理转发（proxy）记录保留。
+const CCS_SESSION_APPS = [
+  { value: 'opencode', label: 'OpenCode' },
+  { value: 'claude', label: 'Claude Code' },
+  { value: 'codex', label: 'Codex' },
+  { value: 'grokbuild', label: 'Grok Build' },
+]
+
+const filterStore = useFilterStore()
+const ccsFilter = ref<CcsSessionFilter>({ enabled: false, apps: [] })
+const ccsFilterBusy = ref(false)
+
+async function loadCcsFilter(): Promise<void> {
+  try {
+    ccsFilter.value = await platformAdapter.getCcsSessionFilter()
+  } catch { /* ignore */ }
+}
+
+/** 保存过滤配置并同步查询侧（filterParams 联动触发全局重查） */
+async function applyCcsFilter(enabled: boolean, apps: string[]): Promise<void> {
+  ccsFilterBusy.value = true
+  try {
+    ccsFilter.value = await platformAdapter.setCcsSessionFilter(enabled, apps)
+    await filterStore.loadCcsSessionFilter()
+  } catch (e) {
+    console.error('[CCS] 保存会话过滤配置失败', e)
+    message.error(typeof e === 'string' ? e : String((e as any)?.message || e || '保存失败'))
+    await loadCcsFilter()
+    await filterStore.loadCcsSessionFilter()
+  } finally {
+    ccsFilterBusy.value = false
+  }
+}
+
+async function onToggleCcsSessionFilter(enabled: boolean): Promise<void> {
+  await applyCcsFilter(enabled, ccsFilter.value.apps)
+}
+
+async function onToggleCcsFilterApp(app: string): Promise<void> {
+  const apps = ccsFilter.value.apps.includes(app)
+    ? ccsFilter.value.apps.filter(a => a !== app)
+    : [...ccsFilter.value.apps, app]
+  await applyCcsFilter(ccsFilter.value.enabled, apps)
 }
 
 const dshSettings = ref<DshSettings>({
@@ -853,6 +931,7 @@ watch(
     if (visible) {
       loadCursorStatus()
       loadDshSettings()
+      loadCcsFilter()
     }
   },
   { immediate: true },
@@ -1537,6 +1616,70 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 .tm-hint {
   font-size: 11px;
   color: var(--text-tertiary);
+}
+
+/* ========== CCS 会话日志同步过滤区块 ========== */
+
+.ccs-session-filter-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-main);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-hover, rgba(255, 255, 255, 0.04)) 40%, transparent);
+}
+
+.ccs-session-filter-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.ccs-session-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.ccs-session-filter-apps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 2px 0 4px;
+}
+
+.ccs-app-option {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ccs-app-option:hover {
+  color: var(--text-primary);
+}
+
+.ccs-app-check {
+  margin: 0;
+  accent-color: var(--color-blue, #4a90d9);
+  cursor: pointer;
+}
+
+.ccs-app-option input:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.ccs-filter-warn {
+  margin: 0;
+  font-size: 10px;
+  color: var(--color-cost, #e17055);
+  line-height: 1.4;
 }
 
 /* ========== DSH 用量插件区块 ========== */

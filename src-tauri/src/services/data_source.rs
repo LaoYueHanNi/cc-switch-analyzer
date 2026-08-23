@@ -85,6 +85,10 @@ pub trait DataSource: Send + Sync {
         SourceCapabilities::default()
     }
 
+    /// 设置 CCS 会话日志同步记录过滤（app_type 列表）；None/空 = 不过滤。
+    /// 仅 CCS（ExternalDb）消费，其余数据源默认忽略。
+    fn set_ccs_filter_apps(&mut self, _apps: Option<&[String]>) {}
+
     /// 数据源提供的标题来源标签，用于 UI 展示。
     /// CC-Switch 返回 None（标题由 JSONL 或其他 provider 解析），OpenCode 返回 "opencode"。
     fn title_source_tag(&self) -> Option<&'static str> { None }
