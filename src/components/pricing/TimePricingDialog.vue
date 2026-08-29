@@ -66,7 +66,7 @@
             <span class="tier-rate" :style="{ color: 'var(--color-orange)' }">{{ formatRate(tier.outputCostPerMillion) }}</span>
             <span class="tier-rate" :style="{ color: 'var(--color-blue)' }">{{ formatRate(tier.cacheReadCostPerMillion) }}</span>
             <span class="tier-rate" :style="{ color: 'var(--color-dark-orange)' }">{{ formatRate(tier.cacheCreationCostPerMillion) }}</span>
-            <span v-if="tier.dailySlots?.length" class="tier-rate">峰{{ formatDailySlotsSummary(tier.dailySlots) }}</span>
+            <span v-if="tier.dailySlots?.length" class="tier-rate">峰 {{ formatDailySlotsSummary(tier.dailySlots) }}</span>
           </span>
           <template v-if="!isReadonly">
             <button class="tier-btn" title="编辑" @click="onEditTier(idx)">✎</button>

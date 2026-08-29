@@ -12,6 +12,10 @@
       <div v-for="(slot, sIdx) in localSlots" :key="'ro-' + sIdx" class="slot-summary">
         <div class="summary-title">{{ slot.label || '高峰时段' }}</div>
         <div class="summary-row">
+          <span class="summary-label">生效日</span>
+          <span class="summary-value">{{ formatDaysOfWeek(slot.daysOfWeek) || '每天' }}</span>
+        </div>
+        <div class="summary-row">
           <span class="summary-label">时段</span>
           <span class="summary-value">{{ formatWindows(slot.windows) }}</span>
         </div>
@@ -65,6 +69,20 @@
         </div>
         <button type="button" class="add-btn small" @click="addWindow(sIdx)">+ 时段</button>
         <div class="form-row">
+          <span class="form-label" title="不勾选 = 每天生效">生效日</span>
+          <div class="day-chips">
+            <button
+              v-for="d in 7"
+              :key="d"
+              type="button"
+              class="day-chip"
+              :class="{ active: slot.daysOfWeek.includes(d) }"
+              @click="toggleDay(slot, d)"
+            >{{ DAY_LABELS[d - 1] }}</button>
+            <span v-if="!slot.daysOfWeek.length" class="day-hint">每天</span>
+          </div>
+        </div>
+        <div class="form-row">
           <span class="form-label">输入单价 /M</span>
           <CompactNumber v-model:model-value="slot.inputCostPerMillion" :min="0" :step="0.01" width="130px" />
         </div>
@@ -90,6 +108,7 @@ import { ref, watch } from 'vue'
 import CompactInput from '@/components/common/CompactInput.vue'
 import CompactNumber from '@/components/common/CompactNumber.vue'
 import { formatRate } from '@/utils/format'
+import { formatDaysOfWeek } from '@/utils/pricing'
 import type { DailySlot } from '@/types/pricing'
 
 interface WindowEdit {
@@ -102,11 +121,14 @@ interface WindowEdit {
 interface SlotEdit {
   label: string
   windows: WindowEdit[]
+  daysOfWeek: number[]
   inputCostPerMillion: number
   outputCostPerMillion: number
   cacheReadCostPerMillion: number
   cacheCreationCostPerMillion: number
 }
+
+const DAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
 
 const props = defineProps<{
   modelValue: DailySlot[]
@@ -139,6 +161,7 @@ function toEdit(slots: DailySlot[]): SlotEdit[] {
       endHour: Math.floor(w.endMinute / 60),
       endMin: w.endMinute % 60
     })),
+    daysOfWeek: [...(s.daysOfWeek || [])],
     inputCostPerMillion: s.inputCostPerMillion,
     outputCostPerMillion: s.outputCostPerMillion,
     cacheReadCostPerMillion: s.cacheReadCostPerMillion,
@@ -153,6 +176,8 @@ function toSlots(edits: SlotEdit[]): DailySlot[] {
       startMinute: w.startHour * 60 + w.startMin,
       endMinute: w.endHour * 60 + w.endMin
     })),
+    // 空数组 = 每天生效，序列化时省略该字段
+    ...(s.daysOfWeek.length ? { daysOfWeek: [...s.daysOfWeek] } : {}),
     inputCostPerMillion: s.inputCostPerMillion,
     outputCostPerMillion: s.outputCostPerMillion,
     cacheReadCostPerMillion: s.cacheReadCostPerMillion,
@@ -173,6 +198,7 @@ function addSlot(): void {
   localSlots.value.push({
     label: '高峰时段',
     windows: [{ startHour: 9, startMin: 0, endHour: 12, endMin: 0 }],
+    daysOfWeek: [],
     inputCostPerMillion: 0,
     outputCostPerMillion: 0,
     cacheReadCostPerMillion: 0,
@@ -182,6 +208,15 @@ function addSlot(): void {
 
 function removeSlot(idx: number): void {
   localSlots.value.splice(idx, 1)
+}
+
+function toggleDay(slot: SlotEdit, day: number): void {
+  const idx = slot.daysOfWeek.indexOf(day)
+  if (idx >= 0) {
+    slot.daysOfWeek.splice(idx, 1)
+  } else {
+    slot.daysOfWeek.push(day)
+  }
 }
 
 function addWindow(sIdx: number): void {
@@ -260,6 +295,28 @@ function removeWindow(sIdx: number, wIdx: number): void {
   color: var(--text-secondary);
 }
 .time-sep.range { margin: 0 4px; }
+
+.day-chips {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+.day-chip {
+  width: 22px; height: 18px; font-size: 11px; line-height: 1;
+  border: 1px solid var(--border-main); background: transparent;
+  color: var(--text-secondary); cursor: pointer; border-radius: 3px; padding: 0;
+}
+.day-chip:hover { background: var(--bg-hover); }
+.day-chip.active {
+  border-color: var(--color-blue);
+  color: var(--color-blue);
+}
+.day-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-left: 2px;
+}
 
 .add-btn {
   font-size: 11px; padding: 1px 8px; border: 1px dashed var(--border-main);

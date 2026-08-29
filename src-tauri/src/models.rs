@@ -264,6 +264,9 @@ pub struct DailySlot {
     pub label: String,
     #[serde(default)]
     pub windows: Vec<DailyWindow>,
+    /// ISO 周几（1=周一..7=周日）限定生效日；None/空 = 每天生效
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub days_of_week: Option<Vec<u8>>,
     pub input_cost_per_million: f64,
     pub output_cost_per_million: f64,
     pub cache_read_cost_per_million: f64,

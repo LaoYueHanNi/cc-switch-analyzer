@@ -84,6 +84,7 @@ export interface CcsSessionFilter {
 export interface DailySlotData {
   label: string
   windows: Array<{ startMinute: number; endMinute: number }>
+  daysOfWeek?: number[]
   inputCostPerMillion: number
   outputCostPerMillion: number
   cacheReadCostPerMillion: number

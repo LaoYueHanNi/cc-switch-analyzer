@@ -86,13 +86,32 @@ impl PricingEngine {
         sod / 60
     }
 
+    /// 本地 ISO 周几（1=周一..7=周日）；1970-01-01 为周四
+    fn local_iso_weekday(epoch_seconds: i64, tz_offset_hours: i64) -> u8 {
+        let local = epoch_seconds + tz_offset_hours * 3600;
+        let days = local.div_euclid(86_400);
+        ((days + 3).rem_euclid(7) + 1) as u8
+    }
+
+    /// slot 是否在指定周几生效（daysOfWeek 缺省/空 = 每天）
+    fn slot_applies_on_weekday(slot: &DailySlot, weekday: u8) -> bool {
+        match &slot.days_of_week {
+            None => true,
+            Some(days) => days.is_empty() || days.contains(&weekday),
+        }
+    }
+
     /// 返回命中的 slot 下标，未命中返回 None
     fn find_matching_daily_slot_index(slots: &[DailySlot], epoch_seconds: i64, tz_offset: i64) -> Option<usize> {
         if slots.is_empty() {
             return None;
         }
         let minute = Self::local_minute_of_day(epoch_seconds, tz_offset);
+        let weekday = Self::local_iso_weekday(epoch_seconds, tz_offset);
         for (idx, slot) in slots.iter().enumerate() {
+            if !Self::slot_applies_on_weekday(slot, weekday) {
+                continue;
+            }
             for w in &slot.windows {
                 if w.start_minute <= minute && minute < w.end_minute {
                     return Some(idx);
@@ -823,6 +842,7 @@ mod tests {
                 DailyWindow { start_minute: 480, end_minute: 720 },
                 DailyWindow { start_minute: 840, end_minute: 1080 },
             ],
+            days_of_week: None,
             input_cost_per_million: input,
             output_cost_per_million: input * 6.0,
             cache_read_cost_per_million: input / 10.0,
@@ -887,6 +907,7 @@ mod tests {
                         daily_slots: vec![DailySlot {
                             label: "促销根-峰时".to_string(),
                             windows: vec![DailyWindow { start_minute: 540, end_minute: 720 }],
+                            days_of_week: None,
                             input_cost_per_million: 12.0,
                             output_cost_per_million: 72.0,
                             cache_read_cost_per_million: 1.2,
@@ -902,6 +923,7 @@ mod tests {
                             daily_slots: vec![DailySlot {
                                 label: "促销128K-峰时".to_string(),
                                 windows: vec![DailyWindow { start_minute: 540, end_minute: 720 }],
+                                days_of_week: None,
                                 input_cost_per_million: 24.0,
                                 output_cost_per_million: 144.0,
                                 cache_read_cost_per_million: 2.4,
@@ -985,5 +1007,80 @@ mod tests {
         assert!(PricingEngine::find_matching_daily_slot_index(&slots, noon, 0).is_none());
         let almost = 12 * 3600 - 1;
         assert!(PricingEngine::find_matching_daily_slot_index(&slots, almost, 0).is_some());
+    }
+
+    #[test]
+    fn test_local_iso_weekday() {
+        // 2026-01-05（UTC）为周一
+        let monday_utc0 = 1767571200i64;
+        assert_eq!(PricingEngine::local_iso_weekday(monday_utc0, 0), 1);
+        assert_eq!(PricingEngine::local_iso_weekday(monday_utc0 - 86400, 0), 7);
+        // tz=8 下同一时刻为本地周一 08:00
+        assert_eq!(PricingEngine::local_iso_weekday(monday_utc0, 8), 1);
+        // 本地周一 00:00 = UTC 周日 16:00
+        assert_eq!(PricingEngine::local_iso_weekday(monday_utc0 - 8 * 3600, 8), 1);
+        assert_eq!(PricingEngine::local_iso_weekday(monday_utc0 - 8 * 3600 - 1, 8), 7);
+    }
+
+    #[test]
+    fn test_slot_applies_on_weekday() {
+        let mut slot = peak_slot("x", 1.0);
+        assert!(PricingEngine::slot_applies_on_weekday(&slot, 6));
+        slot.days_of_week = Some(vec![]);
+        assert!(PricingEngine::slot_applies_on_weekday(&slot, 6));
+        slot.days_of_week = Some(vec![1, 2, 3, 4, 5]);
+        for d in 1..=5 {
+            assert!(PricingEngine::slot_applies_on_weekday(&slot, d), "周{}应生效", d);
+        }
+        assert!(!PricingEngine::slot_applies_on_weekday(&slot, 6));
+        assert!(!PricingEngine::slot_applies_on_weekday(&slot, 7));
+    }
+
+    #[test]
+    fn test_daily_slots_days_of_week() {
+        let app_db = AppDbService::new_in_memory().unwrap();
+        let mut slot = peak_slot("工作日高峰", 16.0);
+        slot.days_of_week = Some(vec![1, 2, 3, 4, 5]);
+        app_db.save_cloud_pricing(&CloudPricingData {
+            version: 1,
+            updated_at: 1700000000,
+            currency: "RMB".to_string(),
+            families: vec![],
+            models: vec![CloudPricingModel {
+                model_id: "deepseek-v4".to_string(),
+                input_cost_per_million: 14.0,
+                output_cost_per_million: 84.0,
+                cache_read_cost_per_million: 1.4,
+                cache_creation_cost_per_million: 17.5,
+                daily_slots: vec![slot],
+                context_tiers: vec![],
+                time_rules: vec![],
+                aliases: vec![],
+                no_cache_support: false,
+                family: "deepseek".to_string(),
+            }],
+        }).unwrap();
+        let mut engine = PricingEngine::new();
+        engine.refresh(&app_db).unwrap();
+
+        let tz = 8i64;
+        // 2026-01-05 为周一：本地 10:00 命中工作日峰时
+        let monday_utc0 = 1767571200i64;
+        let mon_peak = monday_utc0 + 2 * 3600;
+        assert_eq!(engine.get_matched_slot_key("deepseek-v4", mon_peak, 0, tz), 0);
+        assert!((engine.get_pricing_at("deepseek-v4", mon_peak, tz).unwrap().input_cost_per_million - 16.0).abs() < 0.001);
+
+        // 周六（2026-01-10）/ 周日（2026-01-11）本地 10:00 不命中 → 全天谷价
+        for (name, day_utc0) in [("周六", monday_utc0 + 5 * 86400), ("周日", monday_utc0 + 6 * 86400)] {
+            let peak = day_utc0 + 2 * 3600;
+            assert_eq!(engine.get_matched_slot_key("deepseek-v4", peak, 0, tz), -1, "{}应不命中峰时", name);
+            assert!((engine.get_pricing_at("deepseek-v4", peak, tz).unwrap().input_cost_per_million - 14.0).abs() < 0.001, "{}应为谷价", name);
+        }
+
+        // 空 daysOfWeek = 每天生效
+        let mut every_day = peak_slot("每日高峰", 16.0);
+        every_day.days_of_week = Some(vec![]);
+        let sat_peak = monday_utc0 + 5 * 86400 + 2 * 3600;
+        assert!(PricingEngine::find_matching_daily_slot_index(&[every_day], sat_peak, tz).is_some());
     }
 }

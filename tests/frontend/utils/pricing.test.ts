@@ -4,6 +4,10 @@ import {
   findMatchingDailySlot,
   dailySlotsWindowsOverlap,
   localMinuteOfDay,
+  localDayOfWeek,
+  slotDaysIntersect,
+  formatDaysOfWeek,
+  formatDailySlotsSummary,
   resolveBucketPricingRule
 } from '@/utils/pricing'
 import type { PricingData, DailySlot } from '@/types/pricing'
@@ -109,5 +113,56 @@ describe('dailySlots pricing', () => {
     const peakEpoch = day + (10 - tz) * 3600
     const { rates } = resolveBucketPricingRule(pricing, peakEpoch, 128000, tz)
     expect(rates.inputRate).toBe(40)
+  })
+
+  it('localDayOfWeek returns ISO weekdays', () => {
+    expect(localDayOfWeek(0, 0)).toBe(4) // 1970-01-01 周四
+    const mondayUtc0 = 1767571200 // 2026-01-05 周一
+    expect(localDayOfWeek(mondayUtc0, 0)).toBe(1)
+    expect(localDayOfWeek(mondayUtc0 - 86400, 0)).toBe(7)
+    // 本地周一 00:00 = UTC 周日 16:00（tz=8）
+    expect(localDayOfWeek(mondayUtc0 - 8 * 3600, 8)).toBe(1)
+    expect(localDayOfWeek(mondayUtc0 - 8 * 3600 - 1, 8)).toBe(7)
+  })
+
+  it('findMatchingDailySlot respects daysOfWeek', () => {
+    const tz = 8
+    const mondayUtc0 = 1767571200 // 2026-01-05 周一
+    const workday: DailySlot = { ...peak, daysOfWeek: [1, 2, 3, 4, 5] }
+    // 周一本地 10:00 命中
+    expect(findMatchingDailySlot([workday], mondayUtc0 + (10 - tz) * 3600, tz)).toBe(workday)
+    // 周六本地 10:00 不命中
+    const saturday = mondayUtc0 + 5 * 86400 + (10 - tz) * 3600
+    expect(findMatchingDailySlot([workday], saturday, tz)).toBeNull()
+    // 缺省/空 = 每天
+    expect(findMatchingDailySlot([peak], saturday, tz)).toBe(peak)
+    expect(findMatchingDailySlot([{ ...peak, daysOfWeek: [] }], saturday, tz)).not.toBeNull()
+  })
+
+  it('dailySlotsWindowsOverlap only conflicts on intersecting days', () => {
+    // 工作日峰与周末峰窗口重叠但生效日不相交 → 不冲突
+    const workday: DailySlot = { ...peak, daysOfWeek: [1, 2, 3, 4, 5] }
+    const weekend: DailySlot = { ...peak, windows: [{ startMinute: 700, endMinute: 800 }], daysOfWeek: [6, 7] }
+    expect(dailySlotsWindowsOverlap([workday, weekend])).toBe(false)
+    // 无 daysOfWeek 的档视为每天，与任意档相交
+    expect(dailySlotsWindowsOverlap([workday, { ...peak, windows: [{ startMinute: 700, endMinute: 800 }] }])).toBe(true)
+    expect(slotDaysIntersect(workday, weekend)).toBe(false)
+    expect(slotDaysIntersect(peak, weekend)).toBe(true)
+  })
+
+  it('formatDaysOfWeek compresses consecutive days', () => {
+    expect(formatDaysOfWeek([1, 2, 3, 4, 5])).toBe('周一至周五')
+    expect(formatDaysOfWeek([6, 7])).toBe('周六至周日')
+    expect(formatDaysOfWeek([2, 3, 4])).toBe('周二至周四')
+    expect(formatDaysOfWeek([1, 3])).toBe('周一、周三')
+    expect(formatDaysOfWeek([1, 2, 3, 4, 5, 6, 7])).toBe('')
+    expect(formatDaysOfWeek([])).toBe('')
+    expect(formatDaysOfWeek(undefined)).toBe('')
+  })
+
+  it('formatDailySlotsSummary prefixes weekday restriction', () => {
+    expect(formatDailySlotsSummary([peak])).toBe('08:00–12:00、14:00–18:00')
+    const workday: DailySlot = { ...peak, daysOfWeek: [1, 2, 3, 4, 5] }
+    expect(formatDailySlotsSummary([workday])).toBe('周一至周五 08:00–12:00、14:00–18:00')
   })
 })

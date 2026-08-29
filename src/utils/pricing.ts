@@ -32,6 +32,28 @@ export function localMinuteOfDay(epochSeconds: number, tzOffsetHours: number): n
   return Math.floor(sod / 60)
 }
 
+/** 本地 ISO 周几（1=周一..7=周日），与后端 local_iso_weekday 一致 */
+export function localDayOfWeek(epochSeconds: number, tzOffsetHours: number): number {
+  const local = epochSeconds + tzOffsetHours * 3600
+  const days = Math.floor(local / 86400)
+  return (((days + 3) % 7) + 7) % 7 + 1
+}
+
+/** slot 是否在指定周几生效（daysOfWeek 缺省/空 = 每天） */
+export function slotAppliesOnWeekday(slot: DailySlot, weekday: number): boolean {
+  const days = slot.daysOfWeek
+  if (!days || !days.length) return true
+  return days.includes(weekday)
+}
+
+/** 两个 slot 的生效日是否相交（缺省/空 = 每天档，与任意档相交） */
+export function slotDaysIntersect(a: DailySlot, b: DailySlot): boolean {
+  const da = a.daysOfWeek
+  const db = b.daysOfWeek
+  if (!da || !da.length || !db || !db.length) return true
+  return da.some(d => db.includes(d))
+}
+
 /** 匹配节点上的峰时 slot；未命中返回 null */
 export function findMatchingDailySlot(
   slots: DailySlot[] | undefined,
@@ -40,7 +62,9 @@ export function findMatchingDailySlot(
 ): DailySlot | null {
   if (!slots?.length) return null
   const minute = localMinuteOfDay(epochSeconds, tzOffsetHours)
+  const weekday = localDayOfWeek(epochSeconds, tzOffsetHours)
   for (const slot of slots) {
+    if (!slotAppliesOnWeekday(slot, weekday)) continue
     for (const w of slot.windows || []) {
       if (w.startMinute <= minute && minute < w.endMinute) {
         return slot
@@ -50,17 +74,21 @@ export function findMatchingDailySlot(
   return null
 }
 
-/** 同一节点内 windows 是否重叠（半开区间） */
+/** 同一节点内 windows 是否重叠（半开区间）；仅当生效日相交时才算冲突 */
 export function dailySlotsWindowsOverlap(slots: DailySlot[]): boolean {
-  const ranges: Array<{ start: number; end: number }> = []
+  const ranges: Array<{ start: number; end: number; slot: DailySlot }> = []
   for (const slot of slots) {
     for (const w of slot.windows || []) {
-      ranges.push({ start: w.startMinute, end: w.endMinute })
+      ranges.push({ start: w.startMinute, end: w.endMinute, slot })
     }
   }
   ranges.sort((a, b) => a.start - b.start)
   for (let i = 1; i < ranges.length; i++) {
-    if (ranges[i].start < ranges[i - 1].end) return true
+    for (let j = 0; j < i; j++) {
+      if (ranges[i].start < ranges[j].end && slotDaysIntersect(ranges[i].slot, ranges[j].slot)) {
+        return true
+      }
+    }
   }
   return false
 }
@@ -225,11 +253,38 @@ export function resolveBucketPricingRule(
   })
 }
 
-/** 格式化峰时窗口摘要，如 08:00-12:00,14:00-18:00 */
+const WEEKDAY_NAMES = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日']
+
+/**
+ * 格式化 daysOfWeek 为中文摘要，如 [1,2,3,4,5] → "周一至周五"。
+ * 缺省/空/全 7 天 = 每天生效，返回空串。
+ */
+export function formatDaysOfWeek(days?: number[]): string {
+  const unique = [...(days || [])].filter(d => d >= 1 && d <= 7)
+  const sorted = [...new Set(unique)].sort((a, b) => a - b)
+  if (!sorted.length || sorted.length >= 7) return ''
+  const parts: string[] = []
+  let start = sorted[0]
+  let prev = sorted[0]
+  for (let i = 1; i <= sorted.length; i++) {
+    const cur = sorted[i]
+    if (cur === prev + 1) {
+      prev = cur
+      continue
+    }
+    parts.push(start === prev ? WEEKDAY_NAMES[start] : `${WEEKDAY_NAMES[start]}至${WEEKDAY_NAMES[prev]}`)
+    start = cur
+    prev = cur
+  }
+  return parts.join('、')
+}
+
+/** 格式化峰时窗口摘要，如 周一至周五 08:00-12:00、14:00-18:00 */
 export function formatDailySlotsSummary(slots: DailySlot[] | undefined): string {
   if (!slots?.length) return ''
-  const parts: string[] = []
+  const groups: string[] = []
   for (const slot of slots) {
+    const parts: string[] = []
     for (const w of slot.windows || []) {
       const sh = String(Math.floor(w.startMinute / 60)).padStart(2, '0')
       const sm = String(w.startMinute % 60).padStart(2, '0')
@@ -237,6 +292,9 @@ export function formatDailySlotsSummary(slots: DailySlot[] | undefined): string 
       const em = String(w.endMinute % 60).padStart(2, '0')
       parts.push(`${sh}:${sm}–${eh}:${em}`)
     }
+    if (!parts.length) continue
+    const days = formatDaysOfWeek(slot.daysOfWeek)
+    groups.push(days ? `${days} ${parts.join('、')}` : parts.join('、'))
   }
-  return parts.join('、')
+  return groups.join('；')
 }

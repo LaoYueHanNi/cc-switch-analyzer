@@ -15,6 +15,8 @@ export interface DailyWindow {
 export interface DailySlot {
   label: string
   windows: DailyWindow[]
+  /** ISO 周几（1=周一..7=周日）限定生效日；缺省/空 = 每天生效 */
+  daysOfWeek?: number[]
   inputCostPerMillion: number
   outputCostPerMillion: number
   cacheReadCostPerMillion: number

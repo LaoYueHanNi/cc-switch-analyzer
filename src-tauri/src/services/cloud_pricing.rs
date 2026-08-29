@@ -33,3 +33,70 @@ pub fn fetch_cloud_pricing(url: &str) -> Result<CloudPricingData, String> {
 pub fn parse_cloud_pricing(json_str: &str) -> Result<CloudPricingData, String> {
     serde_json::from_str(json_str).map_err(|e| format!("解析云端定价 JSON 失败: {}", e))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_days_of_week_from_raw_json() {
+        let json = r#"{
+            "version": 72,
+            "updatedAt": 1787996733,
+            "currency": "RMB",
+            "usdExchangeRate": 7,
+            "models": [{
+                "modelId": "deepseek-v4",
+                "inputCostPerMillion": 1.5,
+                "outputCostPerMillion": 4.5,
+                "cacheReadCostPerMillion": 0.05,
+                "cacheCreationCostPerMillion": 0.0,
+                "aliases": [],
+                "dailySlots": [{
+                    "label": "工作日高峰时段",
+                    "windows": [{ "startMinute": 540, "endMinute": 720 }],
+                    "daysOfWeek": [1, 2, 3, 4, 5],
+                    "inputCostPerMillion": 3.0,
+                    "outputCostPerMillion": 9.0,
+                    "cacheReadCostPerMillion": 0.10,
+                    "cacheCreationCostPerMillion": 0.0
+                }],
+                "timeRules": [],
+                "contextTiers": []
+            }],
+            "families": []
+        }"#;
+        let data = parse_cloud_pricing(json).unwrap();
+        let slot = &data.models[0].daily_slots[0];
+        assert_eq!(slot.days_of_week, Some(vec![1, 2, 3, 4, 5]));
+    }
+
+    #[test]
+    fn test_parse_without_days_of_week() {
+        let json = r#"{
+            "version": 1,
+            "updatedAt": 0,
+            "currency": "RMB",
+            "models": [{
+                "modelId": "m",
+                "inputCostPerMillion": 1.0,
+                "outputCostPerMillion": 2.0,
+                "cacheReadCostPerMillion": 0.1,
+                "cacheCreationCostPerMillion": 0.0,
+                "aliases": [],
+                "dailySlots": [{
+                    "windows": [{ "startMinute": 540, "endMinute": 720 }],
+                    "inputCostPerMillion": 2.0,
+                    "outputCostPerMillion": 4.0,
+                    "cacheReadCostPerMillion": 0.2,
+                    "cacheCreationCostPerMillion": 0.0
+                }],
+                "timeRules": [],
+                "contextTiers": []
+            }]
+        }"#;
+        let data = parse_cloud_pricing(json).unwrap();
+        let slot = &data.models[0].daily_slots[0];
+        assert_eq!(slot.days_of_week, None);
+    }
+}
