@@ -128,3 +128,5 @@ DSH（DeepSeek Harness）本地用量支持两种数据来源，由 `pricing.db:
 - **HTTP 服务**（`http_server.rs`）复用前端查询管道（`compute_precompute`），使用独立的 `DataSource` 实例避免 `rusqlite::Connection` 的 `RefCell` 并发冲突
 - **费用由服务端计算**：`totalCost` 返回格式化字符串（如 `"172.57¥"`），插件只做展示不做计算
 - **插件 C++ 代码**：通过 `WinHTTP` 请求 `/api/today`，解析 JSON 后直接展示字符串
+
+- 非平凡变更须在同一个提交里新增或更新 docs/decisions/ 下的决策记录，规范见 docs/decisions/README.md
