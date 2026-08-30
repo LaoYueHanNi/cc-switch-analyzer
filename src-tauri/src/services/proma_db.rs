@@ -314,7 +314,7 @@ impl DataSource for PromaDbService {
                     "SELECT session_id, model, provider_id, created_at,
                             input_tokens, output_tokens, cache_read, cache_creation, latency
                      FROM session_request_logs
-                     WHERE source = '{}' AND created_at > ?
+                     WHERE source = '{}' AND created_at >= ?
                      ORDER BY created_at DESC",
                     PROVIDER_ID
                 ),
@@ -449,10 +449,11 @@ mod tests {
         assert!(!all[0].9);
         assert_eq!(all[0].2, "Proma");
 
-        // 增量：since 之后（秒级 >）仅新记录
+        // 增量：>= 秒级游标语义，含游标秒内记录，倒序
         let fresh = svc.get_recent_request_logs_raw(Some(1000)).unwrap();
-        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh.len(), 2);
         assert_eq!(fresh[0].3, 2000);
+        assert_eq!(fresh[1].3, 1000);
 
         // 列映射：input/output/cache_read/cache_creation/latency 与写入一致
         assert_eq!(all[0].4, 400);

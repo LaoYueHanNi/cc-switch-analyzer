@@ -787,7 +787,7 @@ impl DataSource for CursorCsvService {
         let records = self.records_read()?;
         let mut rows: Vec<_> = records
             .iter()
-            .filter(|r| since.map(|s| r.created_at > s).unwrap_or(true))
+            .filter(|r| since.map(|s| r.created_at >= s).unwrap_or(true))
             .map(|r| {
                 (
                     r.session_id.clone(),

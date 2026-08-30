@@ -934,7 +934,7 @@ impl ExternalDbService {
                        cache_read_tokens, cache_creation_tokens,
                        latency_ms, app_type
                 FROM proxy_request_logs
-                WHERE created_at > ?
+                WHERE created_at >= ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
                   AND app_type != 'claude-desktop'{ccs_sql}
                 ORDER BY created_at DESC"), vec![Box::new(s)]),
@@ -992,7 +992,7 @@ impl ExternalDbService {
                        cache_read_tokens, cache_creation_tokens,
                        latency_ms, app_type
                 FROM proxy_request_logs
-                WHERE created_at > ?
+                WHERE created_at >= ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
                   AND app_type != 'claude-desktop'{ccs_sql}
                 ORDER BY created_at DESC"), vec![Box::new(s)]),

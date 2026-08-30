@@ -835,6 +835,10 @@ impl ZCodeDbService {
 
     pub fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)>, String> {
         let db = self.db()?;
+        // 增量游标契约：返回 created_at（started_at/1000 截断秒）>= since 的记录。
+        // 过滤必须在 SQL 内同样截断到秒：若用 started_at > s*1000 毫秒精确比较，
+        // 已见记录的毫秒尾数会让它永远满足条件，每轮轮询重复返回。
+        // >= 会重复返回游标秒内已见记录，由前端增量合并去重兜底。
         let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
             Some(s) => ("
                 SELECT session_id, model_id, 'ZCode', started_at/1000,
@@ -842,10 +846,10 @@ impl ZCodeDbService {
                        cache_read_input_tokens, cache_creation_input_tokens,
                        duration_ms
                 FROM model_usage
-                WHERE started_at > ?
+                WHERE (started_at / 1000) >= ?
                   AND status = 'completed'
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_input_tokens > 0 OR cache_creation_input_tokens > 0)
-                ORDER BY started_at DESC", vec![Box::new(s * 1000)]),
+                ORDER BY started_at DESC", vec![Box::new(s)]),
             None => ("
                 SELECT session_id, model_id, 'ZCode', started_at/1000,
                        input_tokens, output_tokens,
@@ -886,6 +890,10 @@ impl ZCodeDbService {
         on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64, bool)),
     ) -> Result<(), String> {
         let db = self.db()?;
+        // 增量游标契约：返回 created_at（started_at/1000 截断秒）>= since 的记录。
+        // 过滤必须在 SQL 内同样截断到秒：若用 started_at > s*1000 毫秒精确比较，
+        // 已见记录的毫秒尾数会让它永远满足条件，每轮轮询重复返回。
+        // >= 会重复返回游标秒内已见记录，由前端增量合并去重兜底。
         let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
             Some(s) => ("
                 SELECT session_id, model_id, 'ZCode', started_at/1000,
@@ -893,10 +901,10 @@ impl ZCodeDbService {
                        cache_read_input_tokens, cache_creation_input_tokens,
                        duration_ms
                 FROM model_usage
-                WHERE started_at > ?
+                WHERE (started_at / 1000) >= ?
                   AND status = 'completed'
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_input_tokens > 0 OR cache_creation_input_tokens > 0)
-                ORDER BY started_at DESC", vec![Box::new(s * 1000)]),
+                ORDER BY started_at DESC", vec![Box::new(s)]),
             None => ("
                 SELECT session_id, model_id, 'ZCode', started_at/1000,
                        input_tokens, output_tokens,
@@ -1041,5 +1049,101 @@ impl super::data_source::DataSource for ZCodeDbService {
         session_ids: &[String],
     ) -> Option<Result<HashMap<String, (String, String)>, String>> {
         Some(self.get_session_titles_from_db(session_ids))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 建含最小 model_usage 表的临时库（毫秒时间戳），先写后只读打开（与 dsh_db 测试同模式）
+    fn temp_zcode_db() -> String {
+        let path = std::env::temp_dir().join(format!(
+            "ccsa_zcode_db_test_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE model_usage (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                duration_ms INTEGER,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .unwrap();
+        let insert = |conn: &Connection, id: &str, started_at: i64, input: i64, cache_read: i64| {
+            conn.execute(
+                "INSERT INTO model_usage (id, session_id, model_id, status, started_at, duration_ms,
+                                          input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens)
+                 VALUES (?1, 'sess', 'glm-5', 'completed', ?2, 1000, ?3, 100, ?4, 0)",
+                params![id, started_at, input, cache_read],
+            )
+            .unwrap();
+        };
+        // 同一秒 1000：毫秒尾数非 0（a1）与恰好为 0（a2）各一条，尾数不应影响游标过滤
+        insert(&conn, "a1", 1_000_500, 200, 0);
+        insert(&conn, "a2", 1_000_000, 350, 100);
+        insert(&conn, "b1", 2_000_700, 500, 400);
+        drop(conn);
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn recent_request_logs_raw_cursor_semantics_inclusive_second() {
+        let path_str = temp_zcode_db();
+        let mut svc = ZCodeDbService::new();
+        svc.open(&path_str).unwrap();
+
+        // 全量：started_at 倒序
+        let all = svc.get_recent_request_logs_raw(None).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].3, 2000);
+        assert_eq!(all[2].3, 1000);
+
+        // 游标 = 记录自身所在秒：>= 语义必须返回该记录（毫秒尾数不参与过滤）
+        let at_cursor = svc.get_recent_request_logs_raw(Some(2000)).unwrap();
+        assert_eq!(at_cursor.len(), 1);
+        assert_eq!(at_cursor[0].3, 2000);
+
+        // 游标秒内同秒两条都返回（含毫秒尾数恰为 0 的 a2），更新的秒也一并返回
+        let second_1000 = svc.get_recent_request_logs_raw(Some(1000)).unwrap();
+        assert_eq!(second_1000.len(), 3);
+        assert_eq!(second_1000[0].3, 2000);
+        assert_eq!(second_1000[1].3, 1000);
+        assert_eq!(second_1000[2].3, 1000);
+
+        // 游标越过：更早记录不再返回
+        assert!(svc.get_recent_request_logs_raw(Some(2001)).unwrap().is_empty());
+
+        // input 为 cache-inclusive 口径，读取时归一化为 fresh input
+        assert_eq!(at_cursor[0].4, 100); // b1: 500 - 400
+        let a2 = second_1000.iter().find(|r| r.4 == 250).unwrap();
+        assert_eq!(a2.4, 250); // a2: 350 - 100
+    }
+
+    #[test]
+    fn stream_records_applies_same_cursor_semantics() {
+        let path_str = temp_zcode_db();
+        let mut svc = ZCodeDbService::new();
+        svc.open(&path_str).unwrap();
+
+        let mut collected = Vec::new();
+        svc.stream_records(Some(2000), &mut |r| collected.push(r)).unwrap();
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0].3, 2000);
+        // ZCode 不参与会话归类，session_id 置空
+        assert_eq!(collected[0].0, "");
+        assert_eq!(collected[0].2, "ZCode");
     }
 }

@@ -881,7 +881,7 @@ impl AiProxyDbService {
                        duration_ms,
                        request_type
                 FROM token_stats
-                WHERE {ts_expr} > ?
+                WHERE {ts_expr} >= ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cached_read_tokens > 0 OR cached_write_tokens > 0)
                 ORDER BY request_ts DESC"), vec![Box::new(s)]),
             None => (format!(
@@ -946,7 +946,7 @@ impl AiProxyDbService {
                        duration_ms,
                        request_type
                 FROM token_stats
-                WHERE {ts_expr} > ?
+                WHERE {ts_expr} >= ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cached_read_tokens > 0 OR cached_write_tokens > 0)
                 ORDER BY request_ts DESC"), vec![Box::new(s)]),
             None => (format!(

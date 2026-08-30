@@ -884,7 +884,7 @@ impl OpenCodeDbService {
                            CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
                            (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
                     FROM message
-                    WHERE (time_created / 1000) > ?
+                    WHERE (time_created / 1000) >= ?
                       AND {}
                     ORDER BY time_created DESC", base_filter);
                 vec![Box::new(s)]
@@ -954,7 +954,7 @@ impl OpenCodeDbService {
                            CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
                            (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
                     FROM message
-                    WHERE (time_created / 1000) > ?
+                    WHERE (time_created / 1000) >= ?
                       AND {}
                     ORDER BY time_created DESC", base_filter);
                 vec![Box::new(s)]

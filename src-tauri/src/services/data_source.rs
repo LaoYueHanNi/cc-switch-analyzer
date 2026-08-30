@@ -69,6 +69,15 @@ pub trait DataSource: Send + Sync {
     /// 流式查询请求记录。逐行通过 callback 发射，避免一次性加载全部数据到内存。
     /// 默认实现委托给 `get_recent_request_logs_raw`。
     /// Tuple 末尾 `is_codex` 标记该记录是否来自 OpenAI Codex 协议（用于会话重映射）。
+    ///
+    /// # 增量游标契约（since 语义）
+    ///
+    /// `since` 为秒级游标；各实现必须返回 **created_at >= since** 的记录，且过滤
+    /// 精度必须与返回的 created_at 精度一致（毫秒存库的源须在过滤侧同样截断到秒，
+    /// 否则已见记录会因毫秒尾数反复满足条件，导致实时页每轮轮询重复追加）。
+    /// `>=` 会重复返回游标秒内已见记录：同秒后到的记录因此不被漏掉，重复部分由
+    /// 前端增量合并去重（useRealtimePolling 的 seen 指纹集）兜底。`None` 时无游标，
+    /// 返回最近 SESSION_TOP_N 条。
     fn stream_records(
         &self,
         since: Option<i64>,
