@@ -276,8 +276,8 @@ async function pickFolderAndLaunch(
 .cd-btn {
   font-size: 11px;
   padding: 2px 10px;
-  border: 1px solid var(--border-main);
-  border-radius: 3px;
+  border: 0.5px solid var(--border-main);
+  border-radius: var(--chip-radius);
   background: transparent;
   color: var(--text-primary);
   cursor: pointer;

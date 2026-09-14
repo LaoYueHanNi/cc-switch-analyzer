@@ -8,7 +8,6 @@
       v-for="item in items"
       :key="item.key"
       class="summary-card"
-      :style="{ borderLeftColor: item.color }"
     >
       <div class="summary-label">{{ item.label }}</div>
       <div class="summary-value" :style="{ color: item.color }">
@@ -113,18 +112,23 @@ const items = computed(() => {
 .summary-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 6px 12px 8px;
+  gap: 0;
+  padding: 10px 8px 4px 16px;
+  background: transparent;
 }
 
 .summary-card {
-  flex: 1 1 0;
-  min-width: 70px;
-  padding: 4px 8px;
-  background: var(--bg-card);
-  border-radius: 4px;
-  border: 1px solid var(--border-main);
-  border-left-width: 3px;
+  flex: none;
+  min-width: 0;
+  padding: 2px 18px 2px 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.summary-card + .summary-card {
+  padding-left: 18px;
+  box-shadow: -0.5px 0 0 var(--border-light);
 }
 
 .summary-label {
@@ -134,8 +138,9 @@ const items = computed(() => {
 }
 
 .summary-value {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   margin-top: 1px;
+  letter-spacing: -0.02em;
 }
 </style>

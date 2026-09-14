@@ -69,6 +69,8 @@
               :cache-hit-rate="s.cacheHitRate"
               :timestamps="s.timestamps"
               :model-breakdown="s.modelBreakdown"
+              :expanded="openSessionId === s.sessionId"
+              @toggle="toggleSession(s.sessionId)"
             />
             <div class="wrap-actions">
               <span v-if="s.sourceType === 'codex'" class="action-terminal action-codex" @click="onResumeCodex(s.sessionId, s.projectDir)" title="恢复 Codex 会话"><span v-html="codexSvg"></span></span>
@@ -145,6 +147,7 @@ watch(() => providerMenu.menu.show, (show) => {
 const projectGroups = ref<ProjectGroupStats[]>([])
 const sessionDetails = ref<ProjectSessionDetail[]>([])
 const activeProject = ref<string | null>(null)
+const openSessionId = ref<string | null>(null)
 const deleteTarget = ref<ProjectSessionDetail | null>(null)
 const loadingGroups = ref(false)
 const loadingDetails = ref(false)
@@ -185,6 +188,7 @@ async function loadSessionDetails(sessionIds: string[]) {
 
 function enterProject(projectDir: string) {
   activeProject.value = projectDir
+  openSessionId.value = null
   sessionDetails.value = []
   const group = projectGroups.value.find(g => g.projectDir === projectDir)
   if (group?.sessionIds.length) loadSessionDetails(group.sessionIds)
@@ -192,7 +196,12 @@ function enterProject(projectDir: string) {
 
 function leaveProject() {
   activeProject.value = null
+  openSessionId.value = null
   sessionDetails.value = []
+}
+
+function toggleSession(sessionId: string) {
+  openSessionId.value = openSessionId.value === sessionId ? null : sessionId
 }
 
 async function onResume(sessionId: string, projectDir?: string) {
@@ -338,8 +347,9 @@ onDeactivated(() => { isActive.value = false })
   margin-bottom: 10px;
 }
 .back-btn {
-  font-size: 12px; color: var(--color-blue); background: none; border: none;
-  cursor: pointer; padding: 2px 8px; border-radius: 3px;
+  font-size: 12px; color: var(--text-secondary); background: none;
+  border: 0.5px solid var(--border-main);
+  cursor: pointer; padding: 2px 10px; border-radius: var(--chip-radius);
   transition: background var(--transition-speed);
 }
 .back-btn:hover { background: var(--bg-hover); }
@@ -356,11 +366,12 @@ onDeactivated(() => { isActive.value = false })
 /* SessionCard + 操作按钮 */
 .session-wrap {
   position: relative;
-  margin-bottom: 10px;
+  padding-right: 36px;
 }
 .wrap-actions {
-  position: absolute; top: 8px; right: 8px;
-  display: flex; gap: 14px; z-index: 1;
+  position: absolute; top: 8px; right: 4px;
+  display: flex; gap: 8px; z-index: 1;
+  opacity: 0.85;
 }
 .session-wrap:hover .wrap-actions { opacity: 1; }
 

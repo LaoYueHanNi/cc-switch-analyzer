@@ -22,23 +22,25 @@ defineProps<{
 <style scoped>
 .provider-card {
   background: var(--bg-card);
-  border-radius: 6px;
-  border: 1px solid var(--border-main);
+  border-radius: var(--card-radius);
+  border: 0;
+  box-shadow: var(--shadow-card);
   padding: 10px;
   min-width: 0;
   overflow: hidden;
-  transition: box-shadow var(--transition-speed);
+  transition: box-shadow var(--transition-speed), background var(--transition-speed);
 }
 
 .provider-card:hover {
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--shadow-focus);
+  background: var(--bg-hover);
 }
 
 .provider-name {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: 4px;
+  margin-bottom: 6px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

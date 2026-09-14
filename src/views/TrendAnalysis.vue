@@ -622,10 +622,10 @@ watch(allSeriesData, (v) => {
 .chart-wrapper {
   flex: 1;
   min-height: 0;
-  background: var(--bg-card);
-  border-radius: 8px;
-  border: 1px solid var(--border-main);
-  padding: 12px;
+  background: transparent;
+  border-radius: 0;
+  border: 0;
+  padding: 4px 0 0;
   position: relative;
 }
 
@@ -639,11 +639,11 @@ watch(allSeriesData, (v) => {
   flex-direction: column;
   gap: 2px;
   padding: 6px 8px;
-  background: rgba(20, 20, 40, 0.78);
-  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg-card) 92%, transparent);
+  border-radius: 8px;
   font-size: 10px;
   line-height: 1.5;
-  color: #e6e6f0;
+  color: var(--text-primary);
   pointer-events: auto;
   max-width: 240px;
   user-select: none;
@@ -751,9 +751,9 @@ watch(allSeriesData, (v) => {
   padding: 3px 10px;
   font-size: 11px;
   font-weight: 500;
-  border: 1px solid var(--border-main);
-  border-radius: 3px;
-  background: var(--bg-card);
+  border: 0.5px solid var(--border-main);
+  border-radius: var(--chip-radius);
+  background: transparent;
   color: var(--text-muted);
   cursor: pointer;
   transition: all var(--transition-speed);

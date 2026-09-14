@@ -125,8 +125,9 @@ async function onQuickDate(days: number): Promise<void> {
 
 <style scoped>
 .filter-bar {
-  padding: 4px 12px 6px;
-  border-top: 1px solid var(--border-light);
+  padding: 8px 16px 6px;
+  border-top: 0;
+  background: transparent;
 }
 
 .filter-row {
@@ -155,9 +156,9 @@ async function onQuickDate(days: number): Promise<void> {
 
 .quick-btn {
   font-size: 10px;
-  padding: 1px 6px;
-  border: 1px solid var(--border-main);
-  border-radius: 3px;
+  padding: 2px 8px;
+  border: 0.5px solid var(--border-main);
+  border-radius: var(--chip-radius);
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
@@ -170,9 +171,9 @@ async function onQuickDate(days: number): Promise<void> {
 }
 
 .quick-btn.active {
-  background: var(--color-blue);
-  border-color: var(--color-blue);
-  color: #fff;
+  background: color-mix(in srgb, var(--color-blue) 16%, transparent);
+  border-color: transparent;
+  color: var(--color-blue);
 }
 
 .quick-btn:disabled {
@@ -188,9 +189,9 @@ async function onQuickDate(days: number): Promise<void> {
 
 .action-btn {
   font-size: 10px;
-  padding: 1px 8px;
-  border: 1px solid var(--border-main);
-  border-radius: 3px;
+  padding: 2px 8px;
+  border: 0.5px solid var(--border-main);
+  border-radius: var(--chip-radius);
   background: transparent;
   color: var(--text-primary);
   cursor: pointer;

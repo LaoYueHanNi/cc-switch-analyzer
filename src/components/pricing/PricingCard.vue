@@ -1,13 +1,13 @@
 <template>
-  <div class="pricing-card">
+  <div class="pricing-card" :class="{ open }" @click="open = !open">
     <div class="pricing-header">
       <div class="pricing-header-left">
         <span class="pricing-name">{{ modelName }}</span>
         <span class="header-actions">
-          <button class="text-btn" @click="$emit('manageAliases')">
+          <button class="text-btn" @click.stop="$emit('manageAliases')">
             别名<span v-if="aliases.length">({{ aliases.length }})</span>
           </button>
-          <button class="text-btn" @click="$emit('edit')">编辑</button>
+          <button class="text-btn" @click.stop="$emit('edit')">编辑</button>
         </span>
       </div>
       <div v-if="isOverride || activeRule" class="pricing-badges">
@@ -63,11 +63,11 @@
           <span v-if="formatDailySlotsSummary(rule.dailySlots)" class="time-rule-date">峰 {{ formatDailySlotsSummary(rule.dailySlots) }}</span>
         </div>
         <template v-if="!rule.readonly">
-          <button class="icon-btn" title="编辑" @click="$emit('editTimeRule', timeRules[idx])">✎</button>
-          <button class="icon-btn" title="删除" @click="$emit('deleteTimeRule', timeRules[idx])">✕</button>
+          <button class="icon-btn" title="编辑" @click.stop="$emit('editTimeRule', timeRules[idx])">✎</button>
+          <button class="icon-btn" title="删除" @click.stop="$emit('deleteTimeRule', timeRules[idx])">✕</button>
         </template>
         <template v-else>
-          <button class="icon-btn" title="查看" @click="$emit('viewTimeRule', rule)">👁</button>
+          <button class="icon-btn" title="查看" @click.stop="$emit('viewTimeRule', rule)">👁</button>
         </template>
       </div>
       <!-- 仅当时间区间盖住常驻时展示，便于对照回落价；常驻已生效则不再重复 -->
@@ -78,16 +78,16 @@
           <span class="time-rule-date">{{ formatDate(baseDisplayRule.startTime) }} ~ {{ formatDate(baseDisplayRule.endTime) }}</span>
           <span v-if="formatDailySlotsSummary(baseDisplayRule.dailySlots)" class="time-rule-date">峰 {{ formatDailySlotsSummary(baseDisplayRule.dailySlots) }}</span>
         </div>
-        <button class="icon-btn" title="查看" @click="$emit('viewTimeRule', baseDisplayRule)">👁</button>
+        <button class="icon-btn" title="查看" @click.stop="$emit('viewTimeRule', baseDisplayRule)">👁</button>
       </div>
     </div>
 
-    <button class="add-time-btn" @click="$emit('addTimeRule')">+ 添加时间定价</button>
+    <button class="add-time-btn" @click.stop="$emit('addTimeRule')">+ 添加时间定价</button>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { formatRate } from '@/utils/format'
 import { epochToDateStr } from '@/utils/format'
 import PricingGrid from '@/components/common/PricingGrid.vue'
@@ -121,6 +121,8 @@ const props = withDefaults(defineProps<{
   cloudTimeRules: () => [],
   aliases: () => []
 })
+
+const open = ref(false)
 
 defineEmits<{
   edit: []
@@ -219,14 +221,30 @@ function formatDate(ts: number): string {
 <style scoped>
 .pricing-card {
   background: var(--bg-card);
-  border-radius: 6px;
-  border: 1px solid var(--border-main);
+  border-radius: var(--card-radius);
+  border: 0;
+  box-shadow: var(--shadow-card);
   padding: var(--card-padding);
   min-width: 0;
   overflow: hidden;
-  transition: border-color var(--transition-speed);
+  cursor: pointer;
+  transition: box-shadow var(--transition-speed), background var(--transition-speed);
 }
-.pricing-card:hover { border-color: var(--color-blue); }
+.pricing-card:hover,
+.pricing-card.open {
+  box-shadow: var(--shadow-focus);
+  background: var(--bg-hover);
+}
+.pricing-card :deep(.pricing-grid) {
+  opacity: 0.16;
+  filter: saturate(0.45);
+  transition: opacity var(--transition-speed), filter var(--transition-speed);
+}
+.pricing-card:hover :deep(.pricing-grid),
+.pricing-card.open :deep(.pricing-grid) {
+  opacity: 1;
+  filter: none;
+}
 .pricing-header { display: flex; flex-direction: column; gap: 2px; margin-bottom: 3px; }
 .pricing-header-left { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
 .pricing-badges { display: flex; align-items: center; gap: 4px; }

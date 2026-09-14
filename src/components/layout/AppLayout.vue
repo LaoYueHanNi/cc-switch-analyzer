@@ -186,8 +186,8 @@ onUnmounted(() => {
 
 .top-area {
   flex-shrink: 0;
-  background: var(--bg-card);
-  border-bottom: 1px solid var(--border-main);
+  background: var(--bg-base);
+  border-bottom: 0.5px solid var(--border-light);
 }
 
 .overlay {
@@ -238,8 +238,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  background: var(--bg-card);
-  border-right: 1px solid var(--border-main);
+  background: var(--bg-sidebar);
+  border-right: 0.5px solid var(--border-light);
   padding: 6px 0;
 }
 
@@ -251,7 +251,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  border-radius: 6px;
+  border-radius: 10px;
   cursor: pointer;
   color: var(--text-muted);
   transition: background var(--transition-speed), color var(--transition-speed);
@@ -264,19 +264,8 @@ onUnmounted(() => {
 }
 
 .sidebar-item.active {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--color-blue) 12%, transparent);
   color: var(--color-blue);
-}
-
-.sidebar-item.active::before {
-  content: '';
-  position: absolute;
-  left: -4px;
-  top: 6px;
-  bottom: 6px;
-  width: 3px;
-  border-radius: 2px;
-  background: var(--color-blue);
 }
 
 .sidebar-label {

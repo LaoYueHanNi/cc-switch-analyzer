@@ -88,16 +88,18 @@ function formatTime(ts: number): string {
 <style scoped>
 .project-card {
   background: var(--bg-card);
-  border-radius: 6px;
-  border: 1px solid var(--border-main);
+  border-radius: var(--card-radius);
+  border: 0;
+  box-shadow: var(--shadow-card);
   padding: 10px;
   min-width: 0;
   overflow: hidden;
-  transition: box-shadow var(--transition-speed);
+  transition: box-shadow var(--transition-speed), background var(--transition-speed);
   cursor: pointer;
 }
 .project-card:hover {
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--shadow-focus);
+  background: var(--bg-hover);
 }
 
 .card-header {

@@ -240,7 +240,7 @@ watch(() => dbStore.hasDatabase, (val) => {
 /* 日志列表 */
 .log-list {
   flex: 1; min-height: 0; overflow-y: auto;
-  background: var(--bg-card); border-radius: 6px; border: 1px solid var(--border-main); font-size: 12px;
+  background: transparent; border-radius: 0; border: 0; font-size: 12px;
 }
 
 .session-rows {
@@ -251,7 +251,7 @@ watch(() => dbStore.hasDatabase, (val) => {
   display: flex; align-items: center; padding: 4px 10px;
   font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px;
   border-bottom: 1px solid var(--border-faint);
-  background: var(--bg-card);
+  background: var(--bg-base);
   position: sticky; top: 0; z-index: 1;
 }
 
@@ -289,12 +289,11 @@ watch(() => dbStore.hasDatabase, (val) => {
 .source-dot.cc-switch { background: var(--color-blue); }
 .source-dot.opencode { background: var(--color-amber); }
 .source-dot.ai-proxy { background: var(--color-green); }
-.source-dot.z-code { background: #00cec9; }
-.source-dot.proma { background: #ff9f43; }
-.source-dot.dsh { background: #e84393; }
-/* 深灰在黑夜模式下与卡片背景融为一体,改用主题变量随明暗自动适配 */
+.source-dot.z-code { background: var(--text-secondary); }
+.source-dot.proma { background: var(--color-orange); }
+.source-dot.dsh { background: var(--color-green); }
 .source-dot.minimax { background: var(--text-muted); }
-.source-dot.cursor { background: #6c5ce7; }
+.source-dot.cursor { background: var(--color-indigo); }
 
 /* 列宽 - 基础 */
 .col-time { width: 80px; flex-shrink: 0; color: var(--text-primary); font-weight: 500; }

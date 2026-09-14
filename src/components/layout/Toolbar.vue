@@ -85,8 +85,8 @@ watch(hookAlert, () => restartPolling())
   justify-content: center;
   width: 28px;
   height: 24px;
-  border: 1px solid var(--border-main);
-  border-radius: 4px;
+  border: 0.5px solid var(--border-main);
+  border-radius: 8px;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;

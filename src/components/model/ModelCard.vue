@@ -1,5 +1,9 @@
 <template>
-  <div class="model-card">
+  <div
+    class="model-card"
+    :class="{ open }"
+    @click="onCardClick"
+  >
     <!-- 模型名称 -->
     <div class="card-header">
       <span class="model-name">{{ modelId }}</span>
@@ -12,7 +16,7 @@
     <!-- 无定价数据提示 -->
     <div v-if="!hasPricing" class="no-pricing">
       <p>暂无定价数据</p>
-      <n-button size="tiny" type="primary" @click="$emit('setPricing', modelId)">
+      <n-button size="tiny" type="primary" @click.stop="$emit('setPricing', modelId)">
         设置定价
       </n-button>
     </div>
@@ -20,7 +24,7 @@
     <template v-else>
       <!-- 总费用（可点击对比） -->
       <div class="cost-section">
-        <span class="cost-value" @click="$emit('compare', modelId)">{{ formatCost(totalCost) }}</span>
+        <span class="cost-value" @click.stop="$emit('compare', modelId)">{{ formatCost(totalCost) }}</span>
         <span class="cost-label">总费用</span>
       </div>
 
@@ -54,7 +58,7 @@
       />
 
       <!-- 计费明细入口 -->
-      <div v-if="showBreakdownBtn" class="breakdown-btn" @click="showBreakdownDialog = true">计费明细</div>
+      <div v-if="showBreakdownBtn" class="breakdown-btn" @click.stop="showBreakdownDialog = true">计费明细</div>
       <PricingBreakdownDialog
         v-model:show="showBreakdownDialog"
         :model-name="modelId"
@@ -86,11 +90,13 @@ const props = defineProps<{
   cloudTimeRules?: CloudPricingTimeRule[]
   contextTierCosts?: Array<{ threshold: number; cost: number; tokens: number }>
   compareBuckets?: CompareBucket[]
+  open?: boolean
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   compare: [modelId: string]
   setPricing: [modelId: string]
+  pin: [modelId: string]
 }>()
 
 const modelId = computed(() => props.modelData.model)
@@ -174,6 +180,9 @@ function getRateStr(field: RateField): string {
 }
 
 const showBreakdownDialog = ref(false)
+function onCardClick(): void {
+  emit('pin', modelId.value)
+}
 const showBreakdownBtn = computed(() => {
   if (!props.compareBuckets?.length || !props.pricing) return false
   // 实际命中了多个档位（至少两个 threshold 不同）
@@ -191,16 +200,75 @@ const showBreakdownBtn = computed(() => {
 .model-card {
   position: relative;
   background: var(--bg-card);
-  border-radius: 6px;
-  border: 1px solid var(--border-main);
+  border-radius: var(--card-radius);
+  border: 0;
+  box-shadow: var(--shadow-card);
   padding: 10px;
   min-width: 0;
   overflow: hidden;
-  transition: box-shadow var(--transition-speed);
+  cursor: pointer;
+  transition: box-shadow var(--transition-speed), background var(--transition-speed);
 }
 
-.model-card:hover {
-  box-shadow: var(--shadow-card);
+.model-card:hover,
+.model-card.open {
+  box-shadow: var(--shadow-focus);
+  background: var(--bg-hover);
+}
+
+.model-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cost-value {
+  font-size: var(--font-size-cost);
+  font-weight: 700;
+  color: var(--color-cost);
+  cursor: pointer;
+  letter-spacing: -0.03em;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+  transition: opacity var(--transition-speed);
+}
+
+.token-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-green);
+}
+
+.stats-row {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  gap: 4px 8px;
+  margin-bottom: 4px;
+  font-size: 10px;
+  opacity: 0.55;
+  transition: opacity var(--transition-speed);
+}
+
+.model-card:hover .stats-row,
+.model-card.open .stats-row {
+  opacity: 1;
+}
+
+.model-card :deep(.pricing-grid) {
+  opacity: 0.16;
+  filter: saturate(0.45);
+  transition: opacity var(--transition-speed), filter var(--transition-speed);
+}
+
+.model-card:hover :deep(.pricing-grid),
+.model-card.open :deep(.pricing-grid) {
+  opacity: 1;
+  filter: none;
 }
 
 .card-header {
@@ -209,15 +277,6 @@ const showBreakdownBtn = computed(() => {
   gap: 4px;
   margin-bottom: 4px;
   min-width: 0;
-}
-
-.model-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .time-badge {
@@ -242,17 +301,6 @@ const showBreakdownBtn = computed(() => {
   margin-bottom: 2px;
 }
 
-.cost-value {
-  font-size: var(--font-size-cost);
-  font-weight: 700;
-  color: var(--color-cost);
-  cursor: pointer;
-  text-decoration: underline;
-  text-decoration-style: dotted;
-  text-underline-offset: 3px;
-  transition: opacity var(--transition-speed);
-}
-
 .cost-value:hover {
   opacity: 0.7;
 }
@@ -269,24 +317,9 @@ const showBreakdownBtn = computed(() => {
   margin-bottom: 4px;
 }
 
-.token-value {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-green);
-}
-
 .token-label {
   font-size: 10px;
   color: var(--text-muted);
-}
-
-.stats-row {
-  display: flex;
-  flex-wrap: nowrap;
-  overflow: hidden;
-  gap: 4px 8px;
-  margin-bottom: 4px;
-  font-size: 10px;
 }
 
 .stat-item {

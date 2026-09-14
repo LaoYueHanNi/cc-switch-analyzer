@@ -25,8 +25,10 @@
         :cloud-time-rules="card.cloudTimeRules"
         :context-tier-costs="card.contextTierCosts"
         :compare-buckets="card.compareBuckets"
+        :open="pinnedModel === card.modelData.model"
         @compare="onCompare"
         @set-pricing="onSetPricing"
+        @pin="onPin"
       />
     </div>
 
@@ -56,6 +58,11 @@ import type { CompareBucket } from '@/types/common'
 
 const queryStore = useQueryStore()
 const pricingStore = usePricingStore()
+const pinnedModel = ref<string | null>(null)
+
+function onPin(modelId: string): void {
+  pinnedModel.value = pinnedModel.value === modelId ? null : modelId
+}
 
 // 模型卡片数据
 interface ModelCardData {

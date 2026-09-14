@@ -120,19 +120,21 @@ function formatRelativeTime(ts: number): string {
 <style scoped>
 .task-card {
   background: var(--bg-card);
-  border-radius: 6px;
-  border: 1px solid var(--border-main);
+  border-radius: var(--card-radius);
+  border: 0;
+  box-shadow: var(--shadow-card);
   padding: 10px;
   min-width: 0;
   overflow: hidden;
-  transition: box-shadow var(--transition-speed);
+  transition: box-shadow var(--transition-speed), background var(--transition-speed);
   cursor: pointer;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 .task-card:hover {
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--shadow-focus);
+  background: var(--bg-hover);
 }
 
 .card-header {
@@ -154,17 +156,17 @@ function formatRelativeTime(ts: number): string {
 .status-tag {
   flex-shrink: 0;
   font-size: 10px;
-  padding: 0 6px;
-  height: 16px;
-  line-height: 16px;
-  border-radius: 2px;
-  background: var(--bg-hover);
+  padding: 1px 8px;
+  height: auto;
+  line-height: 17px;
+  border-radius: var(--chip-radius);
+  background: color-mix(in srgb, currentColor 12%, transparent);
   color: var(--text-muted);
-  border: 1px solid var(--border-main);
+  border: 0;
 }
 .status-tag--todo { color: var(--text-muted); }
-.status-tag--in_progress { color: var(--color-blue); border-color: var(--color-blue); }
-.status-tag--done { color: var(--color-green); border-color: var(--color-green); }
+.status-tag--in_progress { color: var(--color-blue); }
+.status-tag--done { color: var(--color-green); }
 .status-tag--archived { color: var(--text-faint); }
 
 .metrics-grid {

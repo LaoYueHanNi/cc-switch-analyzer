@@ -1196,23 +1196,23 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 }
 
 .source-dot.z-code {
-  background: #00cec9;
+  background: var(--text-secondary);
 }
 
 .source-dot.proma {
-  background: #ff9f43;
+  background: var(--color-orange);
 }
 
 .source-dot.dsh {
-  background: #e84393;
+  background: var(--color-green);
 }
 
 .source-dot.minimax {
-  background: #2d3436;
+  background: var(--text-muted);
 }
 
 .source-dot.cursor {
-  background: #6c5ce7;
+  background: var(--color-indigo);
 }
 
 .source-name {
@@ -1396,7 +1396,7 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 
 .cursor-account-badge {
   font-size: 10px;
-  color: var(--primary-color, #18a058);
+  color: var(--color-blue);
   border: 1px solid currentColor;
   border-radius: 3px;
   padding: 0 4px;
@@ -1457,7 +1457,7 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 }
 
 .dlg-feedback.ok {
-  background: color-mix(in srgb, var(--primary-color, #18a058) 14%, transparent);
+  background: color-mix(in srgb, var(--color-blue) 14%, transparent);
   color: var(--text-primary);
 }
 
@@ -1518,7 +1518,7 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
   font-size: 12px;
   font-weight: 400;
   line-height: 1.4;
-  color: var(--color-blue, #4a90d9);
+  color: var(--color-blue);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -1666,7 +1666,7 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 
 .ccs-app-check {
   margin: 0;
-  accent-color: var(--color-blue, #4a90d9);
+  accent-color: var(--color-blue);
   cursor: pointer;
 }
 
@@ -1735,7 +1735,7 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 }
 
 .dsh-plugin-state.ok {
-  color: var(--primary-color, #18a058);
+  color: var(--color-blue);
 }
 
 .dsh-plugin-state.warn {
@@ -1748,8 +1748,8 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
   line-height: 1;
   padding: 2px 5px;
   border-radius: 3px;
-  color: var(--primary-color, #18a058);
-  background: color-mix(in srgb, var(--primary-color, #18a058) 14%, transparent);
+  color: var(--color-blue);
+  background: color-mix(in srgb, var(--color-blue) 14%, transparent);
 }
 
 .dsh-plugin-mode-row {

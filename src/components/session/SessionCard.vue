@@ -1,41 +1,32 @@
 <template>
-  <div class="session-card">
-    <!-- 区域一：概览信息 -->
-    <div class="session-overview">
-      <div class="session-id-row">
-        <div class="session-id" :title="sessionId">{{ shortId }}</div>
+  <div class="session-card" :class="{ expanded }" @click="$emit('toggle')">
+    <div class="session-row">
+      <div class="session-row-main">
+        <div class="session-row-title">{{ title ? truncateText(title, 28) : shortId }}</div>
+        <div class="session-row-sub">{{ shortId }} · {{ formatRange(startTime, endTime) }}</div>
       </div>
-      <div class="session-project" v-if="project" :title="project">{{ project }}</div>
-      <div class="session-title" v-if="title" :title="title">{{ truncateText(title, 20) }}</div>
-      <div class="session-cost">{{ formatCost(totalCost) }}</div>
-      <div class="session-tokens">{{ formatNum(totalTokens) }} Token</div>
-      <div class="session-meta">
-        {{ requestCount }} 次请求, 持续 {{ formatDuration(durationSec) }}
-      </div>
-      <div class="session-time">
-        {{ formatRange(startTime, endTime) }}
-      </div>
-      <div class="session-context">
-        最大上下文: {{ formatNum(maxContextWidth) }}
-      </div>
-      <div class="session-cache">
-        缓存命中率: {{ formatPercent(cacheHitRate) }}
-      </div>
+      <span class="session-row-cost">{{ formatCost(totalCost) }}</span>
+      <span class="session-row-tok">{{ formatNum(totalTokens) }}</span>
+      <span class="session-row-req">{{ requestCount }} 次</span>
     </div>
 
-    <!-- 区域二：密度热力图 -->
-    <div class="session-density">
-      <DensityChart
-        v-if="timestamps.length > 0"
-        :timestamps="timestamps"
-        :start-time="startTime"
-        :end-time="endTime"
-      />
-    </div>
-
-    <!-- 区域三：模型分解 -->
-    <div class="session-models">
-      <ModelBreakdown :items="modelBreakdownWithCosts" />
+    <div v-if="expanded" class="session-extra" @click.stop>
+      <div class="session-overview">
+        <div class="session-meta">{{ requestCount }} 次请求, 持续 {{ formatDuration(durationSec) }}</div>
+        <div class="session-meta">最大上下文: {{ formatNum(maxContextWidth) }}</div>
+        <div class="session-meta">缓存命中率: {{ formatPercent(cacheHitRate) }}</div>
+      </div>
+      <div class="session-density">
+        <DensityChart
+          v-if="timestamps.length > 0"
+          :timestamps="timestamps"
+          :start-time="startTime"
+          :end-time="endTime"
+        />
+      </div>
+      <div class="session-models">
+        <ModelBreakdown :items="modelBreakdownWithCosts" />
+      </div>
     </div>
   </div>
 </template>
@@ -73,6 +64,11 @@ const props = defineProps<{
     cacheCreationCost?: number
     contextTierCosts?: Array<{ threshold: number; cost: number; tokens: number }>
   }>
+  expanded?: boolean
+}>()
+
+defineEmits<{
+  toggle: []
 }>()
 
 const shortId = computed(() => shortSessionId(props.sessionId))
@@ -106,20 +102,59 @@ function formatRange(start: number, end: number): string {
 
 <style scoped>
 .session-card {
+  padding: 4px 10px 4px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background var(--transition-speed);
+}
+.session-card:hover,
+.session-card.expanded {
+  background: var(--bg-hover);
+}
+
+.session-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 36px;
+}
+.session-row-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-row-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+.session-row-cost {
+  font-weight: 700;
+  color: var(--color-cost);
+  font-variant-numeric: tabular-nums;
+}
+.session-row-tok {
+  font-weight: 600;
+  color: var(--color-green);
+  font-variant-numeric: tabular-nums;
+}
+.session-row-req {
+  font-size: 11px;
+  color: var(--text-faint);
+  min-width: 3.5em;
+  text-align: right;
+}
+
+.session-extra {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  padding: var(--card-padding);
-  background: var(--bg-card);
-  border-radius: 8px;
-  border: 1px solid var(--border-main);
-  margin-bottom: 10px;
   align-items: center;
-  transition: border-color var(--transition-speed);
-}
-
-.session-card:hover {
-  border-color: var(--color-blue);
+  padding: 6px 0 10px;
 }
 
 .session-overview {
@@ -127,55 +162,7 @@ function formatRange(start: number, end: number): string {
   flex-shrink: 0;
 }
 
-.session-id-row {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-bottom: 2px;
-}
-
-.session-id {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  cursor: default;
-}
-
-.session-project {
-  font-size: 10px;
-  color: var(--text-faint);
-  font-weight: 400;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-title {
-  font-size: 11px;
-  color: var(--text-secondary);
-  font-weight: 500;
-  margin-bottom: 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-cost {
-  font-size: var(--font-size-cost);
-  font-weight: 700;
-  color: var(--color-cost);
-}
-
-.session-tokens {
-  font-size: 14px;
-  color: var(--color-green);
-  font-weight: 600;
-}
-
-.session-meta,
-.session-time,
-.session-context,
-.session-cache {
+.session-meta {
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 2px;

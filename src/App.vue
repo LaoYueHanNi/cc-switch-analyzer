@@ -20,14 +20,20 @@ onMounted(() => {
   document.addEventListener('contextmenu', e => e.preventDefault())
 })
 
-const themeOverrides = computed(() => ({
-  common: {
-    primaryColor: '#4a90d9',
-    primaryColorHover: '#5a9fe9',
-    fontWeight: '500',
-    fontWeightStrong: '600'
+const themeOverrides = computed(() => {
+  const dark = themeStore.isDark
+  const primary = dark ? '#567efe' : '#4176e6'
+  const primaryHover = dark ? '#6b8fff' : '#5a8aed'
+  return {
+    common: {
+      primaryColor: primary,
+      primaryColorHover: primaryHover,
+      primaryColorPressed: primary,
+      fontWeight: '500',
+      fontWeightStrong: '600'
+    }
   }
-}))
+})
 </script>
 
 <style>
@@ -45,77 +51,82 @@ const themeOverrides = computed(() => ({
 }
 
 :root {
-  --bg-base: #e2e2e2;
-  --bg-card: #f5f5f5;
-  --bg-card-alt: #ededed;
-  --bg-hover: #dadada;
+  --bg-base: #f1f3f5;
+  --bg-card: #ffffff;
+  --bg-card-alt: #f4f5f7;
+  --bg-hover: #e9ecf2;
+  --bg-sidebar: #f9fafb;
   --bg-flash: #d8e8d8;
 
-  --text-primary: #333;
-  --text-secondary: #555;
-  --text-tertiary: #666;
-  --text-muted: #777;
-  --text-faint: #888;
+  --text-primary: #0f1115;
+  --text-secondary: #61656b;
+  --text-tertiary: #81858c;
+  --text-muted: #979da6;
+  --text-faint: #adb2b8;
 
-  --border-main: #d0d0d0;
-  --border-light: #ddd;
-  --border-faint: #ececec;
+  --border-main: rgba(0, 0, 0, 0.10);
+  --border-light: rgba(0, 0, 0, 0.06);
+  --border-faint: rgba(0, 0, 0, 0.04);
 
-  --color-cost: #e74c3c;
-  --color-green: #0d8c6f;
-  --color-amber: #e67e22;
+  --color-cost: #ec1313;
+  --color-green: #22c55e;
+  --color-amber: #f59e0b;
   --color-amber-bg: #fef9e7;
-  --color-teal: #e91e63;
-  --color-teal-bg: #fce4ec;
-  --color-blue-bg: #eef5ff;
-  --color-purple: #8e44ad;
-  --color-purple-bg: #f3e5f5;
-  --color-orange: #f39c12;
-  --color-blue: #2980b9;
-  --color-indigo: #3f51b5;
-  --color-dark-orange: #d35400;
+  --color-teal: #4176e6;
+  --color-teal-bg: #eef2ff;
+  --color-blue-bg: #eef2ff;
+  --color-purple: #2563eb;
+  --color-purple-bg: #eef2ff;
+  --color-orange: #dd8629;
+  --color-blue: #4176e6;
+  --color-indigo: #1e40af;
+  --color-dark-orange: #f59e0b;
 
-  --shadow-card: 0 2px 6px rgba(0,0,0,0.06);
+  --shadow-card: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 3px 8px rgba(0, 0, 0, 0.03);
+  --shadow-focus: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 8px 24px rgba(0, 0, 0, 0.08);
 
-  /* 设计 token */
   --card-padding: 10px;
-  --card-gap: 10px;
-  --font-size-cost: 17px;
-  --transition-speed: 0.2s;
+  --card-gap: 12px;
+  --card-radius: 12px;
+  --chip-radius: 999px;
+  --font-size-cost: 20px;
+  --transition-speed: 0.16s;
 }
 
 html.dark {
-  --bg-base: #1a1a2e;
-  --bg-card: #282848;
-  --bg-card-alt: #2e2e50;
-  --bg-hover: #303050;
+  --bg-base: #151517;
+  --bg-card: #232324;
+  --bg-card-alt: #1c1c1e;
+  --bg-hover: #353638;
+  --bg-sidebar: #1b1b1c;
   --bg-flash: #1a3a2a;
 
-  --text-primary: #e0e0e0;
-  --text-secondary: #c0c0c0;
-  --text-tertiary: #a0a0a0;
-  --text-muted: #888888;
-  --text-faint: #6a6a6a;
+  --text-primary: #f9fafb;
+  --text-secondary: #cfd3d6;
+  --text-tertiary: #adb2b8;
+  --text-muted: #81858c;
+  --text-faint: #61656b;
 
-  --border-main: #4a4a6a;
-  --border-light: #3a3a5a;
-  --border-faint: #2a2a4a;
+  --border-main: rgba(255, 255, 255, 0.12);
+  --border-light: rgba(255, 255, 255, 0.08);
+  --border-faint: rgba(255, 255, 255, 0.06);
 
-  --color-cost: #ff6b6b;
-  --color-green: #2ed8a4;
-  --color-amber: #ffc857;
+  --color-cost: #f25a5a;
+  --color-green: #4ed17e;
+  --color-amber: #f7ad31;
   --color-amber-bg: #3a3520;
-  --color-teal: #f06292;
-  --color-teal-bg: #3a1a25;
+  --color-teal: #567efe;
+  --color-teal-bg: #1a2a40;
   --color-blue-bg: #1a2a40;
-  --color-purple: #b370cf;
-  --color-purple-bg: #2a1a30;
-  --color-orange: #ffc857;
-  --color-blue: #5dade2;
-  --color-indigo: #7986cb;
-  --color-dark-orange: #e67e22;
+  --color-purple: #93c5fd;
+  --color-purple-bg: #1a2a40;
+  --color-orange: #f7ad31;
+  --color-blue: #567efe;
+  --color-indigo: #60a5fa;
+  --color-dark-orange: #dd8629;
 
-  --shadow-card: 0 2px 6px rgba(0,0,0,0.3);
+  --shadow-card: 0 0 0 0.5px rgba(255, 255, 255, 0.10), 0 3px 8px rgba(0, 0, 0, 0.25);
+  --shadow-focus: 0 0 0 0.5px rgba(255, 255, 255, 0.18), 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 html, body {

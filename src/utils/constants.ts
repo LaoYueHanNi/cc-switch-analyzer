@@ -5,7 +5,7 @@ export const SUMMARY_ITEMS = [
   { key: 'totalRequests', label: '总请求数', color: 'var(--color-indigo)' },
   { key: 'totalCost', label: '总费用（¥）', color: 'var(--color-cost)' },
   { key: 'totalTokens', label: '总Token', color: 'var(--color-green)' },
-  { key: 'cacheHitRate', label: '缓存命中率', color: 'var(--color-teal)' },
+  { key: 'cacheHitRate', label: '缓存命中率', color: 'var(--color-blue)' },
   { key: 'totalInput', label: '输入', color: 'var(--color-purple)' },
   { key: 'totalOutput', label: '输出', color: 'var(--color-orange)' },
   { key: 'totalCacheRead', label: '缓存命中', color: 'var(--color-blue)' },

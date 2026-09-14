@@ -73,15 +73,17 @@ const items = computed<PricingItem[]>(() => [
 .pricing-grid {
   display: grid;
   grid-template-columns: 6px auto 1fr auto auto;
-  gap: 2px 4px;
+  gap: 2px 6px;
   font-size: 11px;
   align-items: center;
+  line-height: 1.4;
 }
 
 .pricing-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
+  display: block;
 }
 
 .pricing-label {

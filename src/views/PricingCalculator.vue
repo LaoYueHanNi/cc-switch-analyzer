@@ -626,8 +626,8 @@ watch(() => dbStore.hasDatabase, async (val) => {
 
 .pricing-toolbar {
   padding: 4px 0 6px;
-  border-bottom: 1px solid var(--border-light);
-  margin-bottom: 12px;
+  border-bottom: 0.5px solid var(--border-light);
+  margin-bottom: 8px;
 }
 
 .toolbar-row {
@@ -654,12 +654,13 @@ watch(() => dbStore.hasDatabase, async (val) => {
 }
 
 .family-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin-bottom: 10px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--border-light);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .subsection-title {
