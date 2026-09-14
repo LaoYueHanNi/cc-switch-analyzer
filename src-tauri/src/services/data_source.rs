@@ -328,7 +328,20 @@ pub fn create_source_entry_with_type(path: &str, explicit_type: Option<&DbType>)
         DbType::ExternalDb => Box::new(super::external_db::ExternalDbService::new()) as Box<dyn DataSource>,
         DbType::OpenCode => Box::new(super::opencode_db::OpenCodeDbService::new()) as Box<dyn DataSource>,
         DbType::AiProxy => Box::new(super::ai_proxy_db::AiProxyDbService::new()) as Box<dyn DataSource>,
-        DbType::ZCode => Box::new(super::zcode_db::ZCodeDbService::new()) as Box<dyn DataSource>,
+        DbType::ZCode => {
+            // 查询走应用库(扫描入库);传入路径可能是源 sqlite,这里改打开 pricing.db
+            let query_path = crate::utils::get_app_db_path()?;
+            let query_str = query_path.to_string_lossy().to_string();
+            let mut source = Box::new(super::zcode_db::ZCodeDbService::new()) as Box<dyn DataSource>;
+            source.open(&query_str)?;
+            return Ok(SourceEntry {
+                id,
+                path: query_str,
+                db_type,
+                source,
+                enabled: true,
+            });
+        }
         DbType::Cursor => return Err("Cursor 数据源需使用缓存目录路径".to_string()),
         // Proma 与 DSH/MiniMax 同为扫描入库模式，读取路径为应用库 pricing.db
         DbType::Proma => Box::new(super::proma_db::PromaDbService::new()) as Box<dyn DataSource>,

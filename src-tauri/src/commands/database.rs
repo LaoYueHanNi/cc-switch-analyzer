@@ -195,6 +195,15 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
             });
         }
     }
+    // ZCode:源 sqlite 存在则注册(读取路径为应用库 pricing.db,扫描在 auto_load_paths 统一执行)
+    if crate::services::zcode_scanner::zcode_sqlite_available() {
+        if let Ok(p) = crate::utils::get_app_db_path() {
+            defaults.push(PersistedSource {
+                path: p.to_string_lossy().to_string(),
+                db_type: "ZCode".to_string(),
+            });
+        }
+    }
     if !defaults.is_empty() {
         return auto_load_paths(&state, defaults);
     }
@@ -214,6 +223,10 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
     // 再扫描 Proma(若数据目录存在),保证 PromaDbService 打开时已有数据
     if let Ok(app_db) = state.app_db.lock() {
         let _ = crate::services::proma_scanner::scan_proma(&app_db);
+    }
+    // 再扫描 ZCode(若源 sqlite 存在),保证 ZCodeDbService 打开时已有数据
+    if let Ok(app_db) = state.app_db.lock() {
+        let _ = crate::services::zcode_scanner::scan_zcode(&app_db);
     }
 
     let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
@@ -358,6 +371,28 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
         }
     }
 
+    // ZCode:若源 sqlite 存在,补注册数据源(读取路径为应用库 pricing.db;数据已由开头 scan_zcode 入库)
+    if crate::services::zcode_scanner::zcode_sqlite_available() {
+        let already = sources
+            .iter()
+            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::ZCode));
+        if !already {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                let path_str = p.to_string_lossy().to_string();
+                match crate::services::data_source::create_source_entry_with_type(
+                    &path_str,
+                    Some(&crate::services::data_source::DbType::ZCode),
+                ) {
+                    Ok(entry) => {
+                        log::info!("[DB] 自动加载 ZCode 源: {}", path_str);
+                        sources.push(entry);
+                    }
+                    Err(e) => log::error!("[DB] ZCode 源加载失败: {}", e),
+                }
+            }
+        }
+    }
+
     if sources.is_empty() {
         return Ok(Vec::new());
     }
@@ -395,6 +430,11 @@ pub fn load_database(file_path: String, db_type: Option<String>, state: State<Ap
         .as_deref()
         .and_then(crate::services::data_source::DbType::from_label)
         .ok_or_else(|| "必须指定有效的数据源类型 (dbType)".to_string())?;
+    if matches!(explicit, crate::services::data_source::DbType::ZCode) {
+        if let Ok(app_db) = state.app_db.lock() {
+            let _ = crate::services::zcode_scanner::scan_zcode_at(&app_db, &canonical);
+        }
+    }
     let entry = create_source_entry_with_type(&canonical_str, Some(&explicit))?;
     log::info!("[DB] 打开成功 ({})", entry.db_type.label());
 
@@ -422,19 +462,32 @@ pub fn add_database(file_path: String, db_type: Option<String>, state: State<App
     let canonical_str = canonical.to_string_lossy().to_string();
     log::info!("[DB] add_database: {} (type={:?})", canonical_str, db_type);
 
+    let explicit = db_type
+        .as_deref()
+        .and_then(crate::services::data_source::DbType::from_label)
+        .ok_or_else(|| "必须指定有效的数据源类型 (dbType)".to_string())?;
+
+    if matches!(explicit, crate::services::data_source::DbType::ZCode) {
+        if let Ok(app_db) = state.app_db.lock() {
+            let _ = crate::services::zcode_scanner::scan_zcode_at(&app_db, &canonical);
+        }
+    }
+
     // 检查是否已加载，避免重复
     {
         let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+        if matches!(explicit, crate::services::data_source::DbType::ZCode)
+            && sources
+                .iter()
+                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::ZCode))
+        {
+            return Err("ZCode 数据源已加载".to_string());
+        }
         if sources.iter().any(|s| s.path == canonical_str) {
             return Err(format!("数据库已加载: {}", canonical_str));
         }
     }
 
-    // 类型驱动：调用方必须显式指定数据源类型，不做表名探测
-    let explicit = db_type
-        .as_deref()
-        .and_then(crate::services::data_source::DbType::from_label)
-        .ok_or_else(|| "必须指定有效的数据源类型 (dbType)".to_string())?;
     let entry = create_source_entry_with_type(&canonical_str, Some(&explicit))?;
     log::info!("[DB] 添加成功 ({})", entry.db_type.label());
 
@@ -505,6 +558,21 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         if has_proma {
             if let Ok(app_db) = state.app_db.lock() {
                 let _ = crate::services::proma_scanner::scan_proma(&app_db);
+            }
+        }
+    }
+
+    // ZCode:增量扫描(若存在 ZCode 源)。scanner 内部按源 sqlite mtime 跳过,开销可接受
+    {
+        let has_zcode = {
+            let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+            sources
+                .iter()
+                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::ZCode))
+        };
+        if has_zcode {
+            if let Ok(app_db) = state.app_db.lock() {
+                let _ = crate::services::zcode_scanner::scan_zcode(&app_db);
             }
         }
     }
@@ -973,6 +1041,11 @@ pub(crate) fn source_mtime(
                     .or_else(|| std::fs::metadata(&dir).ok()),
                 Err(_) => std::fs::metadata(path).ok(),
             }
+        }
+        DbType::ZCode => {
+            // ZCode 数据源 path 是 pricing.db;内容变化发生在源 sqlite
+            crate::services::zcode_scanner::zcode_sqlite_mtime()
+                .or_else(|| std::fs::metadata(path).ok())
         }
         _ => std::fs::metadata(path).ok(),
     }

@@ -973,7 +973,13 @@ const slots = computed(() => [
   {
     key: 'z-code',
     label: 'ZCode',
-    path: dbStore.sources.find(s => s.dbType === 'ZCode')?.path || '',
+    path: (() => {
+      const base = defaultPaths.value.zCode || ''
+      const src = dbStore.sources.find(s => s.dbType === 'ZCode')
+      return src && src.recordCount > 0
+        ? base + `  (已导入 ${src.recordCount} 条)`
+        : base
+    })(),
     defaultPath: defaultPaths.value.zCode,
     sourceId: dbStore.sources.find(s => s.dbType === 'ZCode')?.id || '',
     enabled: dbStore.sources.find(s => s.dbType === 'ZCode')?.enabled ?? true,

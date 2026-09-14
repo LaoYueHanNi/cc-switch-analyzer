@@ -29,6 +29,7 @@ pub mod proma_dir;
 pub mod proma_scanner;
 pub mod session_title;
 pub mod zcode_db;
+pub mod zcode_scanner;
 
 /// 非 Windows 平台的空实现
 #[cfg(not(target_os = "windows"))]
