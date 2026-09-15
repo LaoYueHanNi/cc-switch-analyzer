@@ -22,8 +22,8 @@ onMounted(() => {
 
 const themeOverrides = computed(() => {
   const dark = themeStore.isDark
-  const primary = dark ? '#567efe' : '#4176e6'
-  const primaryHover = dark ? '#6b8fff' : '#5a8aed'
+  const primary = dark ? '#8096d0' : '#4d7cc4'
+  const primaryHover = dark ? '#96aad9' : '#5e8bd0'
   return {
     common: {
       primaryColor: primary,
@@ -72,14 +72,14 @@ const themeOverrides = computed(() => {
   --color-green: #22c55e;
   --color-amber: #f59e0b;
   --color-amber-bg: #fef9e7;
-  --color-teal: #4176e6;
+  --color-teal: #4d7cc4;
   --color-teal-bg: #eef2ff;
   --color-blue-bg: #eef2ff;
-  --color-purple: #2563eb;
-  --color-purple-bg: #eef2ff;
+  --color-purple: #7a6498;
+  --color-purple-bg: #f4f0f7;
   --color-orange: #dd8629;
-  --color-blue: #4176e6;
-  --color-indigo: #1e40af;
+  --color-blue: #4d7cc4;
+  --color-indigo: #5b6b82;
   --color-dark-orange: #f59e0b;
 
   --shadow-card: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 3px 8px rgba(0, 0, 0, 0.03);
@@ -115,14 +115,14 @@ html.dark {
   --color-green: #4ed17e;
   --color-amber: #f7ad31;
   --color-amber-bg: #3a3520;
-  --color-teal: #567efe;
+  --color-teal: #8096d0;
   --color-teal-bg: #1a2a40;
   --color-blue-bg: #1a2a40;
-  --color-purple: #93c5fd;
-  --color-purple-bg: #1a2a40;
+  --color-purple: #cbb8dc;
+  --color-purple-bg: #2a2430;
   --color-orange: #f7ad31;
-  --color-blue: #567efe;
-  --color-indigo: #60a5fa;
+  --color-blue: #8096d0;
+  --color-indigo: #b4becc;
   --color-dark-orange: #dd8629;
 
   --shadow-card: 0 0 0 0.5px rgba(255, 255, 255, 0.10), 0 3px 8px rgba(0, 0, 0, 0.25);

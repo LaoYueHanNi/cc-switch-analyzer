@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-主界面按方案 B 落地：全局 token 为 DSH 近黑蓝灰（`#151517` / `#232324`）+ DeepSeek 蓝（亮 `#4176e6`，暗 `#567efe`）；Naive `primaryColor` 与 `--color-blue` 对齐；命中率走蓝，不再用荧光粉。筛选、摘要、工具条、趋势图去岛；只有模型、供应商、项目、任务、定价卡保留为对比单元。卡内名称/费用/Token 为主声，单次与命中率和声，PricingGrid 休息态压低、悬停或点击拉满，不淡化邻卡。会话二级默认一行，点开再展开热力与分解，恢复终端入口留在折叠外。实时表无卡片壳，数据源圆点与设置页同一套中性色。不搬 DSH 插件架构，不改 `zoom: 1.1`，字体保持 Inter。对照基准为 [`docs/demos/dsh-style-preview.html`](../../demos/dsh-style-preview.html)。
+主界面按方案 B 落地：全局 token 为 DSH 近黑蓝灰（`#151517` / `#232324`）；费用/Token/输出保持原明度，只改强调色相与饱和度——主蓝降饱和不降亮（亮 `#4d7cc4`，暗 `#8096d0`），命中率与缓存读共用这路蓝，输入用相近明度的灰紫（`--color-purple`）拆开。Naive `primaryColor` 与 `--color-blue` 对齐。不回荧光粉 / 午夜紫壳，也不靠压暗绿红橙来「去蓝」。筛选、摘要、工具条、趋势图去岛；只有模型、供应商、项目、任务、定价卡保留为对比单元。卡内名称/费用/Token 为主声，单次与命中率默认用次级正文色常亮（不靠悬停才显现），PricingGrid 休息态压低、悬停或点击拉满，不淡化邻卡。会话二级默认一行，点开再展开热力与分解，恢复终端入口留在折叠外。实时表无卡片壳，数据源圆点与设置页同一套中性色。不搬 DSH 插件架构，不改 `zoom: 1.1`，字体保持 Inter。对照基准为 [`docs/demos/dsh-style-preview.html`](../../demos/dsh-style-preview.html)。
 
 ## Alternatives considered
 

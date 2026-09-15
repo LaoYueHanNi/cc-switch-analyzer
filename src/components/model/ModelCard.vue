@@ -249,14 +249,7 @@ const showBreakdownBtn = computed(() => {
   overflow: hidden;
   gap: 4px 8px;
   margin-bottom: 4px;
-  font-size: 10px;
-  opacity: 0.55;
-  transition: opacity var(--transition-speed);
-}
-
-.model-card:hover .stats-row,
-.model-card.open .stats-row {
-  opacity: 1;
+  font-size: 11px;
 }
 
 .model-card :deep(.pricing-grid) {
@@ -323,7 +316,8 @@ const showBreakdownBtn = computed(() => {
 }
 
 .stat-item {
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
+  font-weight: 500;
   white-space: nowrap;
 }
 
