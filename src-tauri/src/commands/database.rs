@@ -595,21 +595,28 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
     // Antigravity:增量扫描(若存在 Antigravity 源)。scanner 先按会话 mtime 判断,
     // 全无变化时不会去枚举进程,此处开销仅一次目录遍历。IDE 未运行时静默失败——
     // 刷新是高频操作,不该因为 IDE 没开就报错。
-    {
+    //
+    // 记下导入条数供 Phase 1 使用:其他源"文件即数据",mtime 变了才有新数据;
+    // Antigravity 是"文件只是信号、用量在 RPC 里",两者可能不同步(上一轮响应还在
+    // 生成、这一轮才取到用量,而转录文件 mtime 未再变),此时不能被 mtime 判据挡掉。
+    let antigravity_imported = {
         let has_antigravity = {
             let sources = state.data_sources.read().map_err(|e| e.to_string())?;
             sources
                 .iter()
                 .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Antigravity))
         };
+        let mut imported = 0u32;
         if has_antigravity {
             if let Ok(app_db) = state.app_db.lock() {
-                if let Err(e) = crate::services::antigravity_scanner::scan_antigravity(&app_db) {
-                    log::debug!("[ANTIGRAVITY] 刷新时扫描跳过: {}", e);
+                match crate::services::antigravity_scanner::scan_antigravity(&app_db) {
+                    Ok(result) => imported = result.imported,
+                    Err(e) => log::debug!("[ANTIGRAVITY] 刷新时扫描跳过: {}", e),
                 }
             }
         }
-    }
+        imported
+    };
 
     // Proma:增量扫描(若存在 Proma 源)。scanner 内部按 mtime 跳过未变文件,开销可接受
     {
@@ -672,16 +679,12 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         }
 
         let mut mtimes = state.db_file_mtimes.lock().map_err(|e| e.to_string())?;
-        let mut any_changed = false;
+        let mut any_changed = antigravity_imported > 0;
         for entry in sources.iter() {
             let mtime = source_mtime(&entry.path, &entry.db_type, dsh_plugin_mode, dsh_plugin_dir.as_deref())
                 .and_then(|m| m.modified().ok());
-            let prev = mtimes.get(&entry.path).copied();
-            if mtime != prev {
+            if track_source_mtime(&mut mtimes, &entry.db_type, &entry.path, mtime) {
                 any_changed = true;
-                if let Some(t) = mtime {
-                    mtimes.insert(entry.path.clone(), t);
-                }
             }
         }
         drop(sources);
@@ -1117,6 +1120,34 @@ fn cursor_should_auto_load() -> bool {
     crate::utils::any_cursor_usage_csv_exists()
 }
 
+/// 记录一个数据源的内容 mtime，返回它是否相对上次发生了变化。
+///
+/// key 必须同时包含 db_type：扫描入库型源（DSH / MiniMax / Proma / ZCode /
+/// Antigravity）的 `path` 同为应用库 pricing.db，只用 path 做 key 会让它们互相
+/// 覆盖彼此的记录，于是每轮都判定「有变化」、Phase 1 早退形同失效。各源的真实
+/// 内容目录由 [`source_mtime`] 按 db_type 分派，key 也必须带上 db_type 才一一对应。
+fn track_source_mtime(
+    mtimes: &mut std::collections::HashMap<String, std::time::SystemTime>,
+    db_type: &crate::services::data_source::DbType,
+    path: &str,
+    mtime: Option<std::time::SystemTime>,
+) -> bool {
+    let key = format!("{}|{}", db_type.label(), path);
+    if mtime == mtimes.get(&key).copied() {
+        return false;
+    }
+    match mtime {
+        Some(t) => {
+            mtimes.insert(key, t);
+        }
+        // 源文件消失：清掉记录，否则此后每轮都是 Some(prev) != None，同样恒真
+        None => {
+            mtimes.remove(&key);
+        }
+    }
+    true
+}
+
 pub(crate) fn source_mtime(
     path: &str,
     db_type: &crate::services::data_source::DbType,
@@ -1319,3 +1350,73 @@ pub fn open_plugin_repo() -> Result<(), String> {
     crate::utils::open_url_in_browser(DSH_PLUGIN_REPO_URL)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::time::{Duration, SystemTime};
+
+    /// 扫描入库型源共用 pricing.db 路径，各自的 mtime 不能互相覆盖，
+    /// 否则 Phase 1 早退恒失效（每轮都判定有变化）
+    #[test]
+    fn track_source_mtime_isolates_sources_sharing_one_path() {
+        let mut mtimes: HashMap<String, SystemTime> = HashMap::new();
+        let shared_path = r"C:\Users\x\.cc-switch-analyzer\pricing.db";
+        let t_dsh = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let t_antigravity = SystemTime::UNIX_EPOCH + Duration::from_secs(2_000);
+
+        // 首轮：两个源都是新记录
+        assert!(track_source_mtime(&mut mtimes, &DbType::Dsh, shared_path, Some(t_dsh)));
+        assert!(track_source_mtime(
+            &mut mtimes,
+            &DbType::Antigravity,
+            shared_path,
+            Some(t_antigravity)
+        ));
+
+        // 次轮：两者 mtime 都没动，必须双双报告"无变化"
+        assert!(!track_source_mtime(&mut mtimes, &DbType::Dsh, shared_path, Some(t_dsh)));
+        assert!(!track_source_mtime(
+            &mut mtimes,
+            &DbType::Antigravity,
+            shared_path,
+            Some(t_antigravity)
+        ));
+
+        // 只有 Antigravity 变化时，DSH 不应被带着一起判定为变化
+        let t_next = t_antigravity + Duration::from_secs(60);
+        assert!(track_source_mtime(
+            &mut mtimes,
+            &DbType::Antigravity,
+            shared_path,
+            Some(t_next)
+        ));
+        assert!(!track_source_mtime(&mut mtimes, &DbType::Dsh, shared_path, Some(t_dsh)));
+    }
+
+    #[test]
+    fn track_source_mtime_handles_vanished_source_file() {
+        let mut mtimes: HashMap<String, SystemTime> = HashMap::new();
+        let path = r"C:\Users\x\.zcode\cli\db\db.sqlite";
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(500);
+
+        assert!(track_source_mtime(&mut mtimes, &DbType::ZCode, path, Some(t)));
+        // 文件消失：报告一次变化后清除记录
+        assert!(track_source_mtime(&mut mtimes, &DbType::ZCode, path, None));
+        // 仍然缺失时不该反复报告变化
+        assert!(!track_source_mtime(&mut mtimes, &DbType::ZCode, path, None));
+        // 文件回来：再报告一次
+        assert!(track_source_mtime(&mut mtimes, &DbType::ZCode, path, Some(t)));
+    }
+
+    /// Cursor 每个账号是独立目录，同类型多源仍按 path 区分
+    #[test]
+    fn track_source_mtime_keeps_same_type_different_paths_apart() {
+        let mut mtimes: HashMap<String, SystemTime> = HashMap::new();
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(10);
+        assert!(track_source_mtime(&mut mtimes, &DbType::Cursor, "/cache/acc1", Some(t)));
+        assert!(track_source_mtime(&mut mtimes, &DbType::Cursor, "/cache/acc2", Some(t)));
+        assert!(!track_source_mtime(&mut mtimes, &DbType::Cursor, "/cache/acc1", Some(t)));
+        assert!(!track_source_mtime(&mut mtimes, &DbType::Cursor, "/cache/acc2", Some(t)));
+    }
+}
