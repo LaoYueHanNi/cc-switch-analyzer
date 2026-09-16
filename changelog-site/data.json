@@ -1,6 +1,22 @@
 [
   {
-    "version": "Unreleased",
+    "version": "0.8.4",
+    "date": "2026-09-16",
+    "commits": [
+      {
+        "hash": "db89960",
+        "subject": "fix(refresh): mtime 快检缓存键补上 db_type，恢复扫描型源的早退",
+        "date": "2026-09-16"
+      },
+      {
+        "hash": "57da4c4",
+        "subject": "feat(antigravity): 接入本地用量扫描，RPC 取数入库并增量去重",
+        "date": "2026-09-16"
+      }
+    ]
+  },
+  {
+    "version": "0.8.3",
     "date": "2026-09-15",
     "commits": [
       {
