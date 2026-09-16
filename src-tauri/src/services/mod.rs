@@ -1,3 +1,5 @@
+pub mod antigravity_db;
+pub mod antigravity_scanner;
 pub mod app_db;
 pub mod ai_proxy_db;
 pub mod cloud_pricing;

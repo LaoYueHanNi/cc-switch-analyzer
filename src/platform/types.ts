@@ -267,6 +267,7 @@ export interface DefaultPaths {
   proma: string | null
   dsh: string | null
   minimax: string | null
+  antigravity: string | null
 }
 
 export interface DshScanResult {
@@ -315,6 +316,7 @@ export interface PlatformAdapter {
   refreshDatabase(): Promise<RefreshResult>
   scanDshNow(): Promise<DshScanResult>
   scanMinimaxNow(): Promise<DshScanResult>
+  scanAntigravityNow(): Promise<DshScanResult>
   scanPromaNow(): Promise<DshScanResult>
   getDshSettings(): Promise<DshSettings>
   setDshPluginMode(usePlugin: boolean): Promise<DshSettings>

@@ -84,6 +84,9 @@ export const platformAdapter: PlatformAdapter = {
   async scanMinimaxNow(): Promise<DshScanResult> {
     return invoke<DshScanResult>('scan_minimax_now')
   },
+  async scanAntigravityNow(): Promise<DshScanResult> {
+    return invoke<DshScanResult>('scan_antigravity_now')
+  },
   async scanPromaNow(): Promise<DshScanResult> {
     return invoke<DshScanResult>('scan_proma_now')
   },

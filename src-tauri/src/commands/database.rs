@@ -195,6 +195,24 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
             });
         }
     }
+    // Antigravity:仅在已有历史用量时注册。其用量不落盘、只能向运行中的
+    // language server RPC 取,启动时不主动拉取(要起 PowerShell 枚举进程,
+    // 且 IDE 常态未开),但历史数据要能照常展示。首次导入由用户手动扫描触发。
+    {
+        let has_imported = state
+            .app_db
+            .lock()
+            .map(|db| crate::services::antigravity_scanner::imported_record_count(&db) > 0)
+            .unwrap_or(false);
+        if has_imported {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                defaults.push(PersistedSource {
+                    path: p.to_string_lossy().to_string(),
+                    db_type: "Antigravity".to_string(),
+                });
+            }
+        }
+    }
     // ZCode:源 sqlite 存在则注册(读取路径为应用库 pricing.db,扫描在 auto_load_paths 统一执行)
     if crate::services::zcode_scanner::zcode_sqlite_available() {
         if let Ok(p) = crate::utils::get_app_db_path() {
@@ -344,6 +362,33 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
                         sources.push(entry);
                     }
                     Err(e) => log::error!("[DB] MiniMax 源加载失败: {}", e),
+                }
+            }
+        }
+    }
+
+    // Antigravity:若已有历史用量,补注册数据源(不主动 RPC 拉取,见 default_sources 说明)
+    {
+        let has_imported = state
+            .app_db
+            .lock()
+            .map(|db| crate::services::antigravity_scanner::imported_record_count(&db) > 0)
+            .unwrap_or(false);
+        let already = sources
+            .iter()
+            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Antigravity));
+        if has_imported && !already {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                let path_str = p.to_string_lossy().to_string();
+                match crate::services::data_source::create_source_entry_with_type(
+                    &path_str,
+                    Some(&crate::services::data_source::DbType::Antigravity),
+                ) {
+                    Ok(entry) => {
+                        log::info!("[DB] 自动加载 Antigravity 源: {}", path_str);
+                        sources.push(entry);
+                    }
+                    Err(e) => log::error!("[DB] Antigravity 源加载失败: {}", e),
                 }
             }
         }
@@ -547,6 +592,25 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         }
     }
 
+    // Antigravity:增量扫描(若存在 Antigravity 源)。scanner 先按会话 mtime 判断,
+    // 全无变化时不会去枚举进程,此处开销仅一次目录遍历。IDE 未运行时静默失败——
+    // 刷新是高频操作,不该因为 IDE 没开就报错。
+    {
+        let has_antigravity = {
+            let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+            sources
+                .iter()
+                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Antigravity))
+        };
+        if has_antigravity {
+            if let Ok(app_db) = state.app_db.lock() {
+                if let Err(e) = crate::services::antigravity_scanner::scan_antigravity(&app_db) {
+                    log::debug!("[ANTIGRAVITY] 刷新时扫描跳过: {}", e);
+                }
+            }
+        }
+    }
+
     // Proma:增量扫描(若存在 Proma 源)。scanner 内部按 mtime 跳过未变文件,开销可接受
     {
         let has_proma = {
@@ -737,6 +801,62 @@ pub fn scan_minimax_now(state: State<AppState>) -> Result<crate::services::dsh_s
                         sources.push(entry);
                     }
                     Err(e) => log::error!("[DB] MiniMax 源注册失败: {}", e),
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// 扫描 Antigravity 用量。
+///
+/// 与其他扫描型源不同：Antigravity 的 token 用量不写磁盘，只能向运行中的
+/// language server 用 RPC 取。因此 IDE 未打开时会返回 Err（错误信息直接展示给
+/// 用户，说明需要保持 Antigravity 打开），而不是静默返回 0 条。
+#[tauri::command]
+pub fn scan_antigravity_now(
+    state: State<AppState>,
+) -> Result<crate::services::dsh_scanner::DshScanResult, String> {
+    if !crate::services::antigravity_scanner::antigravity_source_dir_available() {
+        // 数据目录不存在:与其他源目录缺失时行为一致,返回现有记录数而非报错
+        let mut result = crate::services::dsh_scanner::DshScanResult {
+            files_scanned: 0,
+            imported: 0,
+            skipped: 0,
+            errors: 0,
+            total_records: 0,
+        };
+        if let Ok(app_db) = state.app_db.lock() {
+            result.total_records = app_db
+                .get_session_log_count(crate::services::antigravity_scanner::ANTIGRAVITY_SOURCE)
+                .unwrap_or(0);
+        }
+        return Ok(result);
+    }
+
+    // 1. RPC 拉取用量入库（IDE 未运行时在此返回 Err）
+    let result = {
+        let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+        crate::services::antigravity_scanner::scan_antigravity(&app_db)?
+    };
+    // 2. 确保 Antigravity 源已注册,否则扫描了也无数据源可读
+    {
+        let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+        let already = sources
+            .iter()
+            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Antigravity));
+        if !already {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                let path_str = p.to_string_lossy().to_string();
+                match crate::services::data_source::create_source_entry_with_type(
+                    &path_str,
+                    Some(&crate::services::data_source::DbType::Antigravity),
+                ) {
+                    Ok(entry) => {
+                        log::info!("[DB] 注册 Antigravity 源: {}", path_str);
+                        sources.push(entry);
+                    }
+                    Err(e) => log::error!("[DB] Antigravity 源注册失败: {}", e),
                 }
             }
         }
@@ -964,6 +1084,7 @@ pub struct DefaultPaths {
     pub proma: Option<String>,
     pub dsh: Option<String>,
     pub minimax: Option<String>,
+    pub antigravity: Option<String>,
 }
 
 #[tauri::command]
@@ -987,7 +1108,9 @@ pub fn get_default_paths() -> Result<DefaultPaths, String> {
     let minimax = crate::utils::get_default_minimax_dir().ok()
         .filter(|p| p.join("v2").join("sessions").is_dir())
         .map(|p| p.to_string_lossy().to_string());
-    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code, proma, dsh, minimax })
+    let antigravity = crate::services::antigravity_scanner::primary_data_root()
+        .map(|p| p.to_string_lossy().to_string());
+    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code, proma, dsh, minimax, antigravity })
 }
 
 fn cursor_should_auto_load() -> bool {
@@ -1041,6 +1164,13 @@ pub(crate) fn source_mtime(
                     .or_else(|| std::fs::metadata(&dir).ok()),
                 Err(_) => std::fs::metadata(path).ok(),
             }
+        }
+        DbType::Antigravity => {
+            // Antigravity 数据源 path 是 pricing.db;用量本身不落盘(只能向 language
+            // server 问),但每轮对话会更新 ~/.gemini/antigravity* 下的转录文件,
+            // 以此作为"可能有新用量"的信号
+            crate::services::antigravity_scanner::latest_session_file_mtime()
+                .or_else(|| std::fs::metadata(path).ok())
         }
         DbType::ZCode => {
             // ZCode 数据源 path 是 pricing.db;内容变化发生在源 sqlite
@@ -1188,3 +1318,4 @@ fn canonicalize_dir(dir: &str) -> Result<std::path::PathBuf, String> {
 pub fn open_plugin_repo() -> Result<(), String> {
     crate::utils::open_url_in_browser(DSH_PLUGIN_REPO_URL)
 }
+

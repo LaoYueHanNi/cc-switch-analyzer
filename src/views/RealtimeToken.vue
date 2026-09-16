@@ -116,7 +116,7 @@ function dotClass(dbType: string): string {
   const map: Record<string, string> = {
     'CCS': 'cc-switch', 'OpenCode': 'opencode', 'AIProxy': 'ai-proxy',
     'Cursor': 'cursor', 'ZCode': 'z-code', 'Proma': 'proma',
-    'DSH': 'dsh', 'MiniMax': 'minimax',
+    'DSH': 'dsh', 'MiniMax': 'minimax', 'Antigravity': 'antigravity',
   }
   return map[dbType] ?? dbType.toLowerCase()
 }
@@ -293,6 +293,7 @@ watch(() => dbStore.hasDatabase, (val) => {
 .source-dot.proma { background: var(--color-orange); }
 .source-dot.dsh { background: var(--color-green); }
 .source-dot.minimax { background: var(--text-muted); }
+.source-dot.antigravity { background: var(--color-purple, var(--color-indigo)); }
 .source-dot.cursor { background: var(--color-indigo); }
 
 /* 列宽 - 基础 */

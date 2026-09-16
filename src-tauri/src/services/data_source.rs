@@ -165,11 +165,12 @@ pub enum DbType {
     Proma,
     Dsh,
     Minimax,
+    Antigravity,
 }
 
 impl DbType {
     /// 数据源规范名（canonical name）：CCS / OpenCode / AIProxy / Cursor /
-    /// ZCode / Proma / DSH / MiniMax。该名称同时用作：
+    /// ZCode / Proma / DSH / MiniMax / Antigravity。该名称同时用作：
     /// - 持久化 last_db_paths 的 db_type
     /// - 固定型数据源的 provider_id / provider_name
     /// - session_request_logs 入库的 source 列值
@@ -183,6 +184,7 @@ impl DbType {
             DbType::Proma => "Proma",
             DbType::Dsh => "DSH",
             DbType::Minimax => "MiniMax",
+            DbType::Antigravity => "Antigravity",
         }
     }
 
@@ -198,6 +200,7 @@ impl DbType {
             "Proma" => Some(DbType::Proma),
             "DSH" => Some(DbType::Dsh),
             "MiniMax" => Some(DbType::Minimax),
+            "Antigravity" => Some(DbType::Antigravity),
             _ => None,
         }
     }
@@ -343,10 +346,13 @@ pub fn create_source_entry_with_type(path: &str, explicit_type: Option<&DbType>)
             });
         }
         DbType::Cursor => return Err("Cursor 数据源需使用缓存目录路径".to_string()),
-        // Proma 与 DSH/MiniMax 同为扫描入库模式，读取路径为应用库 pricing.db
+        // Proma 与 DSH/MiniMax/Antigravity 同为扫描入库模式，读取路径为应用库 pricing.db
         DbType::Proma => Box::new(super::proma_db::PromaDbService::new()) as Box<dyn DataSource>,
         DbType::Dsh => Box::new(super::dsh_db::DshDbService::new()) as Box<dyn DataSource>,
         DbType::Minimax => Box::new(super::minimax_db::MinimaxDbService::new()) as Box<dyn DataSource>,
+        DbType::Antigravity => {
+            Box::new(super::antigravity_db::AntigravityDbService::new()) as Box<dyn DataSource>
+        }
     };
     source.open(path)?;
     Ok(SourceEntry { id, path: path.to_string(), db_type, source, enabled: true })

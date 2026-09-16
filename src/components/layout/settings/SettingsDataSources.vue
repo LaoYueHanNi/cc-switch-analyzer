@@ -29,22 +29,22 @@
 
       <!-- 路径/状态 + 操作（Cursor 已并入账号行，此处仅其它数据源） -->
       <div v-if="slot.key !== 'cursor'" class="source-path-row">
-        <span class="path-label">{{ slot.key === 'dsh' || slot.key === 'minimax' || slot.key === 'proma' ? '数据目录' : '数据库地址' }}</span>
+        <span class="path-label">{{ isScanSource(slot.key) ? '数据目录' : '数据库地址' }}</span>
         <span class="source-path" :title="slot.path || ''">{{ slot.path || (slot.key === 'cc-switch' ? '未启用（可开启自动发现）' : '未选择') }}</span>
         <div class="path-actions">
           <button
             type="button"
             class="icon-btn"
-            :title="slot.key === 'dsh' || slot.key === 'minimax' || slot.key === 'proma' ? '立即扫描' : (slot.path ? '更换数据库' : '选择数据库')"
+            :title="isScanSource(slot.key) ? '立即扫描' : (slot.path ? '更换数据库' : '选择数据库')"
             @click="onSelect(slot.key)"
           >
             <n-icon size="14">
-              <sync-outline v-if="slot.key === 'dsh' || slot.key === 'minimax' || slot.key === 'proma'" />
+              <sync-outline v-if="isScanSource(slot.key)" />
               <create-outline v-else />
             </n-icon>
           </button>
           <button
-            v-if="slot.path && slot.key !== 'dsh' && slot.key !== 'minimax' && slot.key !== 'proma'"
+            v-if="slot.path && !isScanSource(slot.key)"
             type="button"
             class="icon-btn danger"
             title="移除"
@@ -53,6 +53,11 @@
             <n-icon size="14"><close-outline /></n-icon>
           </button>
         </div>
+      </div>
+
+      <!-- Antigravity：用量只能向运行中的 language server 取，取回后与其他源一样入库 -->
+      <div v-if="slot.key === 'antigravity'" class="source-hint">
+        Antigravity 自身不保存用量，需在其运行时扫描；读取的数据存入本地库，离线可查
       </div>
 
       <!-- CCS：过滤会话日志同步写入的记录（CC-Switch 从各终端会话日志解析写入的用量） -->
@@ -1035,6 +1040,20 @@ const slots = computed(() => [
     sourceId: dbStore.sources.find(s => s.dbType === 'MiniMax')?.id || '',
     enabled: dbStore.sources.find(s => s.dbType === 'MiniMax')?.enabled ?? true,
   },
+  {
+    key: 'antigravity',
+    label: 'Antigravity',
+    path: (() => {
+      const base = defaultPaths.value.antigravity || ''
+      const src = dbStore.sources.find(s => s.dbType === 'Antigravity')
+      return src && src.recordCount > 0
+        ? base + `  (已导入 ${src.recordCount} 条)`
+        : base
+    })(),
+    defaultPath: defaultPaths.value.antigravity,
+    sourceId: dbStore.sources.find(s => s.dbType === 'Antigravity')?.id || '',
+    enabled: dbStore.sources.find(s => s.dbType === 'Antigravity')?.enabled ?? true,
+  },
 ])
 
 // slot key → 后端 dbType 字面量映射（canonical 名见 DbType::label）
@@ -1046,6 +1065,13 @@ const DB_TYPE_MAP: Record<string, string> = {
   'proma': 'Proma',
   'dsh': 'DSH',
   'minimax': 'MiniMax',
+  'antigravity': 'Antigravity',
+}
+
+// 扫描入库型数据源：路径固定，操作是「立即扫描」而非选库，也不提供移除
+const SCAN_SOURCE_KEYS = ['dsh', 'minimax', 'proma', 'antigravity']
+function isScanSource(key: string): boolean {
+  return SCAN_SOURCE_KEYS.includes(key)
 }
 
 async function onSelect(key: string): Promise<void> {
@@ -1071,6 +1097,25 @@ async function onSelect(key: string): Promise<void> {
       dbStore.setSources(sources)
     } catch (e) {
       console.error('[MiniMax] 扫描失败', e)
+    }
+    return
+  }
+  // Antigravity 用量只存在于运行中的 language server（不落盘），扫描即 RPC 拉取。
+  // IDE 未打开时后端会返回错误，这里必须把原因显示出来，否则用户只会看到"0 条"。
+  if (key === 'antigravity') {
+    try {
+      const result = await platformAdapter.scanAntigravityNow()
+      console.log('[Antigravity] 扫描完成', result)
+      const sources = await platformAdapter.listDatabases()
+      dbStore.setSources(sources)
+      if (result.imported > 0) {
+        message.success(`Antigravity 新增 ${result.imported} 条用量记录`)
+      } else {
+        message.info('Antigravity 用量已是最新')
+      }
+    } catch (e) {
+      console.error('[Antigravity] 扫描失败', e)
+      message.error(typeof e === 'string' ? e : String((e as any)?.message || e || '扫描失败'))
     }
     return
   }
@@ -1215,6 +1260,18 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 
 .source-dot.minimax {
   background: var(--text-muted);
+}
+
+.source-dot.antigravity {
+  background: var(--color-purple, var(--color-indigo));
+}
+
+.source-hint {
+  margin-top: 4px;
+  padding-left: 16px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
 }
 
 .source-dot.cursor {
