@@ -222,6 +222,15 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
             });
         }
     }
+    // Kimi (Kimi CLI / Kimi Code / Kimi Work): 数据目录存在则注册(读取路径为应用库 pricing.db,扫描在 auto_load_paths 统一执行)
+    if crate::services::kimi_scanner::kimi_source_available() {
+        if let Ok(p) = crate::utils::get_app_db_path() {
+            defaults.push(PersistedSource {
+                path: p.to_string_lossy().to_string(),
+                db_type: "Kimi".to_string(),
+            });
+        }
+    }
     if !defaults.is_empty() {
         return auto_load_paths(&state, defaults);
     }
@@ -237,6 +246,10 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
     // 再扫描 MiniMax(若数据目录存在),保证 MinimaxDbService 打开时已有数据
     if let Ok(app_db) = state.app_db.lock() {
         let _ = crate::services::minimax_scanner::scan_minimax(&app_db);
+    }
+    // 再扫描 Kimi(若数据目录存在),保证 KimiDbService 打开时已有数据
+    if let Ok(app_db) = state.app_db.lock() {
+        let _ = crate::services::kimi_scanner::scan_kimi(&app_db);
     }
     // 再扫描 Proma(若数据目录存在),保证 PromaDbService 打开时已有数据
     if let Ok(app_db) = state.app_db.lock() {
@@ -433,6 +446,28 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
                         sources.push(entry);
                     }
                     Err(e) => log::error!("[DB] ZCode 源加载失败: {}", e),
+                }
+            }
+        }
+    }
+
+    // Kimi:若数据目录存在,补注册数据源(读取路径为应用库 pricing.db;数据已由开头 scan_kimi 入库)
+    if crate::services::kimi_scanner::kimi_source_available() {
+        let already = sources
+            .iter()
+            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Kimi));
+        if !already {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                let path_str = p.to_string_lossy().to_string();
+                match crate::services::data_source::create_source_entry_with_type(
+                    &path_str,
+                    Some(&crate::services::data_source::DbType::Kimi),
+                ) {
+                    Ok(entry) => {
+                        log::info!("[DB] 自动加载 Kimi 源: {}", path_str);
+                        sources.push(entry);
+                    }
+                    Err(e) => log::error!("[DB] Kimi 源加载失败: {}", e),
                 }
             }
         }
@@ -648,6 +683,21 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         }
     }
 
+    // Kimi:增量扫描(若存在 Kimi 源)。scanner 内部按 mtime 跳过未变文件,开销可接受
+    {
+        let has_kimi = {
+            let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+            sources
+                .iter()
+                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Kimi))
+        };
+        if has_kimi {
+            if let Ok(app_db) = state.app_db.lock() {
+                let _ = crate::services::kimi_scanner::scan_kimi(&app_db);
+            }
+        }
+    }
+
     // DSH:增量扫描(若存在 DSH 源,按当前模式扫插件数据或会话日志)。
     // scanner 内部按 mtime 跳过未变文件,开销可接受
     let (dsh_plugin_mode, dsh_plugin_dir) = {
@@ -711,7 +761,7 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         let since = *state.db_latest_timestamp.lock().map_err(|e| e.to_string())?;
         let raw_records = run_streaming_dedup(&sources, since);
         let new_tokens: Vec<SessionRequestToken> = raw_records.into_iter()
-            .map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read, cache_creation, _latency, _is_codex)| {
+            .map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read, cache_creation, _latency, _first_token_latency, _is_codex)| {
                 SessionRequestToken { session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read, cache_creation }
             })
             .collect();
@@ -804,6 +854,57 @@ pub fn scan_minimax_now(state: State<AppState>) -> Result<crate::services::dsh_s
                         sources.push(entry);
                     }
                     Err(e) => log::error!("[DB] MiniMax 源注册失败: {}", e),
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn scan_kimi_now(state: State<AppState>) -> Result<crate::services::dsh_scanner::DshScanResult, String> {
+    // 1. 扫描 Kimi 会话日志入库(增量)
+    let (result, kimi_available) = {
+        if crate::services::kimi_scanner::kimi_source_available() {
+            let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+            let result = crate::services::kimi_scanner::scan_kimi(&app_db)?;
+            (result, true)
+        } else {
+            let mut result = crate::services::dsh_scanner::DshScanResult {
+                files_scanned: 0,
+                imported: 0,
+                skipped: 0,
+                errors: 0,
+                total_records: 0,
+            };
+            if let Ok(app_db) = state.app_db.lock() {
+                result.total_records = app_db
+                    .get_session_log_count(crate::services::kimi_scanner::KIMI_SOURCE)
+                    .unwrap_or(0);
+            }
+            (result, false)
+        }
+    };
+    // 2. 确保 Kimi 源已注册
+    if kimi_available {
+        let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+        let already = sources
+            .iter()
+            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Kimi));
+        if !already {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                let path_str = p.to_string_lossy().to_string();
+                match crate::services::data_source::create_source_entry_with_type(
+                    &path_str,
+                    Some(&crate::services::data_source::DbType::Kimi),
+                ) {
+                    Ok(entry) => {
+                        log::info!("[DB] 注册 Kimi 源: {}", path_str);
+                        sources.push(entry);
+                        let info: Vec<SourceInfo> = sources.iter().map(|s| s.to_info()).collect();
+                        save_paths(&state, &info);
+                    }
+                    Err(e) => log::error!("[DB] Kimi 源注册失败: {}", e),
                 }
             }
         }
@@ -1088,6 +1189,7 @@ pub struct DefaultPaths {
     pub dsh: Option<String>,
     pub minimax: Option<String>,
     pub antigravity: Option<String>,
+    pub kimi: Option<String>,
 }
 
 #[tauri::command]
@@ -1113,7 +1215,9 @@ pub fn get_default_paths() -> Result<DefaultPaths, String> {
         .map(|p| p.to_string_lossy().to_string());
     let antigravity = crate::services::antigravity_scanner::primary_data_root()
         .map(|p| p.to_string_lossy().to_string());
-    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code, proma, dsh, minimax, antigravity })
+    let kimi = crate::services::kimi_scanner::primary_kimi_dir()
+        .map(|p| p.to_string_lossy().to_string());
+    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code, proma, dsh, minimax, antigravity, kimi })
 }
 
 fn cursor_should_auto_load() -> bool {
@@ -1206,6 +1310,11 @@ pub(crate) fn source_mtime(
         DbType::ZCode => {
             // ZCode 数据源 path 是 pricing.db;内容变化发生在源 sqlite
             crate::services::zcode_scanner::zcode_sqlite_mtime()
+                .or_else(|| std::fs::metadata(path).ok())
+        }
+        DbType::Kimi => {
+            // Kimi 数据源 path 是 pricing.db;内容变化发生在 Kimi 会话目录下
+            crate::services::kimi_scanner::latest_session_file_mtime()
                 .or_else(|| std::fs::metadata(path).ok())
         }
         _ => std::fs::metadata(path).ok(),

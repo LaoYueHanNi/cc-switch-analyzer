@@ -486,6 +486,7 @@ struct UsageRow {
     output_tokens: i64,
     cache_read: i64,
     latency: i64,
+    first_token_latency: i64,
     response_id: String,
     message_id: String,
 }
@@ -532,7 +533,7 @@ fn rfc3339_to_epoch(text: &str) -> Option<i64> {
 /// / `cacheReadTokens`(仅命中缓存前缀时才出现) / `responseId` / `messageId`。
 /// `inputTokens` **不含** cacheRead(观测到 input < cacheRead 的行),
 /// 因此无需像 gemini / codex 那样反向扣减。
-fn parse_usage(usage: &Value, model: &str, latency: i64) -> Option<UsageRow> {
+fn parse_usage(usage: &Value, model: &str, latency: i64, first_token_latency: i64) -> Option<UsageRow> {
     let response_id = json_str(usage.get("responseId"));
     let message_id = json_str(usage.get("messageId"));
     let dedup_key = if !response_id.is_empty() {
@@ -566,6 +567,7 @@ fn parse_usage(usage: &Value, model: &str, latency: i64) -> Option<UsageRow> {
         output_tokens,
         cache_read,
         latency,
+        first_token_latency,
         response_id,
         message_id,
     })
@@ -601,20 +603,17 @@ fn parse_generator_metadata(payload: &Value) -> Vec<UsageRow> {
                 response_model
             }
         };
-        let latency = {
+        let (latency, first_token_latency) = {
             let streaming = duration_ms(chat_model.get("streamingDuration"));
-            if streaming > 0 {
-                streaming
-            } else {
-                duration_ms(chat_model.get("timeToFirstToken"))
-            }
+            let ttft = duration_ms(chat_model.get("timeToFirstToken"));
+            (ttft + streaming, ttft)
         };
 
         let mut collected = Vec::new();
         if let Some(retries) = chat_model.get("retryInfos").and_then(|v| v.as_array()) {
             for retry in retries {
                 if let Some(usage) = retry.get("usage") {
-                    if let Some(row) = parse_usage(usage, &model, latency) {
+                    if let Some(row) = parse_usage(usage, &model, latency, first_token_latency) {
                         collected.push(row);
                     }
                 }
@@ -622,7 +621,7 @@ fn parse_generator_metadata(payload: &Value) -> Vec<UsageRow> {
         }
         if collected.is_empty() {
             if let Some(usage) = chat_model.get("usage") {
-                if let Some(row) = parse_usage(usage, &model, latency) {
+                if let Some(row) = parse_usage(usage, &model, latency, first_token_latency) {
                     collected.push(row);
                 }
             }
@@ -778,6 +777,7 @@ fn scan_one_session(
             0, // Antigravity 不报告 cache 写入量
             created_at,
             row.latency,
+            row.first_token_latency,
         )?;
         if changed {
             imported += 1;
@@ -998,6 +998,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_generator_metadata_sums_ttft_and_streaming_duration() {
+        let payload = serde_json::json!({
+            "generatorMetadata": [{
+                "chatModel": {
+                    "responseModel": "gemini-3.8-flash",
+                    "timeToFirstToken": "15.0s",
+                    "streamingDuration": "0.5s",
+                    "usage": { "inputTokens": "100", "outputTokens": "50", "responseId": "r-1" }
+                }
+            }]
+        });
+        let rows = parse_generator_metadata(&payload);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].latency, 15500);
+    }
+
+    #[test]
     fn parse_generator_metadata_counts_every_retry() {
         let payload = serde_json::json!({
             "generatorMetadata": [{
@@ -1127,6 +1144,7 @@ mod tests {
                     0,
                     1_000,
                     row.latency,
+                    row.first_token_latency,
                 )
                 .unwrap()
                 {

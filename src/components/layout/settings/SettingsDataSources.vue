@@ -430,7 +430,7 @@ const emptyQuad = (): TokenQuad => ({ input: 0, output: 0, cacheRead: 0, cacheCr
 const dbStore = useDatabaseStore()
 const { addDatabase, removeDatabase, refreshAfterToggle, autoLoadDatabase } = useDatabase()
 
-const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null, cursor: null })
+const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null, cursor: null, zCode: null, proma: null, dsh: null, minimax: null, antigravity: null, kimi: null })
 
 // ===== CCS 自动发现（默认关闭，作为 CCS 数据源的独立子项配置）=====
 const ccsAutoDiscover = ref(false)
@@ -1054,6 +1054,20 @@ const slots = computed(() => [
     sourceId: dbStore.sources.find(s => s.dbType === 'Antigravity')?.id || '',
     enabled: dbStore.sources.find(s => s.dbType === 'Antigravity')?.enabled ?? true,
   },
+  {
+    key: 'kimi',
+    label: 'Kimi',
+    path: (() => {
+      const base = defaultPaths.value.kimi || ''
+      const src = dbStore.sources.find(s => s.dbType === 'Kimi')
+      return src && src.recordCount > 0
+        ? base + `  (已导入 ${src.recordCount} 条)`
+        : base
+    })(),
+    defaultPath: defaultPaths.value.kimi,
+    sourceId: dbStore.sources.find(s => s.dbType === 'Kimi')?.id || '',
+    enabled: dbStore.sources.find(s => s.dbType === 'Kimi')?.enabled ?? true,
+  },
 ])
 
 // slot key → 后端 dbType 字面量映射（canonical 名见 DbType::label）
@@ -1066,10 +1080,11 @@ const DB_TYPE_MAP: Record<string, string> = {
   'dsh': 'DSH',
   'minimax': 'MiniMax',
   'antigravity': 'Antigravity',
+  'kimi': 'Kimi',
 }
 
 // 扫描入库型数据源：路径固定，操作是「立即扫描」而非选库，也不提供移除
-const SCAN_SOURCE_KEYS = ['dsh', 'minimax', 'proma', 'antigravity']
+const SCAN_SOURCE_KEYS = ['dsh', 'minimax', 'kimi', 'proma', 'antigravity']
 function isScanSource(key: string): boolean {
   return SCAN_SOURCE_KEYS.includes(key)
 }
@@ -1097,6 +1112,24 @@ async function onSelect(key: string): Promise<void> {
       dbStore.setSources(sources)
     } catch (e) {
       console.error('[MiniMax] 扫描失败', e)
+    }
+    return
+  }
+  // Kimi 固定扫描 Kimi Work / Kimi Code / Kimi CLI 会话,不走目录选择
+  if (key === 'kimi') {
+    try {
+      const result = await platformAdapter.scanKimiNow()
+      console.log('[Kimi] 扫描完成', result)
+      const sources = await platformAdapter.listDatabases()
+      dbStore.setSources(sources)
+      if (result.imported > 0) {
+        message.success(`Kimi 新增 ${result.imported} 条用量记录`)
+      } else {
+        message.info('Kimi 用量已是最新')
+      }
+    } catch (e) {
+      console.error('[Kimi] 扫描失败', e)
+      message.error(typeof e === 'string' ? e : String((e as any)?.message || e || '扫描失败'))
     }
     return
   }
@@ -1264,6 +1297,10 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 
 .source-dot.antigravity {
   background: var(--color-purple, var(--color-indigo));
+}
+
+.source-dot.kimi {
+  background: #1783ff;
 }
 
 .source-hint {

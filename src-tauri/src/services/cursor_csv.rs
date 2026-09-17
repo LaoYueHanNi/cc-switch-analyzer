@@ -783,7 +783,7 @@ impl DataSource for CursorCsvService {
     fn get_recent_request_logs_raw(
         &self,
         since: Option<i64>,
-    ) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)>, String> {
+    ) -> Result<Vec<super::data_source::StreamingRecord>, String> {
         let records = self.records_read()?;
         let mut rows: Vec<_> = records
             .iter()
@@ -799,6 +799,7 @@ impl DataSource for CursorCsvService {
                     r.cache_read,
                     r.cache_creation,
                     r.latency,
+                    0,
                     false,
                 )
             })

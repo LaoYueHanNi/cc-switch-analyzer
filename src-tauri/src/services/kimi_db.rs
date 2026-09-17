@@ -1,8 +1,9 @@
-//! MiniMax Code 数据源(只读)
+//! Kimi 数据源(只读)
 //!
-//! 以只读连接打开应用自有库 pricing.db,从 session_request_logs 中读取 source='minimax'
-//! 的记录(由 minimax_scanner 扫描入库)。聚合复用 pipeline::aggregate_*(与 DSH 相同),
+//! 以只读连接打开应用自有库 pricing.db,从 session_request_logs 中读取 source='Kimi'
+//! 的记录(由 kimi_scanner 扫描入库)。聚合复用 pipeline::aggregate_*,
 //! 模式为「SQL 取记录 + 内存聚合」的混合型数据源。
+//! 支持会话管理与项目归属。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -17,15 +18,15 @@ use crate::services::pipeline::{
     aggregate_provider_model_tokens, aggregate_summary,
 };
 
-const PROVIDER_ID: &str = "MiniMax";
-const PROVIDER_NAME: &str = "MiniMax";
+const PROVIDER_ID: &str = "Kimi";
+const PROVIDER_NAME: &str = "Kimi";
 
-pub struct MinimaxDbService {
+pub struct KimiDbService {
     db: Option<Mutex<Connection>>,
     db_path: String,
 }
 
-impl MinimaxDbService {
+impl KimiDbService {
     pub fn new() -> Self {
         Self {
             db: None,
@@ -40,8 +41,8 @@ impl MinimaxDbService {
             OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
         .map_err(|e| {
-            log::error!("[MINIMAX] 打开数据库失败 (path={}): {}", file_path, e);
-            "打开 MiniMax 数据库失败,请检查应用库路径".to_string()
+            log::error!("[KIMI] 打开数据库失败 (path={}): {}", file_path, e);
+            "打开 Kimi 数据库失败,请检查应用库路径".to_string()
         })?;
         self.db_path = file_path.to_string();
         self.db = Some(Mutex::new(conn));
@@ -60,12 +61,12 @@ impl MinimaxDbService {
     fn db(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
         self.db
             .as_ref()
-            .ok_or_else(|| "MiniMax 数据库未打开".to_string())?
+            .ok_or_else(|| "Kimi 数据库未打开".to_string())?
             .lock()
-            .map_err(|e| format!("MiniMax 数据库锁失败: {}", e))
+            .map_err(|e| format!("Kimi 数据库锁失败: {}", e))
     }
 
-    /// 按 FilterParams 过滤查询 MiniMax 记录(SQL 取全量 source='minimax' + 内存过滤)。
+    /// 按 FilterParams 过滤查询 Kimi 记录(SQL 取全量 source='Kimi' + 内存过滤)。
     fn filtered_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> {
         let db = self.db()?;
         let mut stmt = db
@@ -73,17 +74,17 @@ impl MinimaxDbService {
                 "SELECT session_id, model, provider_id, created_at,
                         input_tokens, output_tokens, cache_read, cache_creation, latency
                  FROM session_request_logs
-                 WHERE source = 'MiniMax'
+                 WHERE source = 'Kimi'
                  ORDER BY created_at",
             )
-            .map_err(|e| format!("查询 MiniMax 记录失败: {}", e))?;
+            .map_err(|e| format!("查询 Kimi 记录失败: {}", e))?;
         let rows = stmt
             .query_map([], |row| {
                 Ok(RawRecord {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                    db_type: "MiniMax".to_string(),
+                    db_type: "Kimi".to_string(),
                     created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                     input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
                     output_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
@@ -93,15 +94,51 @@ impl MinimaxDbService {
                     is_codex: false,
                 })
             })
-            .map_err(|e| format!("查询 MiniMax 记录失败: {}", e))?;
+            .map_err(|e| format!("查询 Kimi 记录失败: {}", e))?;
         let mut out = Vec::new();
         for r in rows {
-            let rec = r.map_err(|e| format!("读取 MiniMax 记录失败: {}", e))?;
+            let rec = r.map_err(|e| format!("读取 Kimi 记录失败: {}", e))?;
             if record_matches_params(&rec, params) {
                 out.push(rec);
             }
         }
         Ok(out)
+    }
+
+    /// 查询会话标题与项目名
+    pub fn get_session_titles_from_db(
+        &self,
+        session_ids: &[String],
+    ) -> Result<HashMap<String, (String, String)>, String> {
+        if session_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let db = self.db()?;
+        let placeholders: Vec<String> = session_ids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "SELECT session_id, title, project_dir
+             FROM sessions
+             WHERE session_id IN ({})",
+            placeholders.join(",")
+        );
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询会话标题失败: {}", e))?;
+        let refs: Vec<&dyn rusqlite::types::ToSql> = session_ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let rows = stmt
+            .query_map(refs.as_slice(), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| format!("查询会话标题失败: {}", e))?;
+
+        let mut map = HashMap::new();
+        for r in rows {
+            let (sid, title, project_dir) = r.map_err(|e| format!("读取会话标题失败: {}", e))?;
+            map.insert(sid, (title, project_dir));
+        }
+        Ok(map)
     }
 }
 
@@ -129,13 +166,15 @@ fn record_matches_params(record: &RawRecord, params: &FilterParams) -> bool {
     true
 }
 
-impl DataSource for MinimaxDbService {
+impl DataSource for KimiDbService {
     fn open(&mut self, path: &str) -> Result<(), String> {
         self.open(path)
     }
+
     fn close(&mut self) {
-        self.close()
+        self.close();
     }
+
     fn is_open(&self) -> bool {
         self.is_open()
     }
@@ -143,20 +182,19 @@ impl DataSource for MinimaxDbService {
     fn get_record_count(&self) -> Result<i64, String> {
         let db = self.db()?;
         db.query_row(
-            "SELECT COUNT(*) FROM session_request_logs WHERE source = 'MiniMax'",
+            "SELECT COUNT(*) FROM session_request_logs WHERE source = 'Kimi'",
             [],
             |row| row.get(0),
         )
-        .map_err(|e| format!("查询 MiniMax 记录数失败: {}", e))
+        .map_err(|e| format!("查询 Kimi 记录数失败: {}", e))
     }
 
     fn get_latest_timestamp(&self) -> Option<i64> {
-        // 实时查询(非 open 时缓存):scan 入库新数据后,refresh 的 Phase2 能检测到变化
         self.db()
             .ok()
             .and_then(|db| {
                 db.query_row(
-                    "SELECT MAX(created_at) FROM session_request_logs WHERE source = 'MiniMax'",
+                    "SELECT MAX(created_at) FROM session_request_logs WHERE source = 'Kimi'",
                     [],
                     |row| row.get::<_, Option<i64>>(0),
                 )
@@ -177,15 +215,15 @@ impl DataSource for MinimaxDbService {
         let mut stmt = db
             .prepare(
                 "SELECT DISTINCT model FROM session_request_logs
-                 WHERE source = 'MiniMax' AND model <> '' ORDER BY model",
+                 WHERE source = 'Kimi' AND model <> '' ORDER BY model",
             )
-            .map_err(|e| format!("查询 MiniMax 模型失败: {}", e))?;
+            .map_err(|e| format!("查询 Kimi 模型失败: {}", e))?;
         let rows = stmt
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| format!("查询 MiniMax 模型失败: {}", e))?;
+            .map_err(|e| format!("查询 Kimi 模型失败: {}", e))?;
         let mut out = Vec::new();
         for r in rows {
-            out.push(r.map_err(|e| format!("读取 MiniMax 模型失败: {}", e))?);
+            out.push(r.map_err(|e| format!("读取 Kimi 模型失败: {}", e))?);
         }
         Ok(out)
     }
@@ -195,7 +233,7 @@ impl DataSource for MinimaxDbService {
         let (min, max) = db
             .query_row(
                 "SELECT MIN(created_at), MAX(created_at)
-                 FROM session_request_logs WHERE source = 'MiniMax'",
+                 FROM session_request_logs WHERE source = 'Kimi'",
                 [],
                 |row| {
                     Ok((
@@ -252,7 +290,6 @@ impl DataSource for MinimaxDbService {
         ))
     }
 
-    // 会话 tab、实时 tab 早期返回空(与 DSH 一致)
     fn get_session_breakdown(&self, _params: &FilterParams) -> Result<Vec<SessionBreakdown>, String> {
         Ok(Vec::new())
     }
@@ -300,12 +337,10 @@ impl DataSource for MinimaxDbService {
         Ok(Vec::new())
     }
 
-    /// 实时记录：从 session_request_logs 取最近请求（流式去重管道由此读取）。
-    /// since 为秒级游标（增量轮询）；None 时截断到最近 SESSION_TOP_N 条。
     fn get_recent_request_logs_raw(
         &self,
         since: Option<i64>,
-    ) -> Result<Vec<super::data_source::StreamingRecord>, String> {
+    ) -> Result<Vec<crate::services::data_source::StreamingRecord>, String> {
         let db = self.db()?;
         let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
             Some(s) => (
@@ -337,7 +372,7 @@ impl DataSource for MinimaxDbService {
         };
         let mut stmt = db
             .prepare(&sql)
-            .map_err(|e| format!("查询 MiniMax 最近请求日志失败: {}", e))?;
+            .map_err(|e| format!("查询 Kimi 最近请求日志失败: {}", e))?;
         let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt
             .query_map(refs.as_slice(), |row| {
@@ -355,10 +390,10 @@ impl DataSource for MinimaxDbService {
                     false,
                 ))
             })
-            .map_err(|e| format!("查询 MiniMax 最近请求日志失败: {}", e))?;
+            .map_err(|e| format!("查询 Kimi 最近请求日志失败: {}", e))?;
         let mut out = Vec::new();
         for r in rows {
-            out.push(r.map_err(|e| format!("读取 MiniMax 最近请求日志失败: {}", e))?);
+            out.push(r.map_err(|e| format!("读取 Kimi 最近请求日志失败: {}", e))?);
         }
         Ok(out)
     }
@@ -367,11 +402,21 @@ impl DataSource for MinimaxDbService {
         self.filtered_records(params)
     }
 
+    fn title_source_tag(&self) -> Option<&'static str> {
+        Some("kimi")
+    }
+
+    fn get_session_titles_from_provider(
+        &self,
+        session_ids: &[String],
+    ) -> Option<Result<HashMap<String, (String, String)>, String>> {
+        Some(self.get_session_titles_from_db(session_ids))
+    }
+
     fn capabilities(&self) -> SourceCapabilities {
-        // manifest.json 无项目字段（实勘确认），仅支持扫描入库
         SourceCapabilities {
-            session_management: false,
-            project_attribution: false,
+            session_management: true,
+            project_attribution: true,
             incremental_scan: true,
         }
     }
@@ -381,10 +426,9 @@ impl DataSource for MinimaxDbService {
 mod tests {
     use super::*;
 
-    /// 建一张带 session_request_logs 表的临时应用库（先建库插入再只读打开，与 external_db 测试同模式）
     fn temp_app_db() -> (std::path::PathBuf, String) {
         let path = std::env::temp_dir().join(format!(
-            "ccsa_mm_db_test_{}_{}.db",
+            "ccsa_kimi_db_test_{}_{}.db",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -399,38 +443,36 @@ mod tests {
                 cache_read INTEGER, cache_creation INTEGER,
                 created_at INTEGER NOT NULL, latency INTEGER NOT NULL DEFAULT 0,
                 first_token_latency INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE sessions (
+                session_id TEXT PRIMARY KEY, project_dir TEXT, title TEXT, source TEXT
             );",
         )
         .unwrap();
         conn.execute(
             "INSERT INTO session_request_logs
              (request_id, source, session_id, model, provider_id, input_tokens, output_tokens,
-              cache_read, cache_creation, created_at, latency)
-             VALUES (?1, 'MiniMax', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+              cache_read, cache_creation, created_at, latency, first_token_latency)
+             VALUES (?1, 'Kimi', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
-                "r-old", "s1", "MiniMax-Text-01", "MiniMax", 100, 200, 50, 10, 1000, 300,
+                "r-old", "s1", "k28-agent-preview", "Kimi", 100, 200, 50, 10, 1000, 300, 50,
             ],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO session_request_logs
              (request_id, source, session_id, model, provider_id, input_tokens, output_tokens,
-              cache_read, cache_creation, created_at, latency)
-             VALUES (?1, 'MiniMax', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+              cache_read, cache_creation, created_at, latency, first_token_latency)
+             VALUES (?1, 'Kimi', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
-                "r-new", "s1", "MiniMax-M2", "MiniMax", 400, 500, 60, 20, 2000, 900,
+                "r-new", "s1", "kimi-code/kimi-for-coding", "Kimi", 400, 500, 60, 20, 2000, 900, 80,
             ],
         )
         .unwrap();
-        // 其他源的记录不应返回
         conn.execute(
-            "INSERT INTO session_request_logs
-             (request_id, source, session_id, model, provider_id, input_tokens, output_tokens,
-              cache_read, cache_creation, created_at, latency)
-             VALUES (?1, 'DSH', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            rusqlite::params![
-                "r-dsh", "s9", "deepseek-chat", "DSH", 1, 1, 0, 0, 1500, 10,
-            ],
+            "INSERT INTO sessions (session_id, project_dir, title, source)
+             VALUES ('s1', '/my/project', '测试Kimi会话', 'Kimi')",
+            [],
         )
         .unwrap();
         drop(conn);
@@ -439,31 +481,31 @@ mod tests {
     }
 
     #[test]
-    fn recent_request_logs_raw_orders_desc_and_filters_since() {
+    fn test_kimi_db_service_queries() {
         let (path, path_str) = temp_app_db();
-        let mut svc = MinimaxDbService::new();
+        let mut svc = KimiDbService::new();
         svc.open(&path_str).unwrap();
 
-        // 全量：按 created_at 倒序，仅本源记录，末位 is_codex=false
+        // 记录总数
+        assert_eq!(svc.get_record_count().unwrap(), 2);
+
+        // 模型列表
+        let models = svc.get_models().unwrap();
+        assert_eq!(models.len(), 2);
+        assert!(models.contains(&"k28-agent-preview".to_string()));
+        assert!(models.contains(&"kimi-code/kimi-for-coding".to_string()));
+
+        // 全量日志
         let all = svc.get_recent_request_logs_raw(None).unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].3, 2000);
-        assert_eq!(all[1].3, 1000);
-        assert!(!all[0].10);
-        assert_eq!(all[0].2, "MiniMax");
+        assert_eq!(all[0].9, 80); // first_token_latency
+        assert!(!all[0].10); // is_codex
 
-        // 增量：>= 秒级游标语义，含游标秒内记录，倒序
-        let fresh = svc.get_recent_request_logs_raw(Some(1000)).unwrap();
-        assert_eq!(fresh.len(), 2);
-        assert_eq!(fresh[0].3, 2000);
-        assert_eq!(fresh[1].3, 1000);
-
-        // 列映射：input/output/cache_read/cache_creation/latency 与写入一致
-        assert_eq!(all[0].4, 400);
-        assert_eq!(all[0].5, 500);
-        assert_eq!(all[0].6, 60);
-        assert_eq!(all[0].7, 20);
-        assert_eq!(all[0].8, 900);
+        // 会话标题与项目
+        let titles = svc.get_session_titles_from_db(&["s1".to_string()]).unwrap();
+        assert_eq!(titles.len(), 1);
+        assert_eq!(titles.get("s1").unwrap(), &("测试Kimi会话".to_string(), "/my/project".to_string()));
 
         std::fs::remove_file(&path).ok();
     }

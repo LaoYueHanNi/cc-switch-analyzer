@@ -67,7 +67,7 @@ pub fn scope_to_provider_source<'a>(
 pub fn run_streaming_dedup(
     sources: &[SourceEntry],
     since: Option<i64>,
-) -> Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)> {
+) -> Vec<crate::services::data_source::StreamingRecord> {
     let (tx, rx) = mpsc::channel();
 
     // 并行 Producer：每个数据源一个线程，逐条发送到 channel
@@ -865,7 +865,7 @@ mod tests {
         fn get_session_timestamps(&self, _ids: &[String]) -> Result<HashMap<String, Vec<i64>>, String> { Ok(HashMap::new()) }
         fn get_model_context_tier_buckets(&self, _params: &FilterParams, _thresholds: &[i64]) -> Result<Vec<ModelContextTierBucket>, String> { Ok(Vec::new()) }
         fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String> { Ok(Vec::new()) }
-        fn get_recent_request_logs_raw(&self, _since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)>, String> { Ok(Vec::new()) }
+        fn get_recent_request_logs_raw(&self, _since: Option<i64>) -> Result<Vec<crate::services::data_source::StreamingRecord>, String> { Ok(Vec::new()) }
         fn get_filtered_records(&self, _params: &FilterParams) -> Result<Vec<RawRecord>, String> { Ok(Vec::new()) }
     }
 

@@ -2,7 +2,7 @@
   <div class="realtime-token">
     <!-- 顶部统计 -->
     <div class="realtime-stats">
-      <span class="stat-title">最近 500 条请求</span>
+      <span class="stat-title">{{ statTitle }}</span>
       <div class="stat-items">
         <div class="realtime-stat">
           <span class="stat-label label-cost">总费用</span>
@@ -40,8 +40,30 @@
       <span class="refresh-time">{{ lastRefreshTime || '-' }}</span>
     </div>
 
+    <!-- 工具栏:数据源过滤与翻页控制 -->
+    <div v-if="logs.length > 0 || selectedSource" class="realtime-toolbar">
+      <div class="toolbar-left">
+        <span class="filter-label">数据源</span>
+        <CompactSelect
+          :model-value="selectedSource"
+          :options="sourceOptions"
+          clearable
+          placeholder="全部"
+          @update:model-value="selectedSource = $event"
+        />
+      </div>
+      <div class="toolbar-right" v-if="filteredLogs.length > 0">
+        <div class="realtime-pager">
+          <span class="pager-info">第 {{ currentPage }} / {{ totalPages }} 页 (共 {{ filteredLogs.length }} 条)</span>
+          <button class="pager-btn" :disabled="currentPage <= 1" @click="currentPage = 1">第一页</button>
+          <button class="pager-btn" :disabled="currentPage <= 1" @click="currentPage--">上一页</button>
+          <button class="pager-btn" :disabled="currentPage >= totalPages" @click="currentPage++">下一页</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 请求日志列表:平铺单表,每行最左侧标记数据源 -->
-    <div v-if="sortedLogs.length > 0" class="log-list">
+    <div v-if="filteredLogs.length > 0" class="log-list">
       <!-- 表头 -->
       <div class="log-header">
         <span class="col-source">数据源</span>
@@ -54,14 +76,15 @@
         <span class="col-total">总token</span>
         <span class="col-cost">费用</span>
         <span class="col-tier">档位</span>
-        <span class="col-latency">延迟</span>
+        <span class="col-latency">首字</span>
+        <span class="col-speed">输出速度</span>
       </div>
       <!-- 数据行 -->
       <div class="session-rows">
         <div
           class="log-row"
           :class="{ 'log-new': row.isNew }"
-          v-for="(row, i) in sortedLogs"
+          v-for="(row, i) in pagedLogs"
           :key="`${row.createdAt}-${row.model}-${row.dbType}-${i}`"
         >
           <span class="col-source">
@@ -91,25 +114,53 @@
           <span class="col-tier" v-if="row.contextTierThreshold">>= {{ Math.round(row.contextTierThreshold / 1000) }}K</span>
           <span class="col-tier" v-else>-</span>
           <span class="col-latency">{{ formatLatency(row.latencyMs) }}</span>
+          <span class="col-speed">{{ formatTokenSpeed(row.outputTokens, row.latencyMs) }}</span>
         </div>
       </div>
     </div>
 
+    <!-- 筛选无匹配数据 -->
+    <div v-else-if="logs.length > 0" class="realtime-empty">
+      <p>无匹配该数据源的请求记录</p>
+    </div>
+
+    <!-- 全局无数据 -->
     <div v-else class="realtime-empty">
       <p>{{ dbStore.hasDatabase ? '暂无请求数据' : '请先选择数据库文件' }}</p>
+    </div>
+
+    <!-- 底部分页条 -->
+    <div v-if="filteredLogs.length > 0" class="realtime-footer">
+      <div class="realtime-pager">
+        <span class="pager-info">第 {{ currentPage }} / {{ totalPages }} 页 (共 {{ filteredLogs.length }} 条)</span>
+        <button class="pager-btn" :disabled="currentPage <= 1" @click="currentPage = 1">第一页</button>
+        <button class="pager-btn" :disabled="currentPage <= 1" @click="currentPage--">上一页</button>
+        <button class="pager-btn" :disabled="currentPage >= totalPages" @click="currentPage++">下一页</button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 defineOptions({ name: 'RealtimeToken' })
-import { computed, onMounted, onActivated, onDeactivated, watch } from 'vue'
+import { ref, computed, onMounted, onActivated, onDeactivated, watch } from 'vue'
+import CompactSelect from '@/components/common/CompactSelect.vue'
 import { useDatabaseStore } from '@/stores/database'
+import { useFilterStore } from '@/stores/filter'
 import { useRealtimePolling } from '@/composables/useRealtimePolling'
-import { formatNum, formatCost, formatPercent } from '@/utils/format'
+import { formatNum, formatCost, formatPercent, formatTokenSpeed, formatLatency } from '@/utils/format'
 
 const dbStore = useDatabaseStore()
+const filterStore = useFilterStore()
 const { logs, lastRefreshTime, startPolling, stopPolling, refreshNow } = useRealtimePolling()
+
+// 数据源过滤与分页状态（独立于主页 FilterBar，避免改实时筛选带动模型/供应商查询）
+const selectedSource = ref('')
+const PAGE_SIZE = 50
+const currentPage = ref(1)
+
+// 数据源下拉：复用主页 FilterBar 的 providerOptions（canonical 名，如 CCS / OpenCode）
+const sourceOptions = computed(() => [...filterStore.providerOptions])
 
 // 数据源圆点配色(与设置页 slot key 命名一致)
 function dotClass(dbType: string): string {
@@ -117,6 +168,7 @@ function dotClass(dbType: string): string {
     'CCS': 'cc-switch', 'OpenCode': 'opencode', 'AIProxy': 'ai-proxy',
     'Cursor': 'cursor', 'ZCode': 'z-code', 'Proma': 'proma',
     'DSH': 'dsh', 'MiniMax': 'minimax', 'Antigravity': 'antigravity',
+    'Kimi': 'kimi',
   }
   return map[dbType] ?? dbType.toLowerCase()
 }
@@ -124,8 +176,46 @@ function dotClass(dbType: string): string {
 // 平铺列表:按时间倒序(后端已全局排序+截断 500,此处兜底再排)
 const sortedLogs = computed(() => [...logs.value].sort((a, b) => b.createdAt - a.createdAt))
 
+// 根据选择的数据源 canonical 名过滤（与主页下拉值一致，对应行的 dbType）
+const filteredLogs = computed(() => {
+  if (!selectedSource.value) return sortedLogs.value
+  return sortedLogs.value.filter(r => r.dbType === selectedSource.value)
+})
+
+// 总页数
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredLogs.value.length / PAGE_SIZE)))
+
+// 当前页数据切片（默认 50 条）
+const pagedLogs = computed(() => {
+  const start = (currentPage.value - 1) * PAGE_SIZE
+  return filteredLogs.value.slice(start, start + PAGE_SIZE)
+})
+
+// 数据源切换时重置到第一页
+watch(selectedSource, () => {
+  currentPage.value = 1
+})
+
+// 当总页数变小时防止页码溢出
+watch(totalPages, (pages) => {
+  if (currentPage.value > pages) {
+    currentPage.value = Math.max(1, pages)
+  }
+})
+
 const hasNewData = computed(() => logs.value.some(r => r.isNew))
 
+// 统计卡片标题
+const statTitle = computed(() => {
+  if (selectedSource.value) {
+    const label = sourceOptions.value.find(o => o.value === selectedSource.value)?.label
+      ?? selectedSource.value
+    return `筛选: ${label} (${filteredLogs.value.length} 条)`
+  }
+  return logs.value.length > 0 ? `最近 ${logs.value.length} 条请求` : '最近 500 条请求'
+})
+
+// 统计数据：与当前过滤联动
 const summaryStats = computed(() => {
   let cost = 0
   let tokens = 0
@@ -136,7 +226,7 @@ const summaryStats = computed(() => {
   let inputTokens = 0
   let cacheReadTokens = 0
   let cacheCreationTokens = 0
-  for (const r of logs.value) {
+  for (const r of filteredLogs.value) {
     cost += r.totalCost
     tokens += r.inputTokens + r.outputTokens + r.cacheReadTokens + r.cacheCreationTokens
     inputCost += r.inputCost
@@ -178,11 +268,6 @@ function formatTime(epoch: number): string {
 function shortModel(name: string): string {
   if (name.length <= 24) return name
   return name.slice(0, 22) + '…'
-}
-
-function formatLatency(ms: number): string {
-  if (ms >= 1000) return (ms / 1000).toFixed(1) + 's'
-  return ms + 'ms'
 }
 
 onMounted(() => {
@@ -332,8 +417,83 @@ watch(() => dbStore.hasDatabase, (val) => {
 /* 档位列 */
 .col-tier { width: 48px; flex-shrink: 0; text-align: right; font-size: 10px; color: var(--text-secondary); }
 
-/* 延迟列 */
+/* 首字列（展示 latencyMs） */
 .col-latency { width: 50px; flex-shrink: 0; text-align: right; color: var(--text-muted); font-size: 11px; }
+
+/* 速度列 */
+.col-speed { width: 90px; flex-shrink: 0; text-align: right; color: var(--color-orange); font-size: 11px; }
+.log-header .col-speed { color: var(--color-orange); }
+
+/* 工具栏:数据源过滤与翻页控制 */
+.realtime-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-faint);
+}
+
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.filter-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 分页控件 */
+.realtime-pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pager-info {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.pager-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.pager-btn:hover:not(:disabled) {
+  border-color: var(--color-blue);
+  color: var(--color-blue);
+}
+
+.pager-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 底部分页条 */
+.realtime-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-faint);
+  flex-shrink: 0;
+}
 
 .realtime-empty {
   flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-muted);

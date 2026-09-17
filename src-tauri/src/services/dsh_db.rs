@@ -305,13 +305,14 @@ impl DataSource for DshDbService {
     fn get_recent_request_logs_raw(
         &self,
         since: Option<i64>,
-    ) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)>, String> {
+    ) -> Result<Vec<super::data_source::StreamingRecord>, String> {
         let db = self.db()?;
         let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
             Some(s) => (
                 format!(
                     "SELECT session_id, model, provider_id, created_at,
-                            input_tokens, output_tokens, cache_read, cache_creation, latency
+                            input_tokens, output_tokens, cache_read, cache_creation, latency,
+                            first_token_latency
                      FROM session_request_logs
                      WHERE source = '{}' AND created_at >= ?
                      ORDER BY created_at DESC",
@@ -322,7 +323,8 @@ impl DataSource for DshDbService {
             None => (
                 format!(
                     "SELECT session_id, model, provider_id, created_at,
-                            input_tokens, output_tokens, cache_read, cache_creation, latency
+                            input_tokens, output_tokens, cache_read, cache_creation, latency,
+                            first_token_latency
                      FROM session_request_logs
                      WHERE source = '{}'
                      ORDER BY created_at DESC
@@ -349,6 +351,7 @@ impl DataSource for DshDbService {
                     row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                     row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                     row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+                    row.get::<_, Option<i64>>(9)?.unwrap_or(0),
                     false,
                 ))
             })
@@ -393,7 +396,8 @@ mod tests {
                 request_id TEXT PRIMARY KEY, source TEXT, session_id TEXT, model TEXT,
                 provider_id TEXT, input_tokens INTEGER, output_tokens INTEGER,
                 cache_read INTEGER, cache_creation INTEGER,
-                created_at INTEGER NOT NULL, latency INTEGER NOT NULL DEFAULT 0
+                created_at INTEGER NOT NULL, latency INTEGER NOT NULL DEFAULT 0,
+                first_token_latency INTEGER NOT NULL DEFAULT 0
             );",
         )
         .unwrap();
@@ -444,7 +448,7 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].3, 2000);
         assert_eq!(all[1].3, 1000);
-        assert!(!all[0].9);
+        assert!(!all[0].10);
         assert_eq!(all[0].2, "DSH");
 
         // 增量：>= 秒级游标语义，含游标秒内记录，倒序
