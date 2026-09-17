@@ -394,12 +394,50 @@ pub fn union_models(results: Vec<Vec<String>>) -> Vec<String> {
     out
 }
 
+/// 合并各数据源的日期范围。
+///
+/// 无记录的数据源会返回 `(0, 0)`（扫描型源刚被清空、Cursor 新账号 CSV 尚未同步等），
+/// 这类 `0` 不参与下界比较：否则全局 min 会被拉成 0，前端据此判定「没有可查询的日期范围」
+/// 并把数据源/模型选项一并丢弃。
 pub fn merge_date_range(ranges: Vec<DateRange>) -> DateRange {
     if ranges.is_empty() {
         return DateRange { min: 0, max: 0 };
     }
     DateRange {
-        min: ranges.iter().map(|r| r.min).min().unwrap_or(0),
+        min: ranges.iter().map(|r| r.min).filter(|m| *m > 0).min().unwrap_or(0),
         max: ranges.iter().map(|r| r.max).max().unwrap_or(0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_date_range_ignores_sources_without_records() {
+        let merged = merge_date_range(vec![
+            DateRange { min: 0, max: 0 }, // 已启用但暂无记录的数据源
+            DateRange { min: 1000, max: 2000 },
+            DateRange { min: 500, max: 1500 },
+        ]);
+        assert_eq!(merged.min, 500);
+        assert_eq!(merged.max, 2000);
+    }
+
+    #[test]
+    fn merge_date_range_all_sources_empty_stays_zero() {
+        let merged = merge_date_range(vec![
+            DateRange { min: 0, max: 0 },
+            DateRange { min: 0, max: 0 },
+        ]);
+        assert_eq!(merged.min, 0);
+        assert_eq!(merged.max, 0);
+    }
+
+    #[test]
+    fn merge_date_range_empty_input_stays_zero() {
+        let merged = merge_date_range(Vec::new());
+        assert_eq!(merged.min, 0);
+        assert_eq!(merged.max, 0);
     }
 }

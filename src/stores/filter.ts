@@ -41,17 +41,22 @@ export const useFilterStore = defineStore('filter', () => {
       : undefined,
   }))
 
-  // 设置筛选选项（数据库加载后调用）
-  function setOptions(
+  // 设置数据源/模型选项（数据库加载后调用）。
+  // 刻意与日期范围解耦：任一已启用但暂无记录的数据源（扫描型源刚被清空、Cursor 新账号
+  // CSV 未同步等）都会让 getFilterOptions 的 dateRange.min 变成 0，
+  // 不能因此把选项整片丢弃（见 docs/decisions/implemented/2026-09-17-filter-options-ignore-empty-source.md）
+  function setSourceOptions(
     providers: { id: string; name: string }[],
-    models: string[],
-    minDate: number,
-    maxDate: number
+    models: string[]
   ): void {
     providerOptions.value = providers.map(p => ({ label: p.name, value: p.id }))
     modelOptions.value = models.map(m => ({ label: m, value: m }))
-    dateRangeMin.value = minDate
-    dateRangeMax.value = maxDate
+  }
+
+  // 设置可查询的日期上下界（供「全部时间」与趋势页使用；0 表示该源无有效范围）
+  function setDateRangeBounds(min: number, max: number): void {
+    dateRangeMin.value = min
+    dateRangeMax.value = max
   }
 
   // 设置日期范围（首次加载，默认当天）
@@ -85,7 +90,8 @@ export const useFilterStore = defineStore('filter', () => {
     ccsFilterSessionApps,
     loadCcsSessionFilter,
     filterParams,
-    setOptions,
+    setSourceOptions,
+    setDateRangeBounds,
     setDateRange,
     reset
   }
