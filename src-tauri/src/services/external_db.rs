@@ -924,7 +924,7 @@ impl ExternalDbService {
         )
     }
 
-    pub fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)>, String> {
+    pub fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<crate::services::data_source::StreamingRecord>, String> {
         let db = self.db()?;
         let (ccs_sql, ccs_binds) = self.ccs_session_filter_clause();
         let (sql, mut params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
@@ -953,7 +953,7 @@ impl ExternalDbService {
             params.push(Box::new(app.clone()));
         }
 
-        let mut stmt = db.prepare(&sql).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("准备查询最近请求日志失败: {}", e))?;
         let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(params_refs.as_slice(), |row| {
             let app_type: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
@@ -971,6 +971,7 @@ impl ExternalDbService {
                 cache_read,
                 row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+                0,
                 is_codex,
             ))
         }).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
@@ -981,7 +982,7 @@ impl ExternalDbService {
     pub fn stream_records(
         &self,
         since: Option<i64>,
-        on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64, bool)),
+        on_record: &mut dyn FnMut(crate::services::data_source::StreamingRecord),
     ) -> Result<(), String> {
         let db = self.db()?;
         let (ccs_sql, ccs_binds) = self.ccs_session_filter_clause();
@@ -1029,6 +1030,7 @@ impl ExternalDbService {
                 cache_read,
                 row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+                0,
                 is_codex,
             ))
         }).map_err(|e| format!("stream_records 查询失败: {}", e))?;
@@ -1113,8 +1115,8 @@ impl super::data_source::DataSource for ExternalDbService {
     fn get_session_timestamps(&self, ids: &[String]) -> Result<HashMap<String, Vec<i64>>, String> { self.get_session_timestamps(ids) }
     fn get_model_context_tier_buckets(&self, params: &FilterParams, thresholds: &[i64]) -> Result<Vec<ModelContextTierBucket>, String> { self.get_model_context_tier_buckets(params, thresholds) }
     fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String> { self.get_minute_level_token_trend() }
-    fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)>, String> { self.get_recent_request_logs_raw(since) }
-    fn stream_records(&self, since: Option<i64>, on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64, bool))) -> Result<(), String> { self.stream_records(since, on_record) }
+    fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<crate::services::data_source::StreamingRecord>, String> { self.get_recent_request_logs_raw(since) }
+    fn stream_records(&self, since: Option<i64>, on_record: &mut dyn FnMut(crate::services::data_source::StreamingRecord)) -> Result<(), String> { self.stream_records(since, on_record) }
     fn get_filtered_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> { self.get_filtered_raw_records(params) }
     fn capabilities(&self) -> super::data_source::SourceCapabilities {
         // CCS：会话管理覆盖 Claude Code / Codex / Grok Build 三个子终端

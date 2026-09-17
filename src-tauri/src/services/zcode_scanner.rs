@@ -154,6 +154,7 @@ pub fn scan_zcode_at(app_db: &AppDbService, sqlite_path: &Path) -> Result<DshSca
             rec.cache_creation,
             rec.started_at / 1000,
             rec.latency,
+            0,
         ) {
             Ok(true) => imported += 1,
             Ok(false) => skipped += 1,

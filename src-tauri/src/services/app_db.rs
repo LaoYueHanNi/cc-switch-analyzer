@@ -99,6 +99,9 @@ impl AppDbService {
         if version < 13 {
             self.migrate_v13()?;
         }
+        if version < 14 {
+            self.migrate_v14()?;
+        }
 
         Ok(())
     }
@@ -402,7 +405,8 @@ impl AppDbService {
                 cache_read INTEGER NOT NULL DEFAULT 0,
                 cache_creation INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
-                latency INTEGER NOT NULL DEFAULT 0
+                latency INTEGER NOT NULL DEFAULT 0,
+                first_token_latency INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_srl_source  ON session_request_logs(source);
             CREATE INDEX IF NOT EXISTS idx_srl_created ON session_request_logs(created_at);
@@ -463,6 +467,32 @@ impl AppDbService {
         self.set_schema_version(13)?;
         Ok(())
     }
+
+    /// v14: session_request_logs 增加 first_token_latency 列（毫秒），
+    /// 并清空 Antigravity 缓存记录与扫描游标以触发重新完整扫描，
+    /// 修复历史数据中错误的几毫秒延迟与缺失的首字耗时。
+    fn migrate_v14(&mut self) -> Result<(), String> {
+        let has_col = self
+            .db
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('session_request_logs') WHERE name='first_token_latency'",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(|e| format!("检查 session_request_logs 列失败: {}", e))?;
+        if !has_col {
+            self.db
+                .execute_batch(
+                    "ALTER TABLE session_request_logs ADD COLUMN first_token_latency INTEGER NOT NULL DEFAULT 0;
+                     DELETE FROM session_request_logs WHERE source = 'Antigravity';
+                     DELETE FROM session_log_sync WHERE source = 'Antigravity';",
+                )
+                .map_err(|e| format!("迁移 v14 (session_request_logs.first_token_latency) 失败: {}", e))?;
+        }
+        self.set_schema_version(14)?;
+        Ok(())
+    }
+
 
     // ========== 任务 CRUD ==========
 
@@ -718,19 +748,21 @@ impl AppDbService {
         cache_creation: i64,
         created_at: i64,
         latency: i64,
+        first_token_latency: i64,
     ) -> Result<bool, String> {
         let changed = conn
             .execute(
                 "INSERT INTO session_request_logs
                     (request_id, source, session_id, model, provider_id,
-                     input_tokens, output_tokens, cache_read, cache_creation, created_at, latency)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     input_tokens, output_tokens, cache_read, cache_creation, created_at, latency, first_token_latency)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(request_id) DO UPDATE SET
                    input_tokens = excluded.input_tokens,
                    output_tokens = excluded.output_tokens,
                    cache_read = excluded.cache_read,
                    cache_creation = excluded.cache_creation,
-                   latency = excluded.latency
+                   latency = excluded.latency,
+                   first_token_latency = excluded.first_token_latency
                  WHERE (excluded.input_tokens + excluded.output_tokens + excluded.cache_read + excluded.cache_creation)
                      > (session_request_logs.input_tokens + session_request_logs.output_tokens
                         + session_request_logs.cache_read + session_request_logs.cache_creation)",
@@ -745,7 +777,8 @@ impl AppDbService {
                     cache_read,
                     cache_creation,
                     created_at,
-                    latency
+                    latency,
+                    first_token_latency
                 ],
             )
             .map_err(|e| format!("插入会话日志失败: {}", e))?;
@@ -1862,7 +1895,8 @@ impl AppDbService {
                 cache_read INTEGER NOT NULL DEFAULT 0,
                 cache_creation INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
-                latency INTEGER NOT NULL DEFAULT 0
+                latency INTEGER NOT NULL DEFAULT 0,
+                first_token_latency INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_srl_source  ON session_request_logs(source);
             CREATE INDEX IF NOT EXISTS idx_srl_created ON session_request_logs(created_at);

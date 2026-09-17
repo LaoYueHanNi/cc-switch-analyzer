@@ -338,7 +338,7 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     // 仅对 is_codex 记录做重映射，其他数据源 session_id 保持原值。
     let codex_ts_mapping = {
         let codex_ts: Vec<i64> = all_raw.iter()
-            .filter_map(|(_, _, _, ts, _, _, _, _, _, is_codex)| is_codex.then_some(*ts))
+            .filter_map(|(_, _, _, ts, _, _, _, _, _, _, is_codex)| is_codex.then_some(*ts))
             .collect();
         crate::services::codex_sessions::get_or_build_codex_ts_mapping(&codex_ts)
     };
@@ -346,7 +346,7 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
     let tz_offset = (chrono::Local::now().offset().local_minus_utc() / 3600) as i64;
 
-    let mut result: Vec<RealtimeRequestLog> = all_raw.into_iter().map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms, is_codex)| {
+    let mut result: Vec<RealtimeRequestLog> = all_raw.into_iter().map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms, first_token_latency, is_codex)| {
         let session_id = if is_codex {
             codex_ts_mapping.get(&created_at).cloned().unwrap_or(session_id)
         } else {
@@ -369,7 +369,9 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
         RealtimeRequestLog {
             session_id, model, provider_id, db_type, created_at,
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-            latency_ms, input_cost, output_cost, cache_read_cost, cache_creation_cost,
+            latency_ms,
+            time_to_first_token: if first_token_latency > 0 { Some(first_token_latency) } else { None },
+            input_cost, output_cost, cache_read_cost, cache_creation_cost,
             total_cost: input_cost + output_cost + cache_read_cost + cache_creation_cost,
             context_tier_threshold,
         }

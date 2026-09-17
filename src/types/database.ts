@@ -82,6 +82,7 @@ export interface RealtimeRequestLog {
   cacheReadTokens: number
   cacheCreationTokens: number
   latencyMs: number
+  timeToFirstToken?: number
   inputCost: number
   outputCost: number
   cacheReadCost: number

@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use rusqlite::{Connection, OpenFlags};
 
 use crate::models::*;
-use crate::services::data_source::{DataSource, SourceCapabilities};
+use crate::services::data_source::{DataSource, SourceCapabilities, StreamingRecord};
 use crate::services::pipeline::{
     aggregate_combined_records, aggregate_daily_trend, aggregate_hourly_trend,
     aggregate_model_breakdown, aggregate_model_context_tier_buckets, aggregate_provider_breakdown,
@@ -306,13 +306,14 @@ impl DataSource for AntigravityDbService {
     fn get_recent_request_logs_raw(
         &self,
         since: Option<i64>,
-    ) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)>, String> {
+    ) -> Result<Vec<StreamingRecord>, String> {
         let db = self.db()?;
         let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
             Some(s) => (
                 format!(
                     "SELECT session_id, model, provider_id, created_at,
-                            input_tokens, output_tokens, cache_read, cache_creation, latency
+                            input_tokens, output_tokens, cache_read, cache_creation, latency,
+                            first_token_latency
                      FROM session_request_logs
                      WHERE source = '{}' AND created_at >= ?
                      ORDER BY created_at DESC",
@@ -323,7 +324,8 @@ impl DataSource for AntigravityDbService {
             None => (
                 format!(
                     "SELECT session_id, model, provider_id, created_at,
-                            input_tokens, output_tokens, cache_read, cache_creation, latency
+                            input_tokens, output_tokens, cache_read, cache_creation, latency,
+                            first_token_latency
                      FROM session_request_logs
                      WHERE source = '{}'
                      ORDER BY created_at DESC
@@ -350,6 +352,7 @@ impl DataSource for AntigravityDbService {
                     row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                     row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                     row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+                    row.get::<_, Option<i64>>(9)?.unwrap_or(0),
                     false,
                 ))
             })
@@ -394,11 +397,12 @@ mod tests {
                 request_id TEXT PRIMARY KEY, source TEXT, session_id TEXT, model TEXT,
                 provider_id TEXT, input_tokens INTEGER, output_tokens INTEGER,
                 cache_read INTEGER, cache_creation INTEGER,
-                created_at INTEGER NOT NULL, latency INTEGER NOT NULL DEFAULT 0
+                created_at INTEGER NOT NULL, latency INTEGER NOT NULL DEFAULT 0,
+                first_token_latency INTEGER NOT NULL DEFAULT 0
             );",
         )
         .unwrap();
-        let mut insert = |request_id: &str,
+        let insert = |request_id: &str,
                           source: &str,
                           session: &str,
                           model: &str,
@@ -487,7 +491,7 @@ mod tests {
         assert_eq!(all[0].3, 2000);
         assert_eq!(all[1].3, 1000);
         assert_eq!(all[0].2, "Antigravity");
-        assert!(!all[0].9);
+        assert!(!all[0].10);
         // 列映射:input/output/cache_read/cache_creation/latency
         assert_eq!(all[0].4, 15508);
         assert_eq!(all[0].5, 214);

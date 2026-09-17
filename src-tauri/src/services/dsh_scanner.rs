@@ -280,6 +280,7 @@ pub fn scan_file_incremental(
                 msg.cache_creation,
                 msg.created_at,
                 msg.latency,
+                0,
             ) {
                 Ok(true) => imported += 1,
                 Ok(false) => skipped += 1,

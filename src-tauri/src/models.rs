@@ -197,6 +197,8 @@ pub struct RealtimeRequestLog {
     pub cache_read_tokens: i64,
     pub cache_creation_tokens: i64,
     pub latency_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_to_first_token: Option<i64>,
     pub input_cost: f64,
     pub output_cost: f64,
     pub cache_read_cost: f64,

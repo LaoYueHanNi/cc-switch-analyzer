@@ -248,6 +248,7 @@ fn scan_proma_file(
                 u.cache_creation,
                 u.created_at,
                 u.latency,
+                0,
             ) {
                 Ok(true) => imported += 1,
                 Ok(false) => skipped += 1,

@@ -8,7 +8,8 @@ import {
   epochToTimeStr,
   epochToDateTimeStr,
   formatPercent,
-  shortSessionId
+  shortSessionId,
+  formatTokenSpeed
 } from '@/utils/format'
 
 // ---------------------------------------------------------------------------
@@ -221,3 +222,28 @@ describe('shortSessionId（渲染进程）', () => {
     expect(shortSessionId('abc')).toBe('abc')
   })
 })
+
+// ---------------------------------------------------------------------------
+// formatTokenSpeed — Token 输出速度格式化
+// ---------------------------------------------------------------------------
+describe('formatTokenSpeed（渲染进程）', () => {
+  it('0 输出或 0 延迟 → "-"', () => {
+    expect(formatTokenSpeed(0, 1000)).toBe('-')
+    expect(formatTokenSpeed(100, 0)).toBe('-')
+    expect(formatTokenSpeed(0, 0)).toBe('-')
+    expect(formatTokenSpeed(-10, 1000)).toBe('-')
+    expect(formatTokenSpeed(100, -500)).toBe('-')
+  })
+
+  it('正常速度计算（保留 1 位小数，单位 token/s）', () => {
+    // 100 tokens, 1000ms = 100.0 token/s
+    expect(formatTokenSpeed(100, 1000)).toBe('100.0 token/s')
+    // 50 tokens, 2000ms = 25.0 token/s
+    expect(formatTokenSpeed(50, 2000)).toBe('25.0 token/s')
+    // 120 tokens, 2500ms = 48.0 token/s
+    expect(formatTokenSpeed(120, 2500)).toBe('48.0 token/s')
+    // 10 tokens, 300ms = 33.333... → 33.3 token/s
+    expect(formatTokenSpeed(10, 300)).toBe('33.3 token/s')
+  })
+})
+

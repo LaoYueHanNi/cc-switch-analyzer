@@ -6,6 +6,11 @@ use std::path::Path;
 
 use crate::models::*;
 
+/// 流式去重管道单条原始记录:
+/// (session_id, model, provider_id, created_at, input_tokens, output_tokens,
+///  cache_read, cache_creation, latency_ms, time_to_first_token, is_codex)
+pub type StreamingRecord = (String, String, String, i64, i64, i64, i64, i64, i64, i64, bool);
+
 static SOURCE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// 数据源能力声明：每个数据源显式标记支持的能力，
@@ -60,7 +65,7 @@ pub trait DataSource: Send + Sync {
     fn get_session_timestamps(&self, ids: &[String]) -> Result<HashMap<String, Vec<i64>>, String>;
     fn get_model_context_tier_buckets(&self, params: &FilterParams, thresholds: &[i64]) -> Result<Vec<ModelContextTierBucket>, String>;
     fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String>;
-    fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64, i64, bool)>, String>;
+    fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<StreamingRecord>, String>;
 
     /// 按 FilterParams 过滤查询原始请求记录，返回 RawRecord。
     /// 这是去重管道的入口：所有聚合查询应从这里取数据。
@@ -68,7 +73,9 @@ pub trait DataSource: Send + Sync {
 
     /// 流式查询请求记录。逐行通过 callback 发射，避免一次性加载全部数据到内存。
     /// 默认实现委托给 `get_recent_request_logs_raw`。
-    /// Tuple 末尾 `is_codex` 标记该记录是否来自 OpenAI Codex 协议（用于会话重映射）。
+    /// Tuple 结构: (session_id, model, provider_id, created_at, input_tokens, output_tokens,
+    ///             cache_read, cache_creation, latency_ms, time_to_first_token, is_codex)
+    /// 末尾 `is_codex` 标记该记录是否来自 OpenAI Codex 协议（用于会话重映射）。
     ///
     /// # 增量游标契约（since 语义）
     ///
@@ -81,7 +88,7 @@ pub trait DataSource: Send + Sync {
     fn stream_records(
         &self,
         since: Option<i64>,
-        on_record: &mut dyn FnMut((String, String, String, i64, i64, i64, i64, i64, i64, bool)),
+        on_record: &mut dyn FnMut(StreamingRecord),
     ) -> Result<(), String> {
         for record in self.get_recent_request_logs_raw(since)? {
             on_record(record);
@@ -166,11 +173,12 @@ pub enum DbType {
     Dsh,
     Minimax,
     Antigravity,
+    Kimi,
 }
 
 impl DbType {
     /// 数据源规范名（canonical name）：CCS / OpenCode / AIProxy / Cursor /
-    /// ZCode / Proma / DSH / MiniMax / Antigravity。该名称同时用作：
+    /// ZCode / Proma / DSH / MiniMax / Antigravity / Kimi。该名称同时用作：
     /// - 持久化 last_db_paths 的 db_type
     /// - 固定型数据源的 provider_id / provider_name
     /// - session_request_logs 入库的 source 列值
@@ -185,6 +193,7 @@ impl DbType {
             DbType::Dsh => "DSH",
             DbType::Minimax => "MiniMax",
             DbType::Antigravity => "Antigravity",
+            DbType::Kimi => "Kimi",
         }
     }
 
@@ -201,6 +210,7 @@ impl DbType {
             "DSH" => Some(DbType::Dsh),
             "MiniMax" => Some(DbType::Minimax),
             "Antigravity" => Some(DbType::Antigravity),
+            "Kimi" => Some(DbType::Kimi),
             _ => None,
         }
     }
@@ -353,6 +363,7 @@ pub fn create_source_entry_with_type(path: &str, explicit_type: Option<&DbType>)
         DbType::Antigravity => {
             Box::new(super::antigravity_db::AntigravityDbService::new()) as Box<dyn DataSource>
         }
+        DbType::Kimi => Box::new(super::kimi_db::KimiDbService::new()) as Box<dyn DataSource>,
     };
     source.open(path)?;
     Ok(SourceEntry { id, path: path.to_string(), db_type, source, enabled: true })

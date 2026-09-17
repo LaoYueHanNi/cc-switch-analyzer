@@ -66,3 +66,17 @@ export function shortSessionId(id: string): string {
   const parts = id.split('-')
   return parts[0] || id.slice(0, 8)
 }
+
+// Token 输出速度格式化：tokens / (latencyMs / 1000) → "XX.X token/s" 或 "-"
+export function formatTokenSpeed(outputTokens: number, latencyMs: number): string {
+  if (!outputTokens || outputTokens <= 0 || !latencyMs || latencyMs <= 0) return '-'
+  const speed = (outputTokens * 1000) / latencyMs
+  return `${speed.toFixed(1)} token/s`
+}
+
+// 延迟格式化：>= 1000ms 显示为 "X.Xs"，否则 "Xms"
+export function formatLatency(ms: number): string {
+  if (ms >= 1000) return (ms / 1000).toFixed(1) + 's'
+  return ms + 'ms'
+}
+
