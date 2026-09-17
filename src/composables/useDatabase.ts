@@ -76,13 +76,13 @@ export function useDatabase() {
   async function updateFilterOptions(): Promise<void> {
     try {
       const options = await platformAdapter.getFilterOptions()
+      // 选项与日期范围分开判断：任一已启用但暂无记录的数据源会让 dateRange.min 为 0，
+      // 不能因此把数据源/模型选项整片丢弃（否则下拉只剩「无匹配项」）
+      if (options.providers?.length) {
+        filterStore.setSourceOptions(options.providers, options.models || [])
+      }
       if (options.dateRange && options.dateRange.min > 0) {
-        filterStore.setOptions(
-          options.providers || [],
-          options.models || [],
-          options.dateRange.min,
-          options.dateRange.max
-        )
+        filterStore.setDateRangeBounds(options.dateRange.min, options.dateRange.max)
         filterStore.setDateRange(options.dateRange.min, options.dateRange.max)
       }
     } catch (err: any) {
@@ -112,13 +112,12 @@ export function useDatabase() {
   async function updateFilterOptionsPreserveDate(): Promise<void> {
     try {
       const options = await platformAdapter.getFilterOptions()
+      // 同上：选项只看 providers，日期上下界单独按有效性更新，不改动当前 fromDate/toDate
+      if (options.providers?.length) {
+        filterStore.setSourceOptions(options.providers, options.models || [])
+      }
       if (options.dateRange && options.dateRange.min > 0) {
-        filterStore.setOptions(
-          options.providers || [],
-          options.models || [],
-          options.dateRange.min,
-          options.dateRange.max
-        )
+        filterStore.setDateRangeBounds(options.dateRange.min, options.dateRange.max)
       }
     } catch (err: any) {
       console.error('[useDatabase] 更新筛选选项失败:', err)
