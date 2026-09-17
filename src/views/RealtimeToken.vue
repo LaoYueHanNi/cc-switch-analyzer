@@ -128,16 +128,6 @@
     <div v-else class="realtime-empty">
       <p>{{ dbStore.hasDatabase ? '暂无请求数据' : '请先选择数据库文件' }}</p>
     </div>
-
-    <!-- 底部分页条 -->
-    <div v-if="filteredLogs.length > 0" class="realtime-footer">
-      <div class="realtime-pager">
-        <span class="pager-info">第 {{ currentPage }} / {{ totalPages }} 页 (共 {{ filteredLogs.length }} 条)</span>
-        <button class="pager-btn" :disabled="currentPage <= 1" @click="currentPage = 1">第一页</button>
-        <button class="pager-btn" :disabled="currentPage <= 1" @click="currentPage--">上一页</button>
-        <button class="pager-btn" :disabled="currentPage >= totalPages" @click="currentPage++">下一页</button>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -483,16 +473,6 @@ watch(() => dbStore.hasDatabase, (val) => {
 .pager-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-
-/* 底部分页条 */
-.realtime-footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 8px 10px;
-  border-top: 1px solid var(--border-faint);
-  flex-shrink: 0;
 }
 
 .realtime-empty {
