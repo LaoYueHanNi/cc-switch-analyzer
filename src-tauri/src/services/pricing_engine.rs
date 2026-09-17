@@ -207,6 +207,17 @@ impl PricingEngine {
         // 3. 加载用户覆盖
         let overrides = app_db.get_all_overrides()?;
 
+        // 3b. 用户覆盖的 model_id 本身也注册进别名映射。
+        // 云端定价表未收录的模型（自定义 / 中转模型名）只有在映射里存在，
+        // get_pricing_at 的 resolve_model_id 才不会返回 None —— 否则用户
+        // 给它设置的定价会写进 merged 却永远查不到，费用恒为 0。
+        // 已存在的映射优先（云端 model_id / 云端别名 / 用户别名），不抢占别人的别名。
+        for ov in &overrides {
+            self.alias_to_model_id
+                .entry(ov.model_id.to_lowercase())
+                .or_insert_with(|| ov.model_id.clone());
+        }
+
         // 4. 合并 + 提取覆盖上下文档位 / 模型根峰谷（override model_id 通过别名映射解析）
         self.override_tiers.clear();
         self.model_daily_slots.clear();
@@ -788,6 +799,29 @@ mod tests {
         let p = engine.get_pricing_at("claude-sonnet-4", 9999999999, 0).unwrap();
         assert!(!p.is_override);
         assert!((p.input_cost_per_million - 21.0).abs() < 0.001);
+    }
+
+    // 云端定价表未收录的模型：写入 override 后必须能被解析并查到价，
+    // 否则用户给自定义模型设置的定价会静默失效（费用恒为 0）。见 refresh 步骤 3b。
+    #[test]
+    fn test_override_for_unlisted_model_takes_effect() {
+        let (mut engine, app_db) = create_test_engine();
+        app_db.save_override("union-alpha", 11.0, 55.0, 1.1, 13.75).unwrap();
+        engine.refresh(&app_db).unwrap();
+
+        let p = engine.get_pricing_at("union-alpha", 9999999999, 0).unwrap();
+        assert!(p.is_override);
+        assert!((p.input_cost_per_million - 11.0).abs() < 0.001);
+        assert!((p.output_cost_per_million - 55.0).abs() < 0.001);
+
+        // 解析大小写不敏感（用量侧的模型名大小写可能与录入时不同）
+        let p_upper = engine.get_pricing_at("Union-Alpha", 9999999999, 0).unwrap();
+        assert!((p_upper.input_cost_per_million - 11.0).abs() < 0.001);
+
+        // 不得抢占云端已有映射：别名仍指向原模型，价格不变
+        assert_eq!(engine.resolve_model_id("claude-4-sonnet").unwrap(), "claude-sonnet-4");
+        let base = engine.get_pricing_at("claude-sonnet-4", 9999999999, 0).unwrap();
+        assert!((base.input_cost_per_million - 21.0).abs() < 0.001);
     }
 
     #[test]

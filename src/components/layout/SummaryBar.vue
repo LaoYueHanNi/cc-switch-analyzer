@@ -1,8 +1,4 @@
 <template>
-  <div v-if="queryStore.unpricedModels.length > 0" class="unpriced-warning">
-    <span class="warning-icon">!</span>
-    <span>{{ queryStore.unpricedModels.length }} 个模型缺少定价配置：{{ queryStore.unpricedModels.join('、') }}</span>
-  </div>
   <div class="summary-bar">
     <div
       v-for="item in items"
@@ -82,33 +78,6 @@ const items = computed(() => {
 </script>
 
 <style scoped>
-.unpriced-warning {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  margin: 0 12px;
-  background: var(--color-amber-bg);
-  border: 1px solid var(--color-amber);
-  border-radius: 4px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.warning-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--color-amber);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-
 .summary-bar {
   display: flex;
   flex-wrap: wrap;

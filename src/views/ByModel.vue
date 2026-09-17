@@ -42,6 +42,18 @@
       :compare-buckets="compareBuckets"
       :all-models="pricingStore.pricingData"
     />
+
+    <!-- 原地设置定价弹窗（缺定价模型走全 0 初值） -->
+    <PricingEditDialog
+      v-model:show="showEditDialog"
+      :model-name="editModelName"
+      :current-pricing="editCurrentPricing"
+      :show-restore="editShowRestore"
+      :context-tiers="editContextTiers"
+      :daily-slots="editDailySlots"
+      @save="onSavePricing"
+      @restore="onRestorePricing(editModelId!)"
+    />
   </div>
 </template>
 
@@ -52,6 +64,8 @@ import { useQueryStore } from '@/stores/query'
 import { usePricingStore } from '@/stores/pricing'
 import ModelCard from '@/components/model/ModelCard.vue'
 import ModelCompareDialog from '@/components/model/ModelCompareDialog.vue'
+import PricingEditDialog from '@/components/pricing/PricingEditDialog.vue'
+import { usePricingOverride } from '@/composables/usePricingOverride'
 import type { ModelBreakdown } from '@/types/database'
 import type { PricingData, TimePricingRule, CloudPricingTimeRule } from '@/types/pricing'
 import type { CompareBucket } from '@/types/common'
@@ -143,12 +157,23 @@ function onCompare(modelId: string): void {
   showCompare.value = true
 }
 
-// 跳转到定价 Tab 设置定价
-import { useRouter } from 'vue-router'
-const router = useRouter()
+// 原地设置定价：缺定价的模型用全 0 初值直接打开编辑弹窗，不再跳转定价页
+const {
+  showEditDialog,
+  editModelId,
+  editModelName,
+  editCurrentPricing,
+  editShowRestore,
+  editContextTiers,
+  editDailySlots,
+  openEditDialog,
+  onSavePricing,
+  onRestorePricing
+} = usePricingOverride()
 
-function onSetPricing(_modelId: string): void {
-  router.push({ name: 'pricing' })
+function onSetPricing(modelId: string): void {
+  const card = modelCards.value.find(c => c.modelData.model === modelId)
+  openEditDialog(modelId, card?.pricing ?? null)
 }
 </script>
 

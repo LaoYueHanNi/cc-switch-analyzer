@@ -7,71 +7,71 @@
     <!-- 模型名称 -->
     <div class="card-header">
       <span class="model-name">{{ modelId }}</span>
+      <span
+        v-if="!hasPricing"
+        class="time-badge unpriced-badge"
+        title="该模型未配置定价，费用按 0 计算；点击设置定价"
+        @click.stop="$emit('setPricing', modelId)"
+      >缺少定价</span>
       <span v-if="timeBadgeText" class="time-badge" :title="timeBadgeTitle">
         <n-icon size="14"><time-outline /></n-icon>
         {{ timeBadgeText }}
       </span>
     </div>
 
-    <!-- 无定价数据提示 -->
-    <div v-if="!hasPricing" class="no-pricing">
-      <p>暂无定价数据</p>
-      <n-button size="tiny" type="primary" @click.stop="$emit('setPricing', modelId)">
-        设置定价
-      </n-button>
+    <!-- 总费用（可点击对比） -->
+    <div class="cost-section">
+      <span
+        class="cost-value"
+        :class="{ 'cost-value--muted': !hasPricing }"
+        @click.stop="onCostClick"
+      >{{ formatCost(totalCost) }}</span>
+      <span class="cost-label">总费用</span>
     </div>
 
-    <template v-else>
-      <!-- 总费用（可点击对比） -->
-      <div class="cost-section">
-        <span class="cost-value" @click.stop="$emit('compare', modelId)">{{ formatCost(totalCost) }}</span>
-        <span class="cost-label">总费用</span>
-      </div>
+    <!-- 总 Token + 请求数 -->
+    <div class="token-section">
+      <span class="token-value">{{ formatNum(totalTokens) }}</span>
+      <span class="token-label">总 Token</span>
+      <span class="request-count">{{ requestCount }} 次请求</span>
+    </div>
 
-      <!-- 总 Token + 请求数 -->
-      <div class="token-section">
-        <span class="token-value">{{ formatNum(totalTokens) }}</span>
-        <span class="token-label">总 Token</span>
-        <span class="request-count">{{ requestCount }} 次请求</span>
-      </div>
+    <!-- 统计信息 -->
+    <div class="stats-row">
+      <span class="stat-item">单次 ¥{{ formatRate(costPerRequest) }}</span>
+      <span class="stat-item">命中率 {{ formatPercent(cacheHitRate) }}</span>
+    </div>
 
-      <!-- 统计信息 -->
-      <div class="stats-row">
-        <span class="stat-item">单次 ¥{{ formatRate(costPerRequest) }}</span>
-        <span class="stat-item">命中率 {{ formatPercent(cacheHitRate) }}</span>
-      </div>
+    <!-- 费用分解网格 -->
+    <PricingGrid
+      :input-tokens="modelData?.inputTokens"
+      :output-tokens="modelData?.outputTokens"
+      :cache-read-tokens="modelData?.cacheRead"
+      :cache-creation-tokens="modelData?.cacheCreation"
+      :input-cost="costBreakdown[0]"
+      :output-cost="costBreakdown[1]"
+      :cache-read-cost="costBreakdown[2]"
+      :cache-creation-cost="costBreakdown[3]"
+      :input-rate="getRateStr('inputCostPerMillion')"
+      :output-rate="getRateStr('outputCostPerMillion')"
+      :cache-read-rate="getRateStr('cacheReadCostPerMillion')"
+      :cache-creation-rate="getRateStr('cacheCreationCostPerMillion')"
+    />
 
-      <!-- 费用分解网格 -->
-      <PricingGrid
-        :input-tokens="modelData?.inputTokens"
-        :output-tokens="modelData?.outputTokens"
-        :cache-read-tokens="modelData?.cacheRead"
-        :cache-creation-tokens="modelData?.cacheCreation"
-        :input-cost="costBreakdown[0]"
-        :output-cost="costBreakdown[1]"
-        :cache-read-cost="costBreakdown[2]"
-        :cache-creation-cost="costBreakdown[3]"
-        :input-rate="getRateStr('inputCostPerMillion')"
-        :output-rate="getRateStr('outputCostPerMillion')"
-        :cache-read-rate="getRateStr('cacheReadCostPerMillion')"
-        :cache-creation-rate="getRateStr('cacheCreationCostPerMillion')"
-      />
-
-      <!-- 计费明细入口 -->
-      <div v-if="showBreakdownBtn" class="breakdown-btn" @click.stop="showBreakdownDialog = true">计费明细</div>
-      <PricingBreakdownDialog
-        v-model:show="showBreakdownDialog"
-        :model-name="modelId"
-        :compare-buckets="compareBuckets"
-        :pricing="pricing"
-      />
-    </template>
+    <!-- 计费明细入口 -->
+    <div v-if="showBreakdownBtn" class="breakdown-btn" @click.stop="showBreakdownDialog = true">计费明细</div>
+    <PricingBreakdownDialog
+      v-model:show="showBreakdownDialog"
+      :model-name="modelId"
+      :compare-buckets="compareBuckets"
+      :pricing="pricing"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { NButton, NIcon } from 'naive-ui'
+import { NIcon } from 'naive-ui'
 import { TimeOutline } from '@vicons/ionicons5'
 import { formatNum, formatRate, formatCost, formatPercent, epochToDateStr } from '@/utils/format'
 import PricingGrid from '@/components/common/PricingGrid.vue'
@@ -183,6 +183,11 @@ const showBreakdownDialog = ref(false)
 function onCardClick(): void {
   emit('pin', modelId.value)
 }
+// 无定价时费用恒为 0，对比没有意义
+function onCostClick(): void {
+  if (!hasPricing.value) return
+  emit('compare', modelId.value)
+}
 const showBreakdownBtn = computed(() => {
   if (!props.compareBuckets?.length || !props.pricing) return false
   // 实际命中了多个档位（至少两个 threshold 不同）
@@ -280,11 +285,15 @@ const showBreakdownBtn = computed(() => {
   gap: 2px;
 }
 
-.no-pricing {
-  text-align: center;
-  padding: 12px 0;
-  color: var(--text-muted);
-  font-size: 12px;
+/* 缺少定价标识：复用时段定价徽标的视觉，点击进入原地定价 */
+.unpriced-badge {
+  color: var(--color-amber);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.unpriced-badge:hover {
+  opacity: 0.75;
 }
 
 .cost-section {
@@ -296,6 +305,15 @@ const showBreakdownBtn = computed(() => {
 
 .cost-value:hover {
   opacity: 0.7;
+}
+
+/* 无定价：费用恒为 0，降级显示且不可点击对比 */
+.cost-value--muted,
+.cost-value--muted:hover {
+  color: var(--text-muted);
+  text-decoration: none;
+  cursor: default;
+  opacity: 1;
 }
 
 .cost-label {

@@ -68,7 +68,7 @@
             :context-tiers="card?.contextTiers || []"
             :sim-tokens="simTokens"
             :aliases="card.aliases || []"
-            @edit="onOpenEditDialog(card)"
+            @edit="openEditDialog(card.modelId, card)"
             @add-time-rule="onAddTimeRule(card.modelId)"
             @edit-time-rule="(rule) => onEditTimeRule(rule)"
             @delete-time-rule="(rule) => onDeleteTimeRule(rule)"
@@ -99,7 +99,7 @@
             :context-tiers="card?.contextTiers || []"
             :sim-tokens="simTokens"
             :aliases="card.aliases || []"
-            @edit="onOpenEditDialog(card)"
+            @edit="openEditDialog(card.modelId, card)"
             @add-time-rule="onAddTimeRule(card.modelId)"
             @edit-time-rule="(rule) => onEditTimeRule(rule)"
             @delete-time-rule="(rule) => onDeleteTimeRule(rule)"
@@ -158,6 +158,7 @@ import PricingCard from '@/components/pricing/PricingCard.vue'
 import PricingEditDialog from '@/components/pricing/PricingEditDialog.vue'
 import TimePricingDialog from '@/components/pricing/TimePricingDialog.vue'
 import AliasDialog from '@/components/pricing/AliasDialog.vue'
+import { usePricingOverride } from '@/composables/usePricingOverride'
 import { getActiveRate, dailySlotsWindowsOverlap } from '@/utils/pricing'
 import {
   DEPRECATED_FAMILY_IDS,
@@ -179,14 +180,20 @@ const simOutput = ref(1)
 const simCacheCreation = ref(0)
 const expandedUnusedFamilies = ref<Set<string>>(new Set())
 
-// 编辑定价弹窗
-const showEditDialog = ref(false)
-const editModelId = ref<string | null>(null)
-const editModelName = ref('')
-const editCurrentPricing = ref({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 })
-const editShowRestore = ref(false)
-const editContextTiers = ref<ContextTier[]>([])
-const editDailySlots = ref<DailySlot[]>([])
+// 编辑定价弹窗（状态与保存逻辑见 usePricingOverride，模型页原地定价复用同一套）
+const {
+  showEditDialog,
+  editModelId,
+  editModelName,
+  editCurrentPricing,
+  editShowRestore,
+  editContextTiers,
+  editDailySlots,
+  loadPricingData,
+  openEditDialog,
+  onSavePricing,
+  onRestorePricing
+} = usePricingOverride()
 
 // 时间定价弹窗
 const showTimeDialog = ref(false)
@@ -368,90 +375,6 @@ const familyGroups = computed<FamilyGroup[]>(() => {
     })
     .filter(g => g.used.length > 0 || g.unused.length > 0)
 })
-
-// 打开编辑弹窗
-function onOpenEditDialog(card: CardEntry): void {
-  editModelId.value = card.modelId
-  editModelName.value = card.modelId
-  editCurrentPricing.value = {
-    input: card.inputCostPerMillion || 0,
-    output: card.outputCostPerMillion || 0,
-    cacheRead: card.cacheReadCostPerMillion || 0,
-    cacheCreation: card.cacheCreationCostPerMillion || 0
-  }
-  editShowRestore.value = card.isOverride || false
-  editContextTiers.value = card.contextTiers ? [...card.contextTiers.map(t => ({ ...t }))] : []
-  editDailySlots.value = card.dailySlots ? [...card.dailySlots] : []
-  showEditDialog.value = true
-}
-
-// 加载完整定价数据
-async function loadPricingData(): Promise<void> {
-  try {
-    const [pricing, families] = await Promise.all([
-      platformAdapter.getAllPricing(),
-      platformAdapter.getPricingFamilies()
-    ])
-    pricingStore.pricingData = pricing
-    pricingStore.families = families
-  } catch (e) { console.error('加载定价数据失败', e) }
-}
-
-// 保存定价覆盖
-async function onSavePricing(data: { input: number; output: number; cacheRead: number; cacheCreation: number; dailySlots: DailySlot[] }, tiers: ContextTier[]): Promise<void> {
-  const modelId = editModelId.value!
-  if (dailySlotsWindowsOverlap(data.dailySlots || [])) {
-    message.warning('模型根峰谷时段窗口存在重叠，请调整')
-    return
-  }
-  for (const tier of tiers) {
-    if (dailySlotsWindowsOverlap(tier.dailySlots || [])) {
-      message.warning(`档位 >= ${Math.round(tier.threshold / 1000)}K 的峰谷时段窗口存在重叠，请调整`)
-      return
-    }
-  }
-  await platformAdapter.setPricingOverride({
-    modelId,
-    input: data.input,
-    output: data.output,
-    cacheRead: data.cacheRead,
-    cacheCreation: data.cacheCreation,
-    dailySlots: data.dailySlots || []
-  })
-
-  // 同步上下文档位：对比旧档位，删除不再存在的，新增或更新保留的
-  const oldTiers = editContextTiers.value || []
-  for (const old of oldTiers) {
-    if (!tiers.find(t => t.threshold === old.threshold)) {
-      await platformAdapter.deleteOverrideContextTier({ modelId, threshold: old.threshold })
-    }
-  }
-  for (const tier of tiers) {
-    const old = oldTiers.find(t => t.threshold === tier.threshold)
-    if (old) {
-      await platformAdapter.deleteOverrideContextTier({ modelId, threshold: old.threshold })
-    }
-    await platformAdapter.saveOverrideContextTier({
-      modelId,
-      threshold: tier.threshold,
-      input: tier.inputCostPerMillion,
-      output: tier.outputCostPerMillion,
-      cacheRead: tier.cacheReadCostPerMillion,
-      cacheCreation: tier.cacheCreationCostPerMillion,
-      dailySlots: tier.dailySlots || []
-    })
-  }
-
-  await platformAdapter.refreshPricing()
-  await loadPricingData()
-}
-
-// 恢复默认定价
-async function onRestorePricing(modelId: string): Promise<void> {
-  await platformAdapter.removePricingOverride(modelId)
-  await platformAdapter.refreshPricing()
-  await loadPricingData()
-}
 
 // 时间定价 CRUD
 function onAddTimeRule(modelId: string): void {
