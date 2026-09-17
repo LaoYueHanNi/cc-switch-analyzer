@@ -28,6 +28,8 @@ pub struct ExternalDbService {
     /// proxy_request_logs 是否有 data_source 列（旧版 cc-switch 无此列，
     /// 会话日志同步过滤依赖它，缺列时静默跳过）
     has_data_source_col: bool,
+    /// proxy_request_logs 是否有 first_token_ms 列（旧版 cc-switch 无此列，缺列时回退为 0）
+    has_first_token_col: bool,
     /// CCS 会话日志同步过滤的 app_type 列表（实时流式查询用），None/空 = 不过滤
     ccs_filter_apps: Option<Vec<String>>,
 }
@@ -39,6 +41,7 @@ impl ExternalDbService {
             db_path: String::new(),
             latest_timestamp: None,
             has_data_source_col: false,
+            has_first_token_col: false,
             ccs_filter_apps: None,
         }
     }
@@ -55,6 +58,9 @@ impl ExternalDbService {
         })?;
         self.has_data_source_col = conn
             .prepare("SELECT data_source FROM proxy_request_logs LIMIT 0")
+            .is_ok();
+        self.has_first_token_col = conn
+            .prepare("SELECT first_token_ms FROM proxy_request_logs LIMIT 0")
             .is_ok();
         self.db_path = file_path.to_string();
         self.db = Some(Mutex::new(conn));
@@ -927,12 +933,18 @@ impl ExternalDbService {
     pub fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<crate::services::data_source::StreamingRecord>, String> {
         let db = self.db()?;
         let (ccs_sql, ccs_binds) = self.ccs_session_filter_clause();
+        let first_token_expr = if self.has_first_token_col {
+            "COALESCE(first_token_ms, 0)"
+        } else {
+            "0"
+        };
         let (sql, mut params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
             Some(s) => (format!("
                 SELECT session_id, model, provider_id, created_at,
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
-                       latency_ms, app_type
+                       latency_ms, app_type,
+                       {first_token_expr}
                 FROM proxy_request_logs
                 WHERE created_at >= ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
@@ -942,7 +954,8 @@ impl ExternalDbService {
                 SELECT session_id, model, provider_id, created_at,
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
-                       latency_ms, app_type
+                       latency_ms, app_type,
+                       {first_token_expr}
                 FROM proxy_request_logs
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
                   AND app_type != 'claude-desktop'{ccs_sql}
@@ -961,6 +974,7 @@ impl ExternalDbService {
             let raw_input: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
             let cache_read: i64 = row.get::<_, Option<i64>>(6)?.unwrap_or(0);
             let input_tokens = normalize_input_tokens(&app_type, raw_input, cache_read);
+            let first_token: i64 = row.get::<_, Option<i64>>(10)?.unwrap_or(0);
             Ok((
                 row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 row.get::<_, Option<String>>(1)?.unwrap_or_default(),
@@ -971,7 +985,7 @@ impl ExternalDbService {
                 cache_read,
                 row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
-                0,
+                first_token,
                 is_codex,
             ))
         }).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
@@ -986,12 +1000,18 @@ impl ExternalDbService {
     ) -> Result<(), String> {
         let db = self.db()?;
         let (ccs_sql, ccs_binds) = self.ccs_session_filter_clause();
+        let first_token_expr = if self.has_first_token_col {
+            "COALESCE(first_token_ms, 0)"
+        } else {
+            "0"
+        };
         let (sql, mut params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
             Some(s) => (format!("
                 SELECT session_id, model, provider_id, created_at,
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
-                       latency_ms, app_type
+                       latency_ms, app_type,
+                       {first_token_expr}
                 FROM proxy_request_logs
                 WHERE created_at >= ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
@@ -1001,7 +1021,8 @@ impl ExternalDbService {
                 SELECT session_id, model, provider_id, created_at,
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
-                       latency_ms, app_type
+                       latency_ms, app_type,
+                       {first_token_expr}
                 FROM proxy_request_logs
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
                   AND app_type != 'claude-desktop'{ccs_sql}
@@ -1020,6 +1041,7 @@ impl ExternalDbService {
             let raw_input: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
             let cache_read: i64 = row.get::<_, Option<i64>>(6)?.unwrap_or(0);
             let input_tokens = normalize_input_tokens(&app_type, raw_input, cache_read);
+            let first_token: i64 = row.get::<_, Option<i64>>(10)?.unwrap_or(0);
             Ok((
                 row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 row.get::<_, Option<String>>(1)?.unwrap_or_default(),
@@ -1030,7 +1052,7 @@ impl ExternalDbService {
                 cache_read,
                 row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
-                0,
+                first_token,
                 is_codex,
             ))
         }).map_err(|e| format!("stream_records 查询失败: {}", e))?;
@@ -1147,8 +1169,8 @@ mod tests {
         assert!(!is_cache_inclusive_app("claude"));
     }
 
-    /// 建一张带 data_source 列的临时 CCS 库，插入代理 + 三类会话同步记录
-    fn temp_ccs_db(with_data_source: bool) -> (std::path::PathBuf, String) {
+    /// 建一张带 data_source 和可选 first_token_ms 列的临时 CCS 库，插入代理 + 三类会话同步记录
+    fn temp_ccs_db(with_data_source: bool, with_first_token: bool) -> (std::path::PathBuf, String) {
         let path = std::env::temp_dir().join(format!(
             "ccsa_extdb_test_{}_{}.db",
             std::process::id(),
@@ -1159,6 +1181,7 @@ mod tests {
         ));
         let conn = Connection::open(&path).unwrap();
         let ds_col = if with_data_source { ", data_source TEXT NOT NULL DEFAULT 'proxy'" } else { "" };
+        let ft_col = if with_first_token { ", first_token_ms INTEGER" } else { "" };
         conn.execute_batch(&format!(
             "CREATE TABLE proxy_request_logs (
                 request_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, app_type TEXT NOT NULL,
@@ -1169,18 +1192,30 @@ mod tests {
                 latency_ms INTEGER NOT NULL, status_code INTEGER NOT NULL,
                 session_id TEXT, created_at INTEGER NOT NULL
                 {ds_col}
+                {ft_col}
             );"
         ))
         .unwrap();
+
+        let mut cols = "request_id, provider_id, app_type, model, input_tokens, output_tokens, \
+                        cache_read_tokens, cache_creation_tokens, latency_ms, status_code, session_id, created_at"
+            .to_string();
+        let mut placeholders = "?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12".to_string();
+        let mut idx = 13;
+        if with_data_source {
+            cols.push_str(", data_source");
+            placeholders.push_str(&format!(",?{}", idx));
+            idx += 1;
+        }
+        if with_first_token {
+            cols.push_str(", first_token_ms");
+            placeholders.push_str(&format!(",?{}", idx));
+        }
+
         let mut insert = conn
             .prepare(&format!(
-                "INSERT INTO proxy_request_logs
-                 (request_id, provider_id, app_type, model, input_tokens, output_tokens,
-                  cache_read_tokens, cache_creation_tokens, latency_ms, status_code, session_id, created_at
-                  {}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12
-                  {})",
-                if with_data_source { ", data_source" } else { "" },
-                if with_data_source { ",?13" } else { "" }
+                "INSERT INTO proxy_request_logs ({}) VALUES ({})",
+                cols, placeholders
             ))
             .unwrap();
         let rows: Vec<(i64, &str, &str, &str, &str)> = vec![
@@ -1207,6 +1242,9 @@ mod tests {
             if with_data_source {
                 args.push(Box::new(ds));
             }
+            if with_first_token {
+                args.push(Box::new(ts / 2)); // 测试首字耗时
+            }
             let refs: Vec<&dyn rusqlite::types::ToSql> = args.iter().map(|b| b.as_ref()).collect();
             insert.execute(refs.as_slice()).unwrap();
         }
@@ -1218,7 +1256,7 @@ mod tests {
 
     #[test]
     fn session_sync_filter_excludes_matching_apps() {
-        let (path, path_str) = temp_ccs_db(true);
+        let (path, path_str) = temp_ccs_db(true, true);
         let mut svc = ExternalDbService::new();
         svc.open(&path_str).unwrap();
 
@@ -1269,11 +1307,12 @@ mod tests {
     }
 
     #[test]
-    fn stream_records_applies_ccs_session_filter() {
-        // 实时流式路径：set_ccs_filter_apps 后，会话同步记录不再流出
-        let (path, path_str) = temp_ccs_db(true);
+    fn stream_records_applies_ccs_session_filter_and_extracts_first_token() {
+        // 实时流式路径：带 first_token_ms 列，正确提取首字时间
+        let (path, path_str) = temp_ccs_db(true, true);
         let mut svc = ExternalDbService::new();
         svc.open(&path_str).unwrap();
+        assert!(svc.has_first_token_col);
 
         let collect = |svc: &ExternalDbService| {
             let mut out = Vec::new();
@@ -1291,7 +1330,9 @@ mod tests {
         assert_eq!(filtered.len(), 2);
         // 按 created_at DESC：codex_session(400) 在前，proxy(100) 在后
         assert_eq!(filtered[0].1, "gpt-5.4-codex");
+        assert_eq!(filtered[0].9, 200); // 400 / 2 = 200 首字提取正确！
         assert_eq!(filtered[1].1, "claude-3");
+        assert_eq!(filtered[1].9, 50);  // 100 / 2 = 50 首字提取正确！
 
         // 清除过滤（None）恢复全量
         svc.set_ccs_filter_apps(None);
@@ -1302,11 +1343,17 @@ mod tests {
 
     #[test]
     fn session_sync_filter_skipped_without_data_source_col() {
-        // 旧版 cc-switch 无 data_source 列：过滤条件应被跳过，不报错
-        let (path, path_str) = temp_ccs_db(false);
+        // 旧版 cc-switch 无 data_source 与 first_token 列：不报错，首字为 0
+        let (path, path_str) = temp_ccs_db(false, false);
         let mut svc = ExternalDbService::new();
         svc.open(&path_str).unwrap();
         assert!(!svc.has_data_source_col);
+        assert!(!svc.has_first_token_col);
+
+        let mut stream_records = Vec::new();
+        svc.stream_records(None, &mut |r| stream_records.push(r)).unwrap();
+        assert_eq!(stream_records.len(), 4);
+        assert_eq!(stream_records[0].9, 0); // 缺列时降级首字为 0
 
         let records = svc
             .get_filtered_raw_records(&FilterParams {

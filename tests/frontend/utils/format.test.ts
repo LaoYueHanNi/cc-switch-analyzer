@@ -9,7 +9,10 @@ import {
   epochToDateTimeStr,
   formatPercent,
   shortSessionId,
-  formatTokenSpeed
+  formatTokenSpeed,
+  formatDualTokenSpeed,
+  formatLatency,
+  formatTtft
 } from '@/utils/format'
 
 // ---------------------------------------------------------------------------
@@ -235,15 +238,97 @@ describe('formatTokenSpeed（渲染进程）', () => {
     expect(formatTokenSpeed(100, -500)).toBe('-')
   })
 
-  it('正常速度计算（保留 1 位小数，单位 token/s）', () => {
-    // 100 tokens, 1000ms = 100.0 token/s
-    expect(formatTokenSpeed(100, 1000)).toBe('100.0 token/s')
-    // 50 tokens, 2000ms = 25.0 token/s
-    expect(formatTokenSpeed(50, 2000)).toBe('25.0 token/s')
-    // 120 tokens, 2500ms = 48.0 token/s
-    expect(formatTokenSpeed(120, 2500)).toBe('48.0 token/s')
-    // 10 tokens, 300ms = 33.333... → 33.3 token/s
-    expect(formatTokenSpeed(10, 300)).toBe('33.3 token/s')
+  it('双轨速度计算：无首字或首字为0时纯吐字显示为 -，总速度正常计算', () => {
+    // 100 tokens, 1000ms → A: '-', B: '100.0' → '-/100.0 tok/s'
+    expect(formatTokenSpeed(100, 1000)).toBe('-/100.0 tok/s')
+    expect(formatTokenSpeed(100, 1000, 0)).toBe('-/100.0 tok/s')
+    expect(formatTokenSpeed(100, 1000, null)).toBe('-/100.0 tok/s')
+    // 50 tokens, 2000ms = -/25.0 tok/s
+    expect(formatTokenSpeed(50, 2000)).toBe('-/25.0 tok/s')
+  })
+
+  it('排除首字时间计算纯吐字速率：只要耗时大于首字时间（streamingMs > 0）即如实计算', () => {
+    // 100 tokens, latency 2000ms, ttft 1000ms → 纯流式 1000ms (100.0 tok/s)，总速度 2000ms (50.0 tok/s)
+    expect(formatTokenSpeed(100, 2000, 1000)).toBe('100.0/50.0 tok/s')
+    // 96 tokens, latency 6300ms, ttft 5500ms（差 800ms < 1s）：96*1000/800 = 120.0 tok/s
+    expect(formatTokenSpeed(96, 6300, 5500)).toBe('120.0/15.2 tok/s')
+    // 50 tokens, latency 2500ms, ttft 500ms → 纯流式 2000ms (25.0 tok/s)，总速度 2500ms (20.0 tok/s)
+    expect(formatTokenSpeed(50, 2500, 500)).toBe('25.0/20.0 tok/s')
+  })
+
+  it('首字时间异常或等于耗时（streamingMs <= 0）时，纯吐字标记为 -，总速度正常展示', () => {
+    // 若 ttft >= latencyMs 异常，纯吐字标记为 -，总速度正常
+    expect(formatTokenSpeed(100, 1000, 1000)).toBe('-/100.0 tok/s')
+    expect(formatTokenSpeed(100, 1000, 1500)).toBe('-/100.0 tok/s')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// formatDualTokenSpeed — 结构化双轨速度与 Tooltip
+// ---------------------------------------------------------------------------
+describe('formatDualTokenSpeed（双轨结构与 Tooltip）', () => {
+  it('无数据或非正数返回 "-"', () => {
+    expect(formatDualTokenSpeed(0, 1000)).toEqual({ speedA: '-', speedB: '-', text: '-', tooltip: '' })
+    expect(formatDualTokenSpeed(100, 0)).toEqual({ speedA: '-', speedB: '-', text: '-', tooltip: '' })
+  })
+
+  it('有效流式源：speedA 与 speedB 均有效，tooltip 包含两项速度说明', () => {
+    // 100 tokens, latency 2000ms, ttft 1000ms
+    const res = formatDualTokenSpeed(100, 2000, 1000)
+    expect(res.speedA).toBe('100.0')
+    expect(res.speedB).toBe('50.0')
+    expect(res.text).toBe('100.0/50.0 tok/s')
+    expect(res.tooltip).toBe('输出速度 (纯吐字): 100.0 tok/s\n总速度 (端到端): 50.0 tok/s')
+  })
+
+  it('源头无首字时：speedA 为 "-"，tooltip 提示无首字', () => {
+    const res = formatDualTokenSpeed(100, 2000, null)
+    expect(res.speedA).toBe('-')
+    expect(res.speedB).toBe('50.0')
+    expect(res.text).toBe('-/50.0 tok/s')
+    expect(res.tooltip).toContain('输出速度 (纯吐字): 无首字')
+    expect(res.tooltip).toContain('总速度 (端到端): 50.0 tok/s')
+  })
+
+  it('首字时间异常或等于耗时（ttft >= latency）：speedA 为 "-"', () => {
+    const res = formatDualTokenSpeed(100, 1000, 1000)
+    expect(res.speedA).toBe('-')
+    expect(res.speedB).toBe('100.0')
+    expect(res.text).toBe('-/100.0 tok/s')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// formatLatency — 耗时 / 延迟格式化
+// ---------------------------------------------------------------------------
+describe('formatLatency（渲染进程）', () => {
+  it('小于 1000ms 显示为 Xms', () => {
+    expect(formatLatency(0)).toBe('0ms')
+    expect(formatLatency(50)).toBe('50ms')
+    expect(formatLatency(999)).toBe('999ms')
+  })
+
+  it('>= 1000ms 显示为 X.Xs', () => {
+    expect(formatLatency(1000)).toBe('1.0s')
+    expect(formatLatency(1500)).toBe('1.5s')
+    expect(formatLatency(4230)).toBe('4.2s')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// formatTtft — 首字耗时格式化
+// ---------------------------------------------------------------------------
+describe('formatTtft（渲染进程）', () => {
+  it('无值、0 或负数返回 "-"', () => {
+    expect(formatTtft(undefined)).toBe('-')
+    expect(formatTtft(null as any)).toBe('-')
+    expect(formatTtft(0)).toBe('-')
+    expect(formatTtft(-100)).toBe('-')
+  })
+
+  it('有效耗时按 latency 规则格式化', () => {
+    expect(formatTtft(450)).toBe('450ms')
+    expect(formatTtft(1200)).toBe('1.2s')
   })
 })
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatTokenSpeed, formatLatency } from '@/utils/format'
+import { formatTokenSpeed, formatLatency, formatTtft } from '@/utils/format'
 import type { RealtimeRequestLog } from '@/types/database'
 
 function createSampleLog(overrides: Partial<RealtimeRequestLog>): RealtimeRequestLog {
@@ -106,10 +106,20 @@ describe('实时页面业务逻辑', () => {
   })
 
   describe('Token 输出速度计算与格式化', () => {
-    it('正常输出速度格式化，单位为 token/s', () => {
-      expect(formatTokenSpeed(100, 2000)).toBe('50.0 token/s')
-      expect(formatTokenSpeed(250, 1000)).toBe('250.0 token/s')
-      expect(formatTokenSpeed(75, 500)).toBe('150.0 token/s')
+    it('正常输出速度格式化：双轨展示纯吐字速率与端到端总速度', () => {
+      // 100 tokens, 2000ms latency, 1000ms ttft → 纯耗时 1000ms → 100.0/50.0 tok/s
+      expect(formatTokenSpeed(100, 2000, 1000)).toBe('100.0/50.0 tok/s')
+      // 96 tokens, 6300ms latency, 5500ms ttft (纯吐字 800ms < 1s) → 96*1000/800 = 120.0 tok/s
+      expect(formatTokenSpeed(96, 6300, 5500)).toBe('120.0/15.2 tok/s')
+      // 无首字时间时纯流速显示为 -，总速度正常
+      expect(formatTokenSpeed(100, 2000)).toBe('-/50.0 tok/s')
+      expect(formatTokenSpeed(250, 1000)).toBe('-/250.0 tok/s')
+      expect(formatTokenSpeed(75, 500)).toBe('-/150.0 tok/s')
+    })
+
+    it('首字时间等于或大于耗时时，纯流速显示为 -，总速度正常', () => {
+      expect(formatTokenSpeed(100, 1000, 1000)).toBe('-/100.0 tok/s')
+      expect(formatTokenSpeed(100, 1000, 1200)).toBe('-/100.0 tok/s')
     })
 
     it('无输出或耗时为 0 时安全返回 "-"', () => {
@@ -118,8 +128,21 @@ describe('实时页面业务逻辑', () => {
     })
   })
 
-  describe('首字列（原延迟 latencyMs）格式化', () => {
-    it('毫秒级与秒级按延迟规则格式化', () => {
+  describe('首字列（TTFT timeToFirstToken）格式化', () => {
+    it('有首字耗时且 > 0 时按时间规则格式化', () => {
+      expect(formatTtft(350)).toBe('350ms')
+      expect(formatTtft(1200)).toBe('1.2s')
+    })
+
+    it('无首字耗时（undefined、0 或负数）返回 "-"', () => {
+      expect(formatTtft(undefined)).toBe('-')
+      expect(formatTtft(0)).toBe('-')
+      expect(formatTtft(-1)).toBe('-')
+    })
+  })
+
+  describe('耗时列（latencyMs）格式化', () => {
+    it('毫秒级与秒级按耗时规则格式化', () => {
       expect(formatLatency(450)).toBe('450ms')
       expect(formatLatency(1000)).toBe('1.0s')
       expect(formatLatency(2350)).toBe('2.4s')

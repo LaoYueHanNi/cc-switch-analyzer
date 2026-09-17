@@ -76,8 +76,9 @@
         <span class="col-total">总token</span>
         <span class="col-cost">费用</span>
         <span class="col-tier">档位</span>
-        <span class="col-latency">首字</span>
-        <span class="col-speed">输出速度</span>
+        <span class="col-ttft">首字</span>
+        <span class="col-latency">耗时</span>
+        <span class="col-speed" title="A/B tok/s: A 为纯吐字速度(扣首字)，B 为端到端总速度">输出/总 速度</span>
       </div>
       <!-- 数据行 -->
       <div class="session-rows">
@@ -113,8 +114,18 @@
           <span class="col-cost">{{ formatCost(row.totalCost) }}</span>
           <span class="col-tier" v-if="row.contextTierThreshold">>= {{ Math.round(row.contextTierThreshold / 1000) }}K</span>
           <span class="col-tier" v-else>-</span>
+          <span class="col-ttft">{{ formatTtft(row.timeToFirstToken) }}</span>
           <span class="col-latency">{{ formatLatency(row.latencyMs) }}</span>
-          <span class="col-speed">{{ formatTokenSpeed(row.outputTokens, row.latencyMs) }}</span>
+          <span
+            class="col-speed"
+            :title="formatDualTokenSpeed(row.outputTokens, row.latencyMs, row.timeToFirstToken).tooltip"
+          >
+            <template v-if="formatDualTokenSpeed(row.outputTokens, row.latencyMs, row.timeToFirstToken).text !== '-'">
+              <span class="spd-stream">{{ formatDualTokenSpeed(row.outputTokens, row.latencyMs, row.timeToFirstToken).speedA }}</span><span class="spd-slash">/</span><span class="spd-total">{{ formatDualTokenSpeed(row.outputTokens, row.latencyMs, row.timeToFirstToken).speedB }}</span>
+              <span class="spd-unit"> tok/s</span>
+            </template>
+            <template v-else>-</template>
+          </span>
         </div>
       </div>
     </div>
@@ -138,7 +149,7 @@ import CompactSelect from '@/components/common/CompactSelect.vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useFilterStore } from '@/stores/filter'
 import { useRealtimePolling } from '@/composables/useRealtimePolling'
-import { formatNum, formatCost, formatPercent, formatTokenSpeed, formatLatency } from '@/utils/format'
+import { formatNum, formatCost, formatPercent, formatDualTokenSpeed, formatLatency, formatTtft } from '@/utils/format'
 
 const dbStore = useDatabaseStore()
 const filterStore = useFilterStore()
@@ -407,12 +418,19 @@ watch(() => dbStore.hasDatabase, (val) => {
 /* 档位列 */
 .col-tier { width: 48px; flex-shrink: 0; text-align: right; font-size: 10px; color: var(--text-secondary); }
 
-/* 首字列（展示 latencyMs） */
+/* 首字列（展示 timeToFirstToken） */
+.col-ttft { width: 50px; flex-shrink: 0; text-align: right; color: var(--text-muted); font-size: 11px; }
+
+/* 耗时列（展示 latencyMs） */
 .col-latency { width: 50px; flex-shrink: 0; text-align: right; color: var(--text-muted); font-size: 11px; }
 
-/* 速度列 */
-.col-speed { width: 90px; flex-shrink: 0; text-align: right; color: var(--color-orange); font-size: 11px; }
-.log-header .col-speed { color: var(--color-orange); }
+/* 速度列：双轨展示 A/B tok/s */
+.col-speed { width: 112px; flex-shrink: 0; text-align: right; font-size: 11px; white-space: nowrap; }
+.col-speed .spd-stream { color: var(--color-teal); font-weight: 600; }
+.col-speed .spd-slash { color: var(--text-muted); margin: 0 1px; }
+.col-speed .spd-total { color: var(--color-orange); }
+.col-speed .spd-unit { color: var(--text-muted); font-size: 10px; }
+.log-header .col-speed { color: var(--color-orange); cursor: help; }
 
 /* 工具栏:数据源过滤与翻页控制 */
 .realtime-toolbar {

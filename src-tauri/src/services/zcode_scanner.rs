@@ -88,7 +88,8 @@ pub fn scan_zcode_at(app_db: &AppDbService, sqlite_path: &Path) -> Result<DshSca
             "SELECT id, session_id, model_id,
                     input_tokens, output_tokens,
                     cache_read_input_tokens, cache_creation_input_tokens,
-                    started_at, COALESCE(duration_ms, 0)
+                    started_at, COALESCE(duration_ms, 0),
+                    COALESCE(time_to_first_token_ms, 0)
              FROM model_usage
              WHERE status = 'completed'
                AND (input_tokens > 0 OR output_tokens > 0
@@ -110,6 +111,7 @@ pub fn scan_zcode_at(app_db: &AppDbService, sqlite_path: &Path) -> Result<DshSca
                 cache_creation: row.get::<_, i64>(6)?,
                 started_at: row.get::<_, i64>(7)?,
                 latency: row.get::<_, i64>(8)?,
+                first_token_latency: row.get::<_, Option<i64>>(9)?.unwrap_or(0),
             })
         })
         .map_err(|e| format!("读取 ZCode model_usage 失败: {}", e))?;
@@ -154,7 +156,7 @@ pub fn scan_zcode_at(app_db: &AppDbService, sqlite_path: &Path) -> Result<DshSca
             rec.cache_creation,
             rec.started_at / 1000,
             rec.latency,
-            0,
+            rec.first_token_latency,
         ) {
             Ok(true) => imported += 1,
             Ok(false) => skipped += 1,
@@ -191,6 +193,7 @@ struct ZcodeUsageRow {
     cache_creation: i64,
     started_at: i64,
     latency: i64,
+    first_token_latency: i64,
 }
 
 #[cfg(test)]
@@ -219,7 +222,8 @@ mod tests {
                 input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
-                cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0
+                cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+                time_to_first_token_ms INTEGER
             );",
         )
         .unwrap();
@@ -235,12 +239,13 @@ mod tests {
         cache_read: i64,
         cache_creation: i64,
         status: &str,
+        first_token: i64,
     ) {
         conn.execute(
             "INSERT INTO model_usage (id, session_id, model_id, status, started_at, duration_ms,
-                                      input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens)
-             VALUES (?1, 'sess-1', 'GLM-5', ?2, ?3, 42, ?4, ?5, ?6, ?7)",
-            params![id, status, started_at, input, output, cache_read, cache_creation],
+                                      input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, time_to_first_token_ms)
+             VALUES (?1, 'sess-1', 'GLM-5', ?2, ?3, 42, ?4, ?5, ?6, ?7, ?8)",
+            params![id, status, started_at, input, output, cache_read, cache_creation, first_token],
         )
         .unwrap();
     }
@@ -257,19 +262,19 @@ mod tests {
     fn scan_copies_needed_fields_and_normalizes_input() {
         let db = AppDbService::new_in_memory().unwrap();
         let (src_path, src) = temp_zcode_sqlite();
-        insert_row(&src, "u1", 1_000_000, 150, 20, 50, 7, "completed");
-        insert_row(&src, "skip-zero", 1_000_001, 0, 0, 0, 0, "completed");
-        insert_row(&src, "skip-err", 1_000_002, 10, 10, 0, 0, "error");
+        insert_row(&src, "u1", 1_000_000, 150, 20, 50, 7, "completed", 520);
+        insert_row(&src, "skip-zero", 1_000_001, 0, 0, 0, 0, "completed", 0);
+        insert_row(&src, "skip-err", 1_000_002, 10, 10, 0, 0, "error", 0);
         drop(src);
 
         let r = scan_zcode_at(&db, &src_path).unwrap();
         assert_eq!(r.imported, 1);
         assert_eq!(r.total_records, 1);
 
-        let row: (String, String, i64, i64, i64, i64, i64, i64) = db
+        let row: (String, String, i64, i64, i64, i64, i64, i64, i64) = db
             .conn()
             .query_row(
-                "SELECT request_id, model, input_tokens, output_tokens, cache_read, cache_creation, created_at, latency
+                "SELECT request_id, model, input_tokens, output_tokens, cache_read, cache_creation, created_at, latency, first_token_latency
                  FROM session_request_logs WHERE source='ZCode'",
                 [],
                 |r| {
@@ -282,6 +287,7 @@ mod tests {
                         r.get(5)?,
                         r.get(6)?,
                         r.get(7)?,
+                        r.get(8)?,
                     ))
                 },
             )
@@ -294,6 +300,7 @@ mod tests {
         assert_eq!(row.5, 7);
         assert_eq!(row.6, 1000);
         assert_eq!(row.7, 42);
+        assert_eq!(row.8, 520); // first_token_latency
 
         std::fs::remove_file(&src_path).ok();
     }
@@ -302,7 +309,7 @@ mod tests {
     fn second_scan_skips_when_mtime_unchanged_then_imports_new() {
         let db = AppDbService::new_in_memory().unwrap();
         let (src_path, src) = temp_zcode_sqlite();
-        insert_row(&src, "u1", 2_000_000, 10, 1, 0, 0, "completed");
+        insert_row(&src, "u1", 2_000_000, 10, 1, 0, 0, "completed", 0);
         drop(src);
 
         let r1 = scan_zcode_at(&db, &src_path).unwrap();
@@ -314,7 +321,7 @@ mod tests {
         assert_eq!(r2.total_records, 1);
 
         let src = Connection::open(&src_path).unwrap();
-        insert_row(&src, "u2", 3_000_000, 8, 2, 0, 0, "completed");
+        insert_row(&src, "u2", 3_000_000, 8, 2, 0, 0, "completed", 0);
         drop(src);
         bump_mtime(&src_path);
 
@@ -329,8 +336,8 @@ mod tests {
     fn prune_on_source_does_not_delete_our_copy() {
         let db = AppDbService::new_in_memory().unwrap();
         let (src_path, src) = temp_zcode_sqlite();
-        insert_row(&src, "old", 1_000_000, 10, 1, 0, 0, "completed");
-        insert_row(&src, "new", 9_000_000, 20, 2, 0, 0, "completed");
+        insert_row(&src, "old", 1_000_000, 10, 1, 0, 0, "completed", 0);
+        insert_row(&src, "new", 9_000_000, 20, 2, 0, 0, "completed", 0);
         drop(src);
 
         assert_eq!(scan_zcode_at(&db, &src_path).unwrap().imported, 2);

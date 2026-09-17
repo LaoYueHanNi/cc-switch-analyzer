@@ -1,23 +1,23 @@
-# DR: 实时页改为按数据源筛选，表头「延迟」改名为「首字」
+# DR: 实时页改为按数据源筛选
 
 Status: implemented
 
 ## Problem
 
-实时页工具栏按模型过滤，和主页 FilterBar 的数据源下拉不一致：多源混在一张表里时，用户没法按 CCS / OpenCode / Cursor 等源收窄最近请求。同时表头并排「首字」(TTFT) 和「延迟」(整段 latencyMs)，TTFT 经常空，真正有值、用户要看的是延迟列。
+实时页工具栏原本按模型过滤，与主页 FilterBar 的数据源下拉不一致：当多个数据源（CCS、OpenCode、Antigravity、Cursor 等）混在一张表里时，用户无法按数据源快速收窄最近请求；同时实时页需要独立于全局筛选的即时切源能力。
 
 ## Decision
 
-实时页工具栏复制主页数据源 CompactSelect（`filterStore.providerOptions`，placeholder「全部」），用独立的 `selectedSource` 按行的 `dbType` 过滤。不绑定 `filterStore.providerId`，避免改实时筛选带动模型/供应商页查询。去掉 TTFT「首字」列，原「延迟」列改名为「首字」，仍展示 `formatLatency(latencyMs)`。
+实时页工具栏复制主页数据源 CompactSelect（`filterStore.providerOptions`，placeholder「全部」），用独立的 `selectedSource` 响应式变量按数据行的 `dbType` 过滤。不绑定全局 `filterStore.providerId`，避免在实时页切换筛选意外改变模型/供应商等分析页面的查询状态。
+
+> **修订说明**：此前随本决策草案附带的「表头延迟改名为首字」临时方案已被 [2026-09-17-realtime-timing-columns.md](../proposed/2026-09-17-realtime-timing-columns.md) 正式推翻与系统重构，实时页确立了「首字」「耗时」「输出/总 速度」独立度量体系。
 
 ## Alternatives considered
 
-- **绑定 `filterStore.providerId` 与主页共用筛选状态** —— 实时页改源会改掉模型/供应商页的查询条件，FilterBar 在实时 Tab 不可见，用户回来会困惑。
-- **选项合并当前日志里出现的 dbType** —— 旧模型下拉这么做是因为模型集合比全局选项更即时；数据源选项已由 `getFilterOptions` 按已加载源给出，再合并会与主页下拉不一致。
-- **把「首字」列改成展示 latencyMs、保留「延迟」列** —— 用户明确要求去掉首字、延迟改名，两列并存没有意义。
-- **列改名后改用 `formatTtft`** —— 那会把 0ms 显示成 "-"，改变原延迟列的格式化规则；本次只改表头。
+- **绑定 `filterStore.providerId` 与主页共用筛选状态** —— 实时页改源会联动修改模型/供应商页的查询条件，而全局 FilterBar 在实时 Tab 不可见，用户切换回主页时容易产生困惑。
+- **选项仅合并当前已渲染日志中出现的 dbType** —— 这么做会导致未产生最近请求但已启用的数据源无法被选中；统一使用 `filterStore.providerOptions` 能保持与主页选项一致。
 
 ## Consequences
 
-- 换来：实时页筛选与主页数据源语义对齐；表头只留一列耗时，标签为「首字」。
-- 代价：`timeToFirstToken` 仍从后端返回但实时页不再展示；前端 `formatTtft` 已删，只留 `formatLatency`；「首字」标签对应的是整段 `latencyMs` 而非 TTFT，和字面不完全一致。
+- 换来：实时页筛选与主页数据源语义一致，支持单独收窄特定数据源日志；与全局筛选解耦互不干扰。
+- 代价：实时页与主页筛选相互独立，用户在主页切换数据源后进入实时页仍需单独选择（默认显示全部）。
