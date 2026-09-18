@@ -9,12 +9,16 @@
 //! ```json
 //! {"requestId":"<assistant message id>","time":<epoch ms>,"sessionId":"…",
 //!  "model":"…","usage":{"inputTokens":N,"outputTokens":N,
-//!                        "cacheReadTokens"?:N,"cacheWriteTokens"?:N}}
+//!                        "cacheReadTokens"?:N,"cacheWriteTokens"?:N},
+//!  "latencyMs"?:N,"firstTokenLatencyMs"?:N}
 //! ```
 //! - `requestId` 即 assistant message id,与会话扫描提取的 message.id 一致;
 //!   入库统一 request_id = "dsh:" + requestId,两种来源请求级去重
 //! - `usage` 缺失表示 provider 未报告用量(行仍记录但无计费)→ 解析跳过(全 0)
 //! - `cacheReadTokens`/`cacheWriteTokens` 缺省补 0;空 model → "unknown"
+//! - `latencyMs`/`firstTokenLatencyMs` 由插件在请求结束后回填,是耗时与首字的
+//!   权威来源;缺失(老记录、`kind:"failure"` 失败行)按 0 处理 → 前端显示 `-`
+//! - `kind`(`failure`/`compaction`)与 `failureCode` 仅供插件侧排查,不参与计费
 //! - `time` 毫秒 → /1000 转秒
 //!
 //! 增量机制复用 [`crate::services::dsh_scanner::scan_file_incremental`]
@@ -119,6 +123,13 @@ fn parse_plugin_line(line: &str) -> Option<ParsedRow> {
     let time_ms = v.get("time").and_then(|t| t.as_u64()).unwrap_or(0);
     let created_at = (time_ms / 1000) as i64;
 
+    // 时序字段由插件在请求结束后回填;老记录或失败记录可能缺失,缺省 0 表示无
+    let latency = v.get("latencyMs").and_then(|t| t.as_i64()).unwrap_or(0);
+    let first_token_latency = v
+        .get("firstTokenLatencyMs")
+        .and_then(|t| t.as_i64())
+        .unwrap_or(0);
+
     Some(ParsedRow {
         request_id: request_id.to_string(),
         session_id,
@@ -127,11 +138,12 @@ fn parse_plugin_line(line: &str) -> Option<ParsedRow> {
         output_tokens,
         cache_read,
         cache_creation,
-            created_at,
-            project: String::new(),
-            latency: 0,
-        })
-    }
+        created_at,
+        project: String::new(),
+        latency,
+        first_token_latency,
+    })
+}
 
 /// 对指定插件数据目录执行扫描(可测入口,不依赖固定路径)。
 pub fn scan_plugin_in(app_db: &AppDbService, dir: &Path) -> Result<DshScanResult, String> {
@@ -239,6 +251,26 @@ mod tests {
         assert_eq!(m.cache_read, 0);
         assert_eq!(m.cache_creation, 0);
         assert_eq!(m.model, "unknown");
+    }
+
+    #[test]
+    fn test_parse_plugin_line_timing_fields() {
+        // 插件在请求结束后回填耗时与首字,是二者的权威来源
+        let line = r#"{"requestId":"rid-t","time":1786669114335,"sessionId":"s","model":"m",
+                       "usage":{"inputTokens":9779,"outputTokens":102},
+                       "latencyMs":3740,"firstTokenLatencyMs":3083}"#;
+        let m = parse_plugin_line(line).expect("应解析出记录");
+        assert_eq!(m.latency, 3740);
+        assert_eq!(m.first_token_latency, 3083);
+    }
+
+    #[test]
+    fn test_parse_plugin_line_timing_absent_defaults_zero() {
+        // 老记录、kind:"failure" 失败行无时序字段 → 0(前端显示 `-`),不得报错
+        let line = plugin_line("rid-4", 1000, "s4", "m", Some(10), Some(5), None, None);
+        let m = parse_plugin_line(&line).expect("应解析出记录");
+        assert_eq!(m.latency, 0);
+        assert_eq!(m.first_token_latency, 0);
     }
 
     #[test]
@@ -428,17 +460,25 @@ mod tests {
         assert_eq!(r2.total_records, 1);
     }
 
-    /// 真实数据验证(扫描 ~/.dsh/token-usage 到内存库,只读不改源文件)
+    /// 真实数据验证(默认扫 ~/.dsh/token-usage;可用 CCSA_REAL_PLUGIN_DIR 指向别处,
+    /// 只读不改源文件)
     #[test]
     #[ignore]
     fn test_scan_real_plugin_data() {
-        let dir = match crate::utils::get_default_dsh_plugin_dir() {
-            Ok(d) if d.is_dir() => d,
-            _ => {
-                eprintln!("跳过:插件数据目录不存在");
-                return;
-            }
+        let dir = match std::env::var("CCSA_REAL_PLUGIN_DIR") {
+            Ok(p) => PathBuf::from(p),
+            Err(_) => match crate::utils::get_default_dsh_plugin_dir() {
+                Ok(d) => d,
+                Err(_) => {
+                    eprintln!("跳过:插件数据目录不存在");
+                    return;
+                }
+            },
         };
+        if !dir.is_dir() {
+            eprintln!("跳过:插件数据目录不存在 {}", dir.display());
+            return;
+        }
         let db = AppDbService::new_in_memory().unwrap();
         let result = scan_plugin_in(&db, &dir).unwrap();
         println!("[REAL-DSH-PLUGIN] {:?}", result);
@@ -470,5 +510,34 @@ mod tests {
         for r in rows {
             println!("{}", r.unwrap());
         }
+        // 时序接入验证:插件的 latencyMs / firstTokenLatencyMs 应落库
+        let (with_latency, with_ttft, total): (i64, i64, i64) = db
+            .conn()
+            .query_row(
+                "SELECT COALESCE(SUM(latency > 0), 0),
+                        COALESCE(SUM(first_token_latency > 0), 0),
+                        COUNT(*)
+                   FROM session_request_logs WHERE source='DSH'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        println!(
+            "[REAL-DSH-PLUGIN] 时序覆盖: 耗时 {}/{} 首字 {}/{}",
+            with_latency, total, with_ttft, total
+        );
+        assert!(with_latency > 0, "应至少有一条算出耗时");
+        assert!(with_ttft > 0, "应至少有一条算出首字");
+        // 首字不得大于耗时(时序倒挂即解析错位)
+        let inverted: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM session_request_logs
+                  WHERE source='DSH' AND first_token_latency > latency AND latency > 0",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(inverted, 0, "首字大于耗时的记录数应为 0");
     }
 }

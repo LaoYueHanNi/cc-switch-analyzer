@@ -303,9 +303,15 @@ describe('formatDualTokenSpeed（双轨结构与 Tooltip）', () => {
 // ---------------------------------------------------------------------------
 describe('formatLatency（渲染进程）', () => {
   it('小于 1000ms 显示为 Xms', () => {
-    expect(formatLatency(0)).toBe('0ms')
     expect(formatLatency(50)).toBe('50ms')
     expect(formatLatency(999)).toBe('999ms')
+  })
+
+  it('无值、0 或负数返回 "-"（0 表示源头未采集耗时，不是瞬时完成）', () => {
+    expect(formatLatency(0)).toBe('-')
+    expect(formatLatency(-1)).toBe('-')
+    expect(formatLatency(undefined)).toBe('-')
+    expect(formatLatency(null as any)).toBe('-')
   })
 
   it('>= 1000ms 显示为 X.Xs', () => {

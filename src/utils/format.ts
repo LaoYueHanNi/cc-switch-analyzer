@@ -122,14 +122,16 @@ export function formatTokenSpeed(
 }
 
 // 延迟 / 耗时格式化：>= 1000ms 显示为 "X.Xs"，否则 "Xms"
-export function formatLatency(ms: number): string {
+// 无值或 <= 0 显示为 "-"：0 表示源头未采集耗时（如 CCS 的 session_log 来源
+// 记录不带 latency_ms），真实请求耗时不可能为 0，显示 "0ms" 会被误读为瞬时完成
+export function formatLatency(ms?: number | null): string {
+  if (ms === undefined || ms === null || ms <= 0) return '-'
   if (ms >= 1000) return (ms / 1000).toFixed(1) + 's'
   return ms + 'ms'
 }
 
 // 首字时间（TTFT）格式化：有值且 > 0 时按耗时规则格式化，无值或 <= 0 显示为 "-"
 export function formatTtft(ms?: number | null): string {
-  if (ms === undefined || ms === null || ms <= 0) return '-'
   return formatLatency(ms)
 }
 

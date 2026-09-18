@@ -180,6 +180,7 @@ pub fn parse_kimi_line(
         created_at,
         project: project_dir.to_string(),
         latency: 0,
+        first_token_latency: 0,
     })
 }
 

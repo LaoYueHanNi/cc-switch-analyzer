@@ -84,11 +84,13 @@ fn parse_minimax_line(line: &str, session_id: Option<&str>) -> Option<ParsedRow>
         output_tokens,
         cache_read,
         cache_creation,
-            created_at,
-            project: String::new(),
-            latency: 0,
-        })
-    }
+        created_at,
+        project: String::new(),
+        // MiniMax 源头无耗时与首字字段,恒为 0 → 前端显示 `-`
+        latency: 0,
+        first_token_latency: 0,
+    })
+}
 
 /// 从 messages.jsonl 同目录的 manifest.json 读取 sessionId(会话目录稳定标识)。
 fn read_session_id_from_manifest(messages_path: &Path) -> Option<String> {

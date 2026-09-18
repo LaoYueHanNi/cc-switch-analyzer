@@ -55,6 +55,8 @@ pub struct ParsedRow {
     pub project: String,
     /// 延迟(毫秒);无则 0
     pub latency: i64,
+    /// 首字时间(毫秒);无则 0
+    pub first_token_latency: i64,
 }
 
 /// 扫描结果(序列化给前端)
@@ -84,33 +86,75 @@ fn read_log_file(path: &Path) -> Result<String, String> {
     }
 }
 
+/// 会话事件流的跨行时序状态。
+///
+/// DSH 会话事件按序追加:`step/start` → 若干 `assistant/chunk` → `assistant/message`。
+/// 耗时取 `assistant/message` 到达时间、首字取首个 `assistant/chunk` 到达时间,
+/// 二者均以该 step 的 `step/start` 时间为起点(与 CCS/ZCode 的"单次请求"口径一致)。
+#[derive(Debug, Default)]
+struct DshParseState {
+    /// 当前会话 id(`session` 事件携带)
+    session_id: Option<String>,
+    /// 当前会话 cwd(`session` 事件携带)
+    cwd: Option<String>,
+    /// 当前 step 的 turn 编号
+    step_turn: i64,
+    /// 当前 step 的 step 编号
+    step_index: i64,
+    /// 当前 step 的 `step/start` 事件时间(毫秒);0 表示未知
+    step_start_ms: i64,
+    /// 当前 step 首个 `assistant/chunk` 到达时间(毫秒);0 表示未见
+    first_chunk_ms: i64,
+}
+
 /// 解析一行 DSH 会话事件。
 ///
-/// - `session` 事件:记录 session id 到 `current_session_id`,cwd 到 `current_cwd`,返回 None
-/// - `assistant/message` 事件:提取 usage + model,返回 Some(ParsedRow)
-/// - 其他事件(含 assistant/chunk 快照):返回 None
+/// - `session` 事件:记录 session id 与 cwd 到 `state`,返回 None
+/// - `step/start` 事件:记录该 step 起点时间并重置首字游标,返回 None
+/// - `assistant/chunk` 事件:记录当前 step 首个 chunk 的到达时间(即首字),返回 None
+/// - `assistant/message` 事件:提取 usage + model,并按 `state` 推算耗时与首字,返回 Some(ParsedRow)
+/// - 其他事件:返回 None
 ///
 /// 解析失败(非 JSON 等)返回 None,容忍不完整行。
-fn parse_dsh_line(
-    line: &str,
-    current_session_id: &mut Option<String>,
-    current_cwd: &mut Option<String>,
-) -> Option<ParsedRow> {
+fn parse_dsh_line(line: &str, state: &mut DshParseState) -> Option<ParsedRow> {
     let line = line.trim();
     if line.is_empty() {
         return None;
     }
     let v: Value = serde_json::from_str(line).ok()?;
     let event_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    let time_ms = v.get("time").and_then(|t| t.as_i64()).unwrap_or(0);
 
     if event_type == "session" {
         if let Some(data) = v.get("data") {
             if let Some(id) = data.get("id").and_then(|i| i.as_str()) {
-                *current_session_id = Some(id.to_string());
+                state.session_id = Some(id.to_string());
             }
             // 项目归属:session 事件携带的 cwd(实勘确认存在)
             if let Some(cwd) = data.get("cwd").and_then(|c| c.as_str()) {
-                *current_cwd = Some(cwd.to_string());
+                state.cwd = Some(cwd.to_string());
+            }
+        }
+        return None;
+    }
+
+    if event_type == "step/start" {
+        let data = v.get("data")?;
+        state.step_turn = data.get("turn").and_then(|x| x.as_i64()).unwrap_or(0);
+        state.step_index = data.get("step").and_then(|x| x.as_i64()).unwrap_or(0);
+        state.step_start_ms = time_ms;
+        state.first_chunk_ms = 0;
+        return None;
+    }
+
+    if event_type == "assistant/chunk" {
+        if state.first_chunk_ms == 0 && time_ms > 0 {
+            if let Some(data) = v.get("data") {
+                let turn = data.get("turn").and_then(|x| x.as_i64()).unwrap_or(0);
+                let step = data.get("step").and_then(|x| x.as_i64()).unwrap_or(0);
+                if turn == state.step_turn && step == state.step_index {
+                    state.first_chunk_ms = time_ms;
+                }
             }
         }
         return None;
@@ -125,6 +169,22 @@ fn parse_dsh_line(
     let usage = data.get("usage")?;
 
     let request_id = message.get("id").and_then(|i| i.as_str())?.to_string();
+
+    // 时序推算:仅当事件确属当前 step 且起点已知时计算,否则安全回退 0
+    // (增量扫描首行可能落在 step 中间,此时 step/start 不在本批可见范围内)
+    let in_step = data.get("turn").and_then(|x| x.as_i64()).unwrap_or(0) == state.step_turn
+        && data.get("step").and_then(|x| x.as_i64()).unwrap_or(0) == state.step_index;
+    let (latency, first_token_latency) =
+        if in_step && state.step_start_ms > 0 && time_ms > state.step_start_ms {
+            let ttft = if state.first_chunk_ms > state.step_start_ms {
+                state.first_chunk_ms - state.step_start_ms
+            } else {
+                0
+            };
+            (time_ms - state.step_start_ms, ttft)
+        } else {
+            (0, 0)
+        };
 
     // model: message.source.model → message.model → "unknown"
     let model = message
@@ -148,22 +208,22 @@ fn parse_dsh_line(
     let cache_creation = num("cacheWriteTokens");
 
     // time 毫秒 → 秒
-    let time_ms = v.get("time").and_then(|t| t.as_u64()).unwrap_or(0);
     let created_at = (time_ms / 1000) as i64;
 
     Some(ParsedRow {
         request_id,
-        session_id: current_session_id.clone(),
+        session_id: state.session_id.clone(),
         model,
         input_tokens,
         output_tokens,
         cache_read,
         cache_creation,
         created_at,
-            project: current_cwd.clone().unwrap_or_default(),
-            latency: 0,
-        })
-    }
+        project: state.cwd.clone().unwrap_or_default(),
+        latency,
+        first_token_latency,
+    })
+}
 
 /// 返回文件 mtime 的纳秒时间戳(照搬 cc-switch metadata_modified_nanos)
 pub(crate) fn metadata_modified_nanos(metadata: &std::fs::Metadata) -> i64 {
@@ -220,7 +280,8 @@ pub fn latest_session_file_mtime(dsh_dir: &Path) -> Option<std::fs::Metadata> {
 /// 对单个 JSONL 日志文件执行增量扫描(会话事件 / 插件记录共用)。
 ///
 /// 文件 mtime 未变 → 整文件跳过返回 (0,0)。
-/// 否则全量读取,从 last_offset+1 行解析(parse 返回 None 的行跳过),
+/// 否则全量读取并逐行调用 parse(parse 返回 None 的行跳过);仅 last_offset
+/// 之后的新行入库,旧行只用于重建状态型解析器的跨行上下文。
 /// 事务内 INSERT OR IGNORE + 推进 offset。
 pub fn scan_file_incremental(
     app_db: &AppDbService,
@@ -254,10 +315,13 @@ pub fn scan_file_incremental(
 
     for line in text.lines() {
         line_offset += 1;
-        if line_offset <= last_offset {
-            continue;
-        }
+        // 状态型解析器(DSH 会话事件)必须看到全部行才能重建跨行时序(step/start
+        // → assistant/chunk → assistant/message),故旧行仍调用 parse 但不入库。
+        let is_new = line_offset > last_offset;
         if let Some(msg) = parse(line) {
+            if !is_new {
+                continue;
+            }
             // 任一计费维度 > 0 即导入(照搬 cc-switch has_billable_token)
             let has_billable = msg.input_tokens > 0
                 || msg.output_tokens > 0
@@ -280,7 +344,7 @@ pub fn scan_file_incremental(
                 msg.cache_creation,
                 msg.created_at,
                 msg.latency,
-                0,
+                msg.first_token_latency,
             ) {
                 Ok(true) => imported += 1,
                 Ok(false) => skipped += 1,
@@ -329,10 +393,10 @@ pub fn scan_dsh_in(app_db: &AppDbService, dsh_dir: &Path) -> Result<DshScanResul
     let mut skipped = 0u32;
     let mut errors = 0u32;
     for f in &files {
-        let mut current_session_id: Option<String> = None;
-        let mut current_cwd: Option<String> = None;
+        // 每个文件独立重建时序状态:文件按追加序写入,step/start 必先于其 message
+        let mut state = DshParseState::default();
         match scan_file_incremental(app_db, DSH_SOURCE, f, |line| {
-            parse_dsh_line(line, &mut current_session_id, &mut current_cwd)
+            parse_dsh_line(line, &mut state)
         }) {
             Ok((imp, skp)) => {
                 imported += imp;
@@ -442,9 +506,8 @@ mod tests {
     #[test]
     fn test_parse_assistant_message() {
         let line = assistant_msg("m1", "deepseek-v4-flash", 1786629109285, 14175, 220, 195072, 0);
-        let mut sid = None;
-        let mut cwd = None;
-        let m = parse_dsh_line(&line, &mut sid, &mut cwd).expect("应解析出消息");
+        let mut state = DshParseState::default();
+        let m = parse_dsh_line(&line, &mut state).expect("应解析出消息");
         assert_eq!(m.request_id, "m1");
         assert_eq!(m.model, "deepseek-v4-flash");
         assert_eq!(m.input_tokens, 14175);
@@ -453,6 +516,9 @@ mod tests {
         assert_eq!(m.cache_creation, 0);
         // 毫秒 → 秒
         assert_eq!(m.created_at, 1786629109285 / 1000);
+        // 无 step/start 上下文时,时序安全回退 0
+        assert_eq!(m.latency, 0);
+        assert_eq!(m.first_token_latency, 0);
     }
 
     #[test]
@@ -467,7 +533,7 @@ mod tests {
             }
         })
         .to_string();
-        let m = parse_dsh_line(&line, &mut None, &mut None).expect("应解析出消息");
+        let m = parse_dsh_line(&line, &mut DshParseState::default()).expect("应解析出消息");
         assert_eq!(m.model, "fallback-model");
     }
 
@@ -479,7 +545,7 @@ mod tests {
             "data": { "chunk": { "type": "usage", "usage": { "inputTokens": 999 } } }
         })
         .to_string();
-        assert!(parse_dsh_line(&line, &mut None, &mut None).is_none());
+        assert!(parse_dsh_line(&line, &mut DshParseState::default()).is_none());
     }
 
     #[test]
@@ -490,25 +556,125 @@ mod tests {
             "data": { "id": "sess-abc", "createdAt": 1000, "cwd": "/tmp" }
         })
         .to_string();
-        let mut sid = None;
-        let mut cwd = None;
-        assert!(parse_dsh_line(&line, &mut sid, &mut cwd).is_none());
-        assert_eq!(sid.as_deref(), Some("sess-abc"));
+        let mut state = DshParseState::default();
+        assert!(parse_dsh_line(&line, &mut state).is_none());
+        assert_eq!(state.session_id.as_deref(), Some("sess-abc"));
         // session 事件的 cwd 应被记录（项目归属）
-        assert_eq!(cwd.as_deref(), Some("/tmp"));
+        assert_eq!(state.cwd.as_deref(), Some("/tmp"));
 
         // 后续 assistant/message 应带上该 session_id 与 cwd
         let msg = assistant_msg("m3", "m", 1000, 1, 0, 0, 0);
-        let m = parse_dsh_line(&msg, &mut sid, &mut cwd).expect("应解析出消息");
+        let m = parse_dsh_line(&msg, &mut state).expect("应解析出消息");
         assert_eq!(m.session_id.as_deref(), Some("sess-abc"));
         assert_eq!(m.project, "/tmp");
     }
 
     #[test]
     fn test_parse_invalid_json_returns_none() {
-        assert!(parse_dsh_line("not json", &mut None, &mut None).is_none());
-        assert!(parse_dsh_line("", &mut None, &mut None).is_none());
-        assert!(parse_dsh_line("   ", &mut None, &mut None).is_none());
+        assert!(parse_dsh_line("not json", &mut DshParseState::default()).is_none());
+        assert!(parse_dsh_line("", &mut DshParseState::default()).is_none());
+        assert!(parse_dsh_line("   ", &mut DshParseState::default()).is_none());
+    }
+
+    /// 时序推算:step/start → 首个 assistant/chunk(首字) → assistant/message(耗时)
+    #[test]
+    fn test_parse_derives_latency_and_ttft_from_step_timeline() {
+        let mut state = DshParseState::default();
+        let start = serde_json::json!({
+            "type": "step/start", "seq": 1, "time": 1_000_000u64,
+            "data": { "turn": 1, "step": 1 }
+        })
+        .to_string();
+        assert!(parse_dsh_line(&start, &mut state).is_none());
+        let chunk = serde_json::json!({
+            "type": "assistant/chunk", "seq": 2, "time": 1_003_964u64,
+            "data": { "turn": 1, "step": 1, "chunk": { "type": "block-start", "index": 0 } }
+        })
+        .to_string();
+        assert!(parse_dsh_line(&chunk, &mut state).is_none());
+        let msg = serde_json::json!({
+            "type": "assistant/message", "seq": 3, "time": 1_009_744u64,
+            "data": {
+                "turn": 1, "step": 1,
+                "message": { "id": "m-ttft" },
+                "usage": { "inputTokens": 10, "outputTokens": 100 }
+            }
+        })
+        .to_string();
+        let m = parse_dsh_line(&msg, &mut state).expect("应解析出消息");
+        assert_eq!(m.latency, 9_744);
+        assert_eq!(m.first_token_latency, 3_964);
+    }
+
+    /// 后续 chunk 不得覆盖首字;进入新 step 必须重置首字游标
+    #[test]
+    fn test_parse_keeps_first_chunk_and_resets_per_step() {
+        let mut state = DshParseState::default();
+        let step = |t: u64, turn: i64, s: i64| {
+            serde_json::json!({ "type": "step/start", "time": t, "data": { "turn": turn, "step": s } })
+                .to_string()
+        };
+        let chunk = |t: u64, turn: i64, s: i64| {
+            serde_json::json!({ "type": "assistant/chunk", "time": t, "data": { "turn": turn, "step": s } })
+                .to_string()
+        };
+        let msg = |t: u64, turn: i64, s: i64, id: &str| {
+            serde_json::json!({
+                "type": "assistant/message", "time": t,
+                "data": { "turn": turn, "step": s, "message": { "id": id },
+                          "usage": { "inputTokens": 1, "outputTokens": 1 } }
+            })
+            .to_string()
+        };
+
+        parse_dsh_line(&step(1000, 1, 1), &mut state);
+        parse_dsh_line(&chunk(1200, 1, 1), &mut state);
+        parse_dsh_line(&chunk(1500, 1, 1), &mut state); // 后者不得覆盖首字
+        let m1 = parse_dsh_line(&msg(3000, 1, 1, "a"), &mut state).unwrap();
+        assert_eq!(m1.first_token_latency, 200);
+        assert_eq!(m1.latency, 2000);
+
+        // 进入下一个 step:首字游标重置,不得沿用上一个 step 的 chunk 时间
+        parse_dsh_line(&step(5000, 1, 2), &mut state);
+        parse_dsh_line(&chunk(5100, 1, 2), &mut state);
+        let m2 = parse_dsh_line(&msg(6000, 1, 2, "b"), &mut state).unwrap();
+        assert_eq!(m2.first_token_latency, 100);
+        assert_eq!(m2.latency, 1000);
+    }
+
+    /// 增量扫描首行落在 step 中间(turn/step 配不上)时安全回退 0
+    #[test]
+    fn test_parse_falls_back_when_step_context_missing() {
+        let mut state = DshParseState::default();
+        let msg = serde_json::json!({
+            "type": "assistant/message", "time": 9_000_000u64,
+            "data": { "turn": 7, "step": 3, "message": { "id": "m-orphan" },
+                      "usage": { "inputTokens": 5, "outputTokens": 5 } }
+        })
+        .to_string();
+        let m = parse_dsh_line(&msg, &mut state).expect("应解析出消息");
+        assert_eq!(m.latency, 0);
+        assert_eq!(m.first_token_latency, 0);
+    }
+
+    /// 无 chunk(如工具直答)时首字为 0,但耗时仍应算出
+    #[test]
+    fn test_parse_latency_without_chunk() {
+        let mut state = DshParseState::default();
+        let start = serde_json::json!({
+            "type": "step/start", "time": 1000u64, "data": { "turn": 2, "step": 5 }
+        })
+        .to_string();
+        parse_dsh_line(&start, &mut state);
+        let msg = serde_json::json!({
+            "type": "assistant/message", "time": 4000u64,
+            "data": { "turn": 2, "step": 5, "message": { "id": "m-nochunk" },
+                      "usage": { "inputTokens": 1, "outputTokens": 1 } }
+        })
+        .to_string();
+        let m = parse_dsh_line(&msg, &mut state).expect("应解析出消息");
+        assert_eq!(m.latency, 3000);
+        assert_eq!(m.first_token_latency, 0);
     }
 
     #[test]
@@ -699,5 +865,34 @@ mod tests {
         for r in rows {
             println!("{}", r.unwrap());
         }
+        // 时序接入验证:step/start + assistant/chunk + assistant/message 配对推算
+        let (with_latency, with_ttft, total): (i64, i64, i64) = db
+            .conn()
+            .query_row(
+                "SELECT COALESCE(SUM(latency > 0), 0),
+                        COALESCE(SUM(first_token_latency > 0), 0),
+                        COUNT(*)
+                   FROM session_request_logs WHERE source='DSH'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        println!(
+            "[REAL-DSH] 时序覆盖: 耗时 {}/{} 首字 {}/{}",
+            with_latency, total, with_ttft, total
+        );
+        assert!(with_latency > 0, "应至少有一条算出耗时");
+        assert!(with_ttft > 0, "应至少有一条算出首字");
+        // 首字不得大于耗时(时序倒挂即解析错位)
+        let inverted: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM session_request_logs
+                  WHERE source='DSH' AND first_token_latency > latency AND latency > 0",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(inverted, 0, "首字大于耗时的记录数应为 0");
     }
 }

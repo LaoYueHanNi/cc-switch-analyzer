@@ -10,7 +10,7 @@ Status: implemented
 
 实时页工具栏复制主页数据源 CompactSelect（`filterStore.providerOptions`，placeholder「全部」），用独立的 `selectedSource` 响应式变量按数据行的 `dbType` 过滤。不绑定全局 `filterStore.providerId`，避免在实时页切换筛选意外改变模型/供应商等分析页面的查询状态。
 
-> **修订说明**：此前随本决策草案附带的「表头延迟改名为首字」临时方案已被 [2026-09-17-realtime-timing-columns.md](../proposed/2026-09-17-realtime-timing-columns.md) 正式推翻与系统重构，实时页确立了「首字」「耗时」「输出/总 速度」独立度量体系。
+> **修订说明**：此前随本决策草案附带的「表头延迟改名为首字」临时方案已被 [2026-09-17-realtime-timing-columns.md](../implemented/2026-09-17-realtime-timing-columns.md) 正式推翻与系统重构，实时页确立了「首字」「耗时」「输出/总 速度」独立度量体系。
 
 ## Alternatives considered
 

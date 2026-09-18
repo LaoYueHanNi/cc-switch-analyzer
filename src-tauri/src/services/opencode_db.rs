@@ -13,6 +13,37 @@ pub struct OpenCodeDbService {
     latest_timestamp: Option<i64>,
 }
 
+/// 实时记录查询的公共列（表别名固定为 `m`）。
+///
+/// 第 9 列为耗时、第 10 列为首字：
+/// - 耗时 = `message.time.completed - message.time.created`（维持既有口径）
+/// - 首字 = 首个带 `data.time.start` 的 part 时间 − `message.time.created`
+///
+/// 首字与耗时同以 `message.time.created` 为起点,保证实时页 A/B 两轨同源可比;
+/// 无正文 part 时子查询为 NULL,COALESCE 回退到 `time.created` 自身使该列为 0;
+/// 时钟偏差导致的负偏移在读取侧 clamp。
+const REALTIME_COLUMNS: &str = "m.session_id,
+           json_extract(m.data, '$.modelID'),
+           json_extract(m.data, '$.providerID'),
+           (m.time_created / 1000),
+           CAST(json_extract(m.data, '$.tokens.input') AS INTEGER),
+           CAST(json_extract(m.data, '$.tokens.output') AS INTEGER),
+           CAST(COALESCE(json_extract(m.data, '$.tokens.cache.read'), 0) AS INTEGER),
+           CAST(COALESCE(json_extract(m.data, '$.tokens.cache.write'), 0) AS INTEGER),
+           (json_extract(m.data, '$.time.completed') - json_extract(m.data, '$.time.created')),
+           COALESCE((SELECT MIN(json_extract(p.data, '$.time.start'))
+                       FROM part p
+                      WHERE p.message_id = m.id
+                        AND json_extract(p.data, '$.time.start') IS NOT NULL),
+                    json_extract(m.data, '$.time.created')) - json_extract(m.data, '$.time.created')";
+
+/// 实时记录过滤条件:assistant 且任一计费维度 > 0(表别名固定为 `m`)。
+const REALTIME_FILTER: &str = "json_extract(m.data, '$.role') = 'assistant'
+              AND (CAST(json_extract(m.data, '$.tokens.input') AS INTEGER) > 0
+                   OR CAST(json_extract(m.data, '$.tokens.output') AS INTEGER) > 0
+                   OR CAST(COALESCE(json_extract(m.data, '$.tokens.cache.read'), 0) AS INTEGER) > 0
+                   OR CAST(COALESCE(json_extract(m.data, '$.tokens.cache.write'), 0) AS INTEGER) > 0)";
+
 impl OpenCodeDbService {
     pub fn new() -> Self {
         Self {
@@ -864,46 +895,27 @@ impl OpenCodeDbService {
 
     pub fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<crate::services::data_source::StreamingRecord>, String> {
         let db = self.db()?;
-        let base_filter = "json_extract(data, '$.role') = 'assistant'
-              AND (CAST(json_extract(data, '$.tokens.input') AS INTEGER) > 0
-                   OR CAST(json_extract(data, '$.tokens.output') AS INTEGER) > 0
-                   OR CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER) > 0
-                   OR CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER) > 0)";
 
         let sql;
         let params: Vec<Box<dyn rusqlite::types::ToSql>> = match since {
             Some(s) => {
                 sql = format!(
-                    "SELECT session_id,
-                           json_extract(data, '$.modelID'),
-                           json_extract(data, '$.providerID'),
-                           (time_created / 1000),
-                           CAST(json_extract(data, '$.tokens.input') AS INTEGER),
-                           CAST(json_extract(data, '$.tokens.output') AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
-                           (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
-                    FROM message
-                    WHERE (time_created / 1000) >= ?
-                      AND {}
-                    ORDER BY time_created DESC", base_filter);
+                    "SELECT {}
+                     FROM message m
+                     WHERE (m.time_created / 1000) >= ?
+                       AND {}
+                     ORDER BY m.time_created DESC",
+                    REALTIME_COLUMNS, REALTIME_FILTER);
                 vec![Box::new(s)]
             }
             None => {
                 sql = format!(
-                    "SELECT session_id,
-                           json_extract(data, '$.modelID'),
-                           json_extract(data, '$.providerID'),
-                           (time_created / 1000),
-                           CAST(json_extract(data, '$.tokens.input') AS INTEGER),
-                           CAST(json_extract(data, '$.tokens.output') AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
-                           (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
-                    FROM message
-                    WHERE {}
-                    ORDER BY time_created DESC
-                    LIMIT 500", base_filter);
+                    "SELECT {}
+                     FROM message m
+                     WHERE {}
+                     ORDER BY m.time_created DESC
+                     LIMIT 500",
+                    REALTIME_COLUMNS, REALTIME_FILTER);
                 vec![]
             }
         };
@@ -921,7 +933,7 @@ impl OpenCodeDbService {
                 row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                 row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
-                0,
+                row.get::<_, Option<i64>>(9)?.unwrap_or(0).max(0),
                 false,
             ))
         }).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
@@ -935,46 +947,27 @@ impl OpenCodeDbService {
         on_record: &mut dyn FnMut(crate::services::data_source::StreamingRecord),
     ) -> Result<(), String> {
         let db = self.db()?;
-        let base_filter = "json_extract(data, '$.role') = 'assistant'
-              AND (CAST(json_extract(data, '$.tokens.input') AS INTEGER) > 0
-                   OR CAST(json_extract(data, '$.tokens.output') AS INTEGER) > 0
-                   OR CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER) > 0
-                   OR CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER) > 0)";
 
         let sql;
         let params: Vec<Box<dyn rusqlite::types::ToSql>> = match since {
             Some(s) => {
                 sql = format!(
-                    "SELECT session_id,
-                           json_extract(data, '$.modelID'),
-                           json_extract(data, '$.providerID'),
-                           (time_created / 1000),
-                           CAST(json_extract(data, '$.tokens.input') AS INTEGER),
-                           CAST(json_extract(data, '$.tokens.output') AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
-                           (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
-                    FROM message
-                    WHERE (time_created / 1000) >= ?
-                      AND {}
-                    ORDER BY time_created DESC", base_filter);
+                    "SELECT {}
+                     FROM message m
+                     WHERE (m.time_created / 1000) >= ?
+                       AND {}
+                     ORDER BY m.time_created DESC",
+                    REALTIME_COLUMNS, REALTIME_FILTER);
                 vec![Box::new(s)]
             }
             None => {
                 sql = format!(
-                    "SELECT session_id,
-                           json_extract(data, '$.modelID'),
-                           json_extract(data, '$.providerID'),
-                           (time_created / 1000),
-                           CAST(json_extract(data, '$.tokens.input') AS INTEGER),
-                           CAST(json_extract(data, '$.tokens.output') AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
-                           CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
-                           (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
-                    FROM message
-                    WHERE {}
-                    ORDER BY time_created DESC
-                    LIMIT 500", base_filter);
+                    "SELECT {}
+                     FROM message m
+                     WHERE {}
+                     ORDER BY m.time_created DESC
+                     LIMIT 500",
+                    REALTIME_COLUMNS, REALTIME_FILTER);
                 vec![]
             }
         };
@@ -992,7 +985,7 @@ impl OpenCodeDbService {
                 row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                 row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
-                0,
+                row.get::<_, Option<i64>>(9)?.unwrap_or(0).max(0),
                 false,
             ))
         }).map_err(|e| format!("stream_records 查询失败: {}", e))?;
@@ -1121,5 +1114,54 @@ impl super::data_source::DataSource for OpenCodeDbService {
             project_attribution: true,
             incremental_scan: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 真实数据验证:实时记录的首字应取自 part 表,且与耗时同源不倒挂。
+    /// 需 `CCSA_REAL_OPENCODE_DB` 指向 opencode.db(只读打开,不改源库)。
+    #[test]
+    #[ignore]
+    fn test_realtime_ttft_from_real_db() {
+        let path = match std::env::var("CCSA_REAL_OPENCODE_DB") {
+            Ok(p) => p,
+            Err(_) => {
+                eprintln!("跳过:未设置 CCSA_REAL_OPENCODE_DB");
+                return;
+            }
+        };
+        if !Path::new(&path).is_file() {
+            eprintln!("跳过:文件不存在 {}", path);
+            return;
+        }
+        let mut svc = OpenCodeDbService::new();
+        svc.open(&path).expect("应能只读打开 OpenCode 库");
+        let rows = svc
+            .get_recent_request_logs_raw(None)
+            .expect("应能查询实时记录");
+        assert!(!rows.is_empty(), "应至少有一条记录");
+
+        let with_latency = rows.iter().filter(|r| r.8 > 0).count();
+        let with_ttft = rows.iter().filter(|r| r.9 > 0).count();
+        println!(
+            "[REAL-OPENCODE] 记录 {} 条, 有耗时 {}, 有首字 {}",
+            rows.len(),
+            with_latency,
+            with_ttft
+        );
+        assert!(with_latency > 0, "应至少有一条算出耗时");
+        assert!(with_ttft > 0, "应至少有一条算出首字");
+        // 首字不得大于耗时(首字与耗时同以 time.created 为起点)
+        let inverted = rows.iter().filter(|r| r.9 > r.8 && r.8 > 0).count();
+        assert_eq!(inverted, 0, "首字大于耗时的记录数应为 0");
+
+        let sample = &rows[0];
+        println!(
+            "[REAL-OPENCODE] 样例: session={} model={} created_at={} latency={} ttft={}",
+            sample.0, sample.1, sample.3, sample.8, sample.9
+        );
     }
 }
