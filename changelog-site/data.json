@@ -1,5 +1,51 @@
 [
   {
+    "version": "Unreleased",
+    "date": "2026-09-18",
+    "commits": [
+      {
+        "hash": "aed70e6",
+        "subject": "feat(realtime): DSH 与 OpenCode 接入首字与耗时，三列决策转正",
+        "date": "2026-09-18"
+      },
+      {
+        "hash": "71b00ff",
+        "subject": "docs(adr): 订正实时页提案中 OpenCode 与 DSH 的首字源头判定",
+        "date": "2026-09-18"
+      },
+      {
+        "hash": "3d31b88",
+        "subject": "docs(adr): 提案实时页拆分「首字」「耗时」「输出/总速度」与全源排查",
+        "date": "2026-09-18"
+      },
+      {
+        "hash": "df8ca1c",
+        "subject": "feat(realtime): 拆分「首字」「耗时」「输出/总速度」并接入原生首字",
+        "date": "2026-09-17"
+      },
+      {
+        "hash": "deec1d6",
+        "subject": "feat: 接入 Kimi 用量并改进实时页筛选与展示 (#3)",
+        "date": "2026-09-17"
+      },
+      {
+        "hash": "18f8a1c",
+        "subject": "fix(filter): 空数据源不再清空数据源与模型筛选选项",
+        "date": "2026-09-17"
+      },
+      {
+        "hash": "c43ba8c",
+        "subject": "feat(pricing): 缺定价模型卡片展示用量并支持原地设置定价",
+        "date": "2026-09-17"
+      },
+      {
+        "hash": "1aa57ee",
+        "subject": "chore: add CODEOWNERS",
+        "date": "2026-09-17"
+      }
+    ]
+  },
+  {
     "version": "0.8.4",
     "date": "2026-09-16",
     "commits": [

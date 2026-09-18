@@ -1,6 +1,6 @@
 [package]
 name = "cc-switch-analyzer"
-version = "0.8.4"
+version = "0.8.5"
 description = "CC-Switch 使用分析器 — Tauri 版本"
 authors = ["LaoYueHanNi"]
 license = "MIT"
@@ -36,5 +36,5 @@ tempfile = "3"
 # 生产构建优化（仅影响 cargo build --release，dev 不受影响）
 [profile.release]
 lto = true          # 链接时优化：减小体积、提升运行性能（代价：release 编译变慢）
-codegen-units = 1   # 单编译单元：更好的全局优化
+codegen-units = 16  # 并行 codegen：显著加快 release 编译（相比 =1 优化略保守）
 strip = true        # 去除符号表：显著减小 binary 体积
