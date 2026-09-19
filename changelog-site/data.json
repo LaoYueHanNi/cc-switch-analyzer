@@ -1,6 +1,22 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-09-19",
+    "commits": [
+      {
+        "hash": "b2cc1d4",
+        "subject": "feat(realtime): 实时请求表格支持点选隐藏输出或总速度",
+        "date": "2026-09-19"
+      },
+      {
+        "hash": "0760cf2",
+        "subject": "feat(scanner): MiniMax 数据源升级为直读 SQLite 并补全请求耗时与模型归一化",
+        "date": "2026-09-19"
+      }
+    ]
+  },
+  {
+    "version": "0.8.5",
     "date": "2026-09-18",
     "commits": [
       {
