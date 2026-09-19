@@ -102,6 +102,9 @@ impl AppDbService {
         if version < 14 {
             self.migrate_v14()?;
         }
+        if version < 15 {
+            self.migrate_v15()?;
+        }
 
         Ok(())
     }
@@ -490,6 +493,20 @@ impl AppDbService {
                 .map_err(|e| format!("迁移 v14 (session_request_logs.first_token_latency) 失败: {}", e))?;
         }
         self.set_schema_version(14)?;
+        Ok(())
+    }
+
+    /// v15: MiniMax 数据源升级为直读 SQLite (local_runtime_message_rows)，
+    /// 清空旧的 JSONL 扫描记录与旧文件游标以触发全新的完整扫描，
+    /// 解决主键格式不兼容问题并导入请求耗时 (latency) 与首字耗时 (first_token_latency)。
+    fn migrate_v15(&mut self) -> Result<(), String> {
+        self.db
+            .execute_batch(
+                "DELETE FROM session_request_logs WHERE source = 'MiniMax';
+                 DELETE FROM session_log_sync WHERE source = 'MiniMax';",
+            )
+            .map_err(|e| format!("迁移 v15 (MiniMax 数据源重置) 失败: {}", e))?;
+        self.set_schema_version(15)?;
         Ok(())
     }
 
@@ -1910,7 +1927,7 @@ impl AppDbService {
                 last_synced_at INTEGER NOT NULL
             );"
         ).map_err(|e| format!("初始化内存表失败: {}", e))?;
-        self.set_setting("schema_version", "13")?;
+        self.set_setting("schema_version", "15")?;
         Ok(())
     }
 }
@@ -1936,7 +1953,7 @@ mod tests {
     #[test]
     fn test_schema_version() {
         let db = create_db();
-        assert_eq!(db.get_setting("schema_version").unwrap(), "13");
+        assert_eq!(db.get_setting("schema_version").unwrap(), "15");
     }
 
     #[test]
@@ -1956,9 +1973,8 @@ mod tests {
             )
             .unwrap();
 
-        // 版本降回 v11 后重新执行迁移链（v12 + v13）
-        db.set_setting("schema_version", "11").unwrap();
-        db.init_schema().unwrap();
+        // 执行 v12 迁移
+        db.migrate_v12().unwrap();
 
         let count = |conn: &rusqlite::Connection, sql: &str| -> i64 {
             conn.query_row(sql, [], |row| row.get(0)).unwrap()
@@ -1974,6 +1990,42 @@ mod tests {
         assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE request_id = 'DSH:m1' AND source = 'DSH' AND provider_id = 'DSH'"), 1);
         assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE request_id = 'MiniMax:mm1' AND source = 'MiniMax' AND provider_id = 'MiniMax'"), 1);
         assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE request_id = 'other:x' AND source = 'other'"), 1);
+    }
+
+    #[test]
+    fn test_migrate_v15_resets_minimax_records() {
+        let mut db = create_db();
+        db.conn()
+            .execute(
+                "INSERT INTO session_request_logs
+                    (request_id, source, session_id, model, provider_id,
+                     input_tokens, output_tokens, cache_read, cache_creation, created_at)
+                 VALUES
+                    ('MiniMax:m1', 'MiniMax', 's1', 'm', 'MiniMax', 1, 0, 0, 0, 100),
+                    ('DSH:d1', 'DSH', 's2', 'm', 'DSH', 2, 0, 0, 0, 200)",
+                [],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO session_log_sync (file_path, source, last_modified, last_synced_at)
+                 VALUES ('/path/to/minimax', 'MiniMax', 123, 456), ('/path/to/dsh', 'DSH', 789, 101)",
+                [],
+            )
+            .unwrap();
+
+        db.migrate_v15().unwrap();
+
+        let count = |conn: &rusqlite::Connection, sql: &str| -> i64 {
+            conn.query_row(sql, [], |row| row.get(0)).unwrap()
+        };
+        let conn = db.conn();
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE source = 'MiniMax'"), 0);
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_log_sync WHERE source = 'MiniMax'"), 0);
+        // 其他数据源不受影响
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE source = 'DSH'"), 1);
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_log_sync WHERE source = 'DSH'"), 1);
+        assert_eq!(db.get_schema_version(), 15);
     }
 
     #[test]

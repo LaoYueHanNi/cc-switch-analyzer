@@ -1292,13 +1292,10 @@ pub(crate) fn source_mtime(
             }
         }
         DbType::Minimax => {
-            // MiniMax 数据源 path 是 pricing.db;内容变化发生在 ~/.minimax/v2/sessions,
-            // 取最新 messages.jsonl mtime;无文件时回退目录 mtime
-            match crate::utils::get_default_minimax_dir() {
-                Ok(dir) => crate::services::minimax_scanner::latest_session_file_mtime(&dir)
-                    .or_else(|| std::fs::metadata(&dir).ok()),
-                Err(_) => std::fs::metadata(path).ok(),
-            }
+            // MiniMax 数据源 path 是 pricing.db; 内容变化发生在 ~/.minimax/v2/sqlite/runtime-state.sqlite
+            // (优先取 SQLite mtime, 无则回退 sessions 目录)
+            crate::services::minimax_scanner::minimax_source_mtime()
+                .or_else(|| std::fs::metadata(path).ok())
         }
         DbType::Antigravity => {
             // Antigravity 数据源 path 是 pricing.db;用量本身不落盘(只能向 language

@@ -37,7 +37,7 @@ Status: implemented
 | **Proma** | 扫描型 (JSONL) | ❌ 源头无首字字段 | ⚠️ 旧格式有 `durationMs`；SDK 格式无单次耗时（`result` 为整轮汇总行） | `- / B tok/s`（旧格式）或 `-`（SDK 格式） | 旧格式可取耗时；SDK 格式须保持 `-`，不可误将轮汇总当作单次 |
 | **DSH** | 扫描/插件双轨 | 会话扫描：✅ 会话事件流含毫秒 `time`（实测 470/474 step 可配对）；插件数据：✅ 原生 `firstTokenLatencyMs` | 会话扫描：✅ 同上推得；插件数据：✅ 原生 `latencyMs` | `A / B tok/s` | 两条路径源头均可得，取得方式见下方实勘记录 |
 | **Kimi** | 扫描型 (JSONL) | ❌ `wire.jsonl` 仅记账无时间 | ❌ 无耗时字段 | `-` | 不适用，源头纯记账，无任何时间信息 |
-| **MiniMax** | 扫描型 (JSONL/SQLite) | ❌ 仅有结束时间戳 | ❌ 无耗时字段 | `-` | 不适用，源头仅记结束点，无交互持续时间 |
+| **MiniMax** | 扫描型 (SQLite) | ✅ `thinking_duration_ms`（[见 2026-09-19 决策](./2026-09-19-minimax-sqlite-migration.md)） | ✅ `request_duration_ms`（同上） | `A / B tok/s` | 直读 `runtime-state.sqlite::local_runtime_message_rows` 表 |
 | **Cursor** | 文件型 (CSV) | ❌ CSV 仅有账单字段无首字 | ❌ CSV 无耗时 | `-` | 不适用，仅为静态用量导入 |
 
 ### 实勘记录
@@ -71,7 +71,8 @@ Status: implemented
 - **ZCode**：读取侧与入库链路已就绪。实时查询直读 `session_request_logs`，抽样核对 `latency` 与源库完全一致；首字受上述不回填影响，历史行为 `-`，改造后新入库的记录正常显示（实测 15 条）。
 - **Antigravity**：源头原生两列均入库，实测 252 条中 210 条带首字。
 - **Proma**：旧格式 `durationMs` 读取侧已就绪；SDK 格式整轮汇总行保持 `-`。库内样本仅 6 条且均为无耗时形态。
-- **Kimi / MiniMax / Cursor**：源头缺时间字段，三列如实显示 `-`（评估表已列明），无读取侧改动。
+- **MiniMax**：已于 2026-09-19 升级为直读 `runtime-state.sqlite::local_runtime_message_rows`，支持毫秒级 `request_duration_ms` 与 `thinking_duration_ms`（详见 [2026-09-19 决策](./2026-09-19-minimax-sqlite-migration.md)）。
+- **Kimi / Cursor**：源头缺时间字段，三列如实显示 `-`（评估表已列明），无读取侧改动。
 
 ## Alternatives considered
 

@@ -80,6 +80,11 @@ pub fn get_default_minimax_dir() -> Result<std::path::PathBuf, String> {
     Ok(home.join(".minimax"))
 }
 
+/// 获取默认 MiniMax Code SQLite 数据库路径(~/.minimax/v2/sqlite/runtime-state.sqlite)
+pub fn get_default_minimax_db_path() -> Result<std::path::PathBuf, String> {
+    Ok(get_default_minimax_dir()?.join("v2").join("sqlite").join("runtime-state.sqlite"))
+}
+
 /// 获取 DSH token-usage 插件数据目录路径。
 ///
 /// 解析规则与插件 resolveDataDir 保持一致:
