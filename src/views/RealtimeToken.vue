@@ -78,7 +78,12 @@
         <span class="col-tier">档位</span>
         <span class="col-ttft">首字</span>
         <span class="col-latency">耗时</span>
-        <span class="col-speed" title="A/B tok/s: A 为纯吐字速度(扣首字)，B 为端到端总速度">输出/总 速度</span>
+        <span class="col-speed">
+          <DualValueHeader
+            v-model:show-a="showSpeedOutput"
+            v-model:show-b="showSpeedTotal"
+          />
+        </span>
       </div>
       <!-- 数据行 -->
       <div class="session-rows">
@@ -120,11 +125,12 @@
             class="col-speed"
             :title="formatDualTokenSpeed(row.outputTokens, row.latencyMs, row.timeToFirstToken).tooltip"
           >
-            <template v-if="formatDualTokenSpeed(row.outputTokens, row.latencyMs, row.timeToFirstToken).text !== '-'">
-              <span class="spd-stream">{{ formatDualTokenSpeed(row.outputTokens, row.latencyMs, row.timeToFirstToken).speedA }}</span><span class="spd-slash">/</span><span class="spd-total">{{ formatDualTokenSpeed(row.outputTokens, row.latencyMs, row.timeToFirstToken).speedB }}</span>
-              <span class="spd-unit"> tok/s</span>
-            </template>
-            <template v-else>-</template>
+            <DualValueCell
+              :val-a="formatDualTokenSpeed(row.outputTokens, row.latencyMs, row.timeToFirstToken).speedA"
+              :val-b="formatDualTokenSpeed(row.outputTokens, row.latencyMs, row.timeToFirstToken).speedB"
+              :show-a="showSpeedOutput"
+              :show-b="showSpeedTotal"
+            />
           </span>
         </div>
       </div>
@@ -146,6 +152,8 @@
 defineOptions({ name: 'RealtimeToken' })
 import { ref, computed, onMounted, onActivated, onDeactivated, watch } from 'vue'
 import CompactSelect from '@/components/common/CompactSelect.vue'
+import DualValueHeader from '@/components/common/DualValueHeader.vue'
+import DualValueCell from '@/components/common/DualValueCell.vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useFilterStore } from '@/stores/filter'
 import { useRealtimePolling } from '@/composables/useRealtimePolling'
@@ -154,6 +162,32 @@ import { formatNum, formatCost, formatPercent, formatDualTokenSpeed, formatLaten
 const dbStore = useDatabaseStore()
 const filterStore = useFilterStore()
 const { logs, lastRefreshTime, startPolling, stopPolling, refreshNow } = useRealtimePolling()
+
+// 速度列双指标显隐状态（本地偏好记忆，默认全部展示）
+const SPEED_DISPLAY_KEY = 'cc_switch_realtime_speed_display'
+function getSavedSpeedDisplay(): { showOutput: boolean; showTotal: boolean } {
+  try {
+    const raw = localStorage.getItem(SPEED_DISPLAY_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      return {
+        showOutput: typeof parsed.showOutput === 'boolean' ? parsed.showOutput : true,
+        showTotal: typeof parsed.showTotal === 'boolean' ? parsed.showTotal : true,
+      }
+    }
+  } catch {}
+  return { showOutput: true, showTotal: true }
+}
+
+const savedSpeedDisplay = getSavedSpeedDisplay()
+const showSpeedOutput = ref(savedSpeedDisplay.showOutput)
+const showSpeedTotal = ref(savedSpeedDisplay.showTotal)
+
+watch([showSpeedOutput, showSpeedTotal], ([out, tot]) => {
+  try {
+    localStorage.setItem(SPEED_DISPLAY_KEY, JSON.stringify({ showOutput: out, showTotal: tot }))
+  } catch {}
+})
 
 // 数据源过滤与分页状态（独立于主页 FilterBar，避免改实时筛选带动模型/供应商查询）
 const selectedSource = ref('')
@@ -430,7 +464,7 @@ watch(() => dbStore.hasDatabase, (val) => {
 .col-speed .spd-slash { color: var(--text-muted); margin: 0 1px; }
 .col-speed .spd-total { color: var(--color-orange); }
 .col-speed .spd-unit { color: var(--text-muted); font-size: 10px; }
-.log-header .col-speed { color: var(--color-orange); cursor: help; }
+.log-header .col-speed { color: var(--color-orange); cursor: default; }
 
 /* 工具栏:数据源过滤与翻页控制 */
 .realtime-toolbar {

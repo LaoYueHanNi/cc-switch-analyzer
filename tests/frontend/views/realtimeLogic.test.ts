@@ -148,4 +148,49 @@ describe('实时页面业务逻辑', () => {
       expect(formatLatency(2350)).toBe('2.4s')
     })
   })
+
+  describe('双指标速度点选显隐与展示切换逻辑', () => {
+    // 模拟 DualValueCell 的渲染逻辑
+    function formatCellText(valA: string, valB: string, showA: boolean, showB: boolean, unit = ' tok/s', fallback = '-'): string {
+      const hasA = valA !== undefined && valA !== null && valA !== '' && valA !== '-'
+      const hasB = valB !== undefined && valB !== null && valB !== '' && valB !== '-'
+
+      if (!showA && !showB) return fallback
+      if (showA && showB) {
+        if (hasA || hasB) {
+          return `${hasA ? valA : '-'}/${hasB ? valB : '-'}${unit}`
+        }
+        return fallback
+      }
+      if (showA) {
+        return hasA ? `${valA}${unit}` : fallback
+      }
+      if (showB) {
+        return hasB ? `${valB}${unit}` : fallback
+      }
+      return fallback
+    }
+
+    it('默认全部展示时，输出完整的双轨速度', () => {
+      expect(formatCellText('169.8', '38.2', true, true)).toBe('169.8/38.2 tok/s')
+    })
+
+    it('点击输出使其暗下来时，仅展示总速度，不带输出值与斜杠', () => {
+      expect(formatCellText('169.8', '38.2', false, true)).toBe('38.2 tok/s')
+    })
+
+    it('点击总速使其暗下来时，仅展示输出速度，不带总速与斜杠', () => {
+      expect(formatCellText('169.8', '38.2', true, false)).toBe('169.8 tok/s')
+    })
+
+    it('两者均被点暗时，统一安全显示为 "-"', () => {
+      expect(formatCellText('169.8', '38.2', false, false)).toBe('-')
+    })
+
+    it('无有效速度数据时，无论开启哪一项均展示 "-"', () => {
+      expect(formatCellText('-', '-', true, true)).toBe('-')
+      expect(formatCellText('-', '-', true, false)).toBe('-')
+      expect(formatCellText('-', '-', false, true)).toBe('-')
+    })
+  })
 })
