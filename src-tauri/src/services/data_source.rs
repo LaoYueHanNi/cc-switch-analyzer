@@ -174,11 +174,12 @@ pub enum DbType {
     Minimax,
     Antigravity,
     Kimi,
+    Pi,
 }
 
 impl DbType {
     /// 数据源规范名（canonical name）：CCS / OpenCode / AIProxy / Cursor /
-    /// ZCode / Proma / DSH / MiniMax / Antigravity / Kimi。该名称同时用作：
+    /// ZCode / Proma / DSH / MiniMax / Antigravity / Kimi / PI。该名称同时用作：
     /// - 持久化 last_db_paths 的 db_type
     /// - 固定型数据源的 provider_id / provider_name
     /// - session_request_logs 入库的 source 列值
@@ -194,6 +195,7 @@ impl DbType {
             DbType::Minimax => "MiniMax",
             DbType::Antigravity => "Antigravity",
             DbType::Kimi => "Kimi",
+            DbType::Pi => "PI",
         }
     }
 
@@ -211,6 +213,7 @@ impl DbType {
             "MiniMax" => Some(DbType::Minimax),
             "Antigravity" => Some(DbType::Antigravity),
             "Kimi" => Some(DbType::Kimi),
+            "PI" => Some(DbType::Pi),
             _ => None,
         }
     }
@@ -364,6 +367,7 @@ pub fn create_source_entry_with_type(path: &str, explicit_type: Option<&DbType>)
             Box::new(super::antigravity_db::AntigravityDbService::new()) as Box<dyn DataSource>
         }
         DbType::Kimi => Box::new(super::kimi_db::KimiDbService::new()) as Box<dyn DataSource>,
+        DbType::Pi => Box::new(super::pi_db::PiDbService::new()) as Box<dyn DataSource>,
     };
     source.open(path)?;
     Ok(SourceEntry { id, path: path.to_string(), db_type, source, enabled: true })

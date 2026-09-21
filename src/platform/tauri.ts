@@ -87,6 +87,9 @@ export const platformAdapter: PlatformAdapter = {
   async scanKimiNow(): Promise<DshScanResult> {
     return invoke<DshScanResult>('scan_kimi_now')
   },
+  async scanPiNow(): Promise<DshScanResult> {
+    return invoke<DshScanResult>('scan_pi_now')
+  },
   async scanAntigravityNow(): Promise<DshScanResult> {
     return invoke<DshScanResult>('scan_antigravity_now')
   },
