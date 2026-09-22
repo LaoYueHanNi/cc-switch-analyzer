@@ -105,6 +105,9 @@ impl AppDbService {
         if version < 15 {
             self.migrate_v15()?;
         }
+        if version < 16 {
+            self.migrate_v16()?;
+        }
 
         Ok(())
     }
@@ -507,6 +510,23 @@ impl AppDbService {
             )
             .map_err(|e| format!("迁移 v15 (MiniMax 数据源重置) 失败: {}", e))?;
         self.set_schema_version(15)?;
+        Ok(())
+    }
+
+    /// v16: 清理 MiniMax 数据源在 v15 之后误入的"非 LLM 调用"脏数据。
+    ///
+    /// v15 升级后直读 SQLite 时，过滤条件只看 token 字段是否非零，导致 MiniMax Code
+    /// 在 assistant 行写入的累计 `context_usage`（如 18718 这种）被当作单次请求消耗。
+    /// 这类行无 `usage.request_duration_ms`，可用 latency=0 识别。v16 同时清掉游标，
+    /// 让新过滤条件（必须 request_duration_ms>0）下的扫描器重新导入真实记录。
+    fn migrate_v16(&mut self) -> Result<(), String> {
+        self.db
+            .execute_batch(
+                "DELETE FROM session_request_logs WHERE source = 'MiniMax' AND latency = 0;
+                 DELETE FROM session_log_sync WHERE source = 'MiniMax';",
+            )
+            .map_err(|e| format!("迁移 v16 (MiniMax 脏数据清理) 失败: {}", e))?;
+        self.set_schema_version(16)?;
         Ok(())
     }
 
@@ -2026,6 +2046,50 @@ mod tests {
         assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE source = 'DSH'"), 1);
         assert_eq!(count(conn, "SELECT COUNT(*) FROM session_log_sync WHERE source = 'DSH'"), 1);
         assert_eq!(db.get_schema_version(), 15);
+    }
+
+    #[test]
+    fn test_migrate_v16_cleans_zero_latency_minimax_records() {
+        // 模拟 v15 之后污染的 MiniMax 数据：累计 context_usage 被误当 token 消耗
+        // 这些记录 latency=0 应当被 v16 清掉；同时清掉游标以触发重新扫描。
+        let mut db = create_db();
+        db.conn()
+            .execute(
+                "INSERT INTO session_request_logs
+                    (request_id, source, session_id, model, provider_id,
+                     input_tokens, output_tokens, cache_read, cache_creation, created_at, latency, first_token_latency)
+                 VALUES
+                    ('MiniMax:real',   'MiniMax', 's1', 'm', 'MiniMax', 100, 50, 0, 0, 100, 8500, 3200),
+                    ('MiniMax:fake1',  'MiniMax', 's1', 'm', 'MiniMax', 18718, 289, 0, 0, 110, 0, 2587),
+                    ('MiniMax:fake2',  'MiniMax', 's1', 'm', 'MiniMax', 15385, 454, 0, 0, 120, 0, 3511),
+                    ('DSH:d1',         'DSH',     's2', 'm', 'DSH',     2, 0, 0, 0, 200, 5000, 800)",
+                [],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO session_log_sync (file_path, source, last_modified, last_synced_at)
+                 VALUES ('/path/to/minimax', 'MiniMax', 123, 456), ('/path/to/dsh', 'DSH', 789, 101)",
+                [],
+            )
+            .unwrap();
+
+        db.migrate_v16().unwrap();
+
+        let count = |conn: &rusqlite::Connection, sql: &str| -> i64 {
+            conn.query_row(sql, [], |row| row.get(0)).unwrap()
+        };
+        let conn = db.conn();
+        // 仅清掉 latency=0 的 MiniMax 脏数据，真实记录保留
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE source = 'MiniMax'"), 1);
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE request_id = 'MiniMax:real'"), 1);
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE request_id = 'MiniMax:fake1'"), 0);
+        // 游标被清，触发新过滤条件下的重扫
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_log_sync WHERE source = 'MiniMax'"), 0);
+        // 其他数据源不受影响
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_request_logs WHERE source = 'DSH'"), 1);
+        assert_eq!(count(conn, "SELECT COUNT(*) FROM session_log_sync WHERE source = 'DSH'"), 1);
+        assert_eq!(db.get_schema_version(), 16);
     }
 
     #[test]

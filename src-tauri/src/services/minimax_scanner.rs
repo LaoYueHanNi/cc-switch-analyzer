@@ -73,7 +73,13 @@ fn extract_effective_model(extra_json: Option<&str>) -> Option<String> {
 
 /// 解析 SQLite `local_runtime_message_rows` 中的一行数据。
 ///
-/// 仅当能提取出有效的 token 消耗（input > 0 || output > 0 || cache_read > 0）时返回 Some。
+/// 仅当该行是真实 LLM 响应（`usage.request_duration_ms > 0`）时返回 Some。
+///
+/// 注意：MiniMax Code 在 assistant 行写入时，会把会话的累计 `context_usage`
+/// 填进 `usage.input_tokens` / `usage.output_tokens`，导致 greeting、工具中转、
+/// 纯文本回复等**非 LLM 调用行**也会带"假 token 消耗"。因此不能仅用 token
+/// 字段是否非零来判断有效性，必须用 `usage.request_duration_ms` 是否被填充
+/// 来识别真正的请求响应。
 pub fn parse_minimax_sqlite_row(
     session_id: &str,
     msg_id: &str,
@@ -95,15 +101,17 @@ pub fn parse_minimax_sqlite_row(
             .unwrap_or(0)
     };
 
+    // 必须存在真实 LLM 响应耗时，否则视为 greeting/工具中转，不入库。
+    // 这能避免 MiniMax Code 把累计 context_usage 当成单次请求的 token 消耗。
+    let latency = num("request_duration_ms").max(0);
+    if latency == 0 {
+        return None;
+    }
+
     let input_tokens = num("input_tokens").max(num("input"));
     let output_tokens = num("output_tokens").max(num("output"));
     let cache_read = num("cache_read").max(num("cacheRead"));
     let cache_creation = num("cache_write").max(num("cacheWrite"));
-
-    // 无有效用量的行（如纯工具执行中转等）过滤掉
-    if input_tokens == 0 && output_tokens == 0 && cache_read == 0 {
-        return None;
-    }
 
     // 模型提取优先级：
     // 1. context_usage_telemetry.model
@@ -124,9 +132,6 @@ pub fn parse_minimax_sqlite_row(
         })
         .or_else(|| extract_effective_model(session_extra_json))
         .unwrap_or_else(|| "MiniMax-M3".to_string());
-
-    // 请求总耗时（毫秒，对应 latency）
-    let latency = num("request_duration_ms").max(0);
 
     // 思考/首字耗时（毫秒，对应 first_token_latency）
     let first_token_latency = v
@@ -536,7 +541,8 @@ mod tests {
             "model": "MiniMax-M3",
             "usage": {
                 "input": 50,
-                "output": 100
+                "output": 100,
+                "request_duration_ms": 4200
             }
         })
         .to_string();
@@ -546,8 +552,19 @@ mod tests {
         assert_eq!(row.model, "MiniMax-M3");
         assert_eq!(row.input_tokens, 50);
         assert_eq!(row.output_tokens, 100);
-        assert_eq!(row.latency, 0);
+        assert_eq!(row.latency, 4200);
         assert_eq!(row.first_token_latency, 0);
+    }
+
+    #[test]
+    fn test_parse_sqlite_row_no_latency_ignored() {
+        // 没有 usage.request_duration_ms → 视为 greeting/工具中转，不入库
+        let data = serde_json::json!({
+            "msg_id": "uuid-greeting",
+            "usage": { "input": 18718, "output": 289 }
+        })
+        .to_string();
+        assert!(parse_minimax_sqlite_row("sess-g", "uuid-greeting", 1000, &data, None).is_none());
     }
 
     #[test]
@@ -555,7 +572,7 @@ mod tests {
         // data_json 缺失 model，从 session extra_data_json 提取并剥离 provider 前缀
         let data = serde_json::json!({
             "msg_id": "uuid-extra",
-            "usage": { "input": 80, "output": 120 }
+            "usage": { "input": 80, "output": 120, "request_duration_ms": 5600 }
         })
         .to_string();
 
@@ -706,7 +723,7 @@ mod tests {
         let app_db = AppDbService::new_in_memory().unwrap();
         let res = scan_minimax_sqlite_at(&app_db, &db_path).unwrap();
         println!("[REAL-SCAN-MINIMAX] {:?}", res);
-        assert!(res.imported >= 300, "应导入超过 300 条真实记录");
+        assert!(res.imported >= 10, "应导入真实 LLM 响应记录 (过滤了 greeting/工具中转)");
 
         // 验证带有 latency 的记录数
         let with_latency: i64 = app_db
@@ -718,7 +735,7 @@ mod tests {
             )
             .unwrap();
         println!("[REAL-SCAN-MINIMAX] 包含 latency 记录数: {}", with_latency);
-        assert!(with_latency > 150, "应有超过 150 条记录包含 latency");
+        assert!(with_latency >= 10, "应有真实 LLM 响应记录包含 latency");
 
         // 验证没有未定价的裸名 'MiniMax' 记录
         let unpriced_minimax: i64 = app_db

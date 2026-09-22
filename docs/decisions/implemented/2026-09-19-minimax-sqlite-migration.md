@@ -26,3 +26,4 @@ MiniMax Code（Mavis 桌面端）原先作为扫描型数据源接入分析器�
 
 - 代价：升级至 v15 时，旧的 MiniMax 缓存记录会被清空一次，并在应用启动扫描时重新落库（耗时 < 15ms，用户无感）。
 - 换来：彻底杜绝数据重复与遗漏风险；MiniMax 数据源全面点亮毫秒级请求耗时、思考耗时与 `tok/s` 速度；增量扫描从扫描数十个分散目录收敛为监视单个 SQLite 文件，启动与刷新 I/O 显著降低。
+- 后续收紧：按 token 非零入库会把累计 `context_usage` 当成单次消耗。有效行改为必须有 `request_duration_ms`，见 [MiniMax 只入库真实 LLM 响应](2026-09-22-minimax-llm-row-filter.md)。
