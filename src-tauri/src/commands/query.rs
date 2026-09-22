@@ -352,7 +352,8 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
         } else {
             session_id
         };
-        let context_size = input_tokens + cache_read_tokens;
+        let db_type = provider_to_db.get(&provider_id).cloned().unwrap_or_else(|| provider_id.clone());
+        let context_size = pricing_context_width(&db_type, &provider_id, input_tokens, cache_read_tokens);
         let (input_cost, output_cost, cache_read_cost, cache_creation_cost) =
             if let Some(p) = pricing.get_pricing_at_with_context(&model, created_at, context_size, tz_offset) {
                 (
@@ -365,7 +366,6 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
                 (0.0, 0.0, 0.0, 0.0)
             };
         let context_tier_threshold = pricing.get_matched_tier_threshold(&model, created_at, context_size);
-        let db_type = provider_to_db.get(&provider_id).cloned().unwrap_or_else(|| provider_id.clone());
         RealtimeRequestLog {
             session_id, model, provider_id, db_type, created_at,
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,

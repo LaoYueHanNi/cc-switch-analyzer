@@ -4,7 +4,7 @@ use std::thread;
 
 use chrono::TimeZone;
 
-use super::data_source::SourceEntry;
+use super::data_source::{pricing_context_width, SourceEntry};
 use super::dedup::RequestFingerprint;
 use crate::models::*;
 use crate::utils::SESSION_TOP_N;
@@ -461,7 +461,7 @@ pub fn aggregate_session_model_tokens(records: &[RawRecord]) -> Vec<SessionModel
 }
 
 /// 聚合上下文档位桶：
-/// context_width = input_tokens + cache_read
+/// context_width = input_tokens + cache_read（Cursor 数据源恒为 0，见 pricing_context_width）
 /// CASE WHEN context_width >= threshold THEN threshold
 /// GROUP BY (model, day, tier, slot_key), MIN(created_at) as representative_epoch
 pub fn aggregate_model_context_tier_buckets(
@@ -490,7 +490,7 @@ pub fn aggregate_model_context_tier_buckets(
     let mut map: HashMap<(String, String, i64, i64), Acc> = HashMap::new();
 
     for r in records {
-        let context_width = r.input_tokens + r.cache_read;
+        let context_width = pricing_context_width(&r.db_type, &r.provider_id, r.input_tokens, r.cache_read);
 
         // 找到匹配的档位：最大的 <= context_width 的阈值
         let tier = if sorted_thresholds.is_empty() {
@@ -830,6 +830,20 @@ mod tests {
     fn aggregate_model_context_tier_buckets_empty_thresholds() {
         let records = vec![rec("s", "A", "p", 0, 1000, 0, 0, 0, 0)];
         assert!(aggregate_model_context_tier_buckets(&records, 0, &[], None).is_empty());
+    }
+
+    #[test]
+    fn aggregate_model_context_tier_buckets_cursor_stays_on_base_tier() {
+        // Cursor 把一段时间的 token 聚成一条，不能按 input+cache_read 命中高档位
+        let mut cursor = rec("s", "grok-4.7", "Cursor", 1000, 300_000, 0, 50_000, 0, 0);
+        cursor.db_type = "Cursor".to_string();
+        let other = rec("s", "grok-4.7", "CCS", 1000, 300_000, 0, 0, 0, 0);
+        let v = aggregate_model_context_tier_buckets(&[cursor, other], 0, &[256_000], None);
+        let base = v.iter().find(|x| x.context_tier == 0).unwrap();
+        assert_eq!(base.input_tokens, 300_000);
+        assert_eq!(base.cache_read, 50_000);
+        let high = v.iter().find(|x| x.context_tier == 256_000).unwrap();
+        assert_eq!(high.input_tokens, 300_000);
     }
 
     // ===== 数据源级过滤 (scope_to_provider_source) =====

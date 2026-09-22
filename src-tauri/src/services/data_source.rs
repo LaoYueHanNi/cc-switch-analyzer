@@ -219,6 +219,19 @@ impl DbType {
     }
 }
 
+/// 上下文档位计价用的上下文宽度。
+///
+/// Cursor 把一段时间内的 token 聚成一条记录，`input + cache_read` 不是单次请求的上下文，
+/// 不能用来命中上下文档位（例如 Grok 4.7 的 256K 档会被误判，费用虚高）。
+/// 此类记录宽度记 0，只走基础价；峰谷时间规则仍按基础价节点生效。
+pub fn pricing_context_width(db_type: &str, provider_id: &str, input_tokens: i64, cache_read: i64) -> i64 {
+    if db_type == DbType::Cursor.label() || provider_id == DbType::Cursor.label() {
+        0
+    } else {
+        input_tokens + cache_read
+    }
+}
+
 /// last_db_paths 持久化条目：路径 + 类型一起保存，重启后不再靠表名探测
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct PersistedSource {

@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::models::*;
+use crate::services::data_source::pricing_context_width;
 use crate::services::pricing_engine::PricingEngine;
 use crate::utils::date_str_to_epoch;
 
@@ -131,7 +132,7 @@ pub fn compute_session_costs(
     let mut session_costs: HashMap<String, f64> = HashMap::new();
 
     for req in session_request_tokens {
-        let context_size = req.input_tokens + req.cache_read;
+        let context_size = pricing_context_width("", &req.provider_id, req.input_tokens, req.cache_read);
         if let Some(pricing) = ps.get_pricing_at_with_context(&req.model, req.created_at, context_size, tz_offset) {
             let cost = ps.calculate_cost(
                 &pricing,
@@ -178,7 +179,7 @@ pub fn compute_session_model_costs(
 
     // 从请求级数据累加费用
     for req in session_request_tokens {
-        let context_size = req.input_tokens + req.cache_read;
+        let context_size = pricing_context_width("", &req.provider_id, req.input_tokens, req.cache_read);
         let pricing = match ps.get_pricing_at_with_context(&req.model, req.created_at, context_size, tz_offset) {
             Some(p) => p,
             None => continue,
