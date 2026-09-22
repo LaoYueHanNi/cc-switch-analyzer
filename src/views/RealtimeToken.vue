@@ -204,6 +204,7 @@ function dotClass(dbType: string): string {
     'Cursor': 'cursor', 'ZCode': 'z-code', 'Proma': 'proma',
     'DSH': 'dsh', 'MiniMax': 'minimax', 'Antigravity': 'antigravity',
     'Kimi': 'kimi',
+    'PI': 'pi',
   }
   return map[dbType] ?? dbType.toLowerCase()
 }

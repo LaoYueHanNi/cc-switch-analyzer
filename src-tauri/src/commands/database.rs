@@ -231,6 +231,15 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
             });
         }
     }
+    // PI (pi / oh-my-pi): 任一会话目录存在则注册(读取路径为应用库 pricing.db,扫描在 auto_load_paths 统一执行)
+    if crate::services::pi_scanner::pi_source_available() {
+        if let Ok(p) = crate::utils::get_app_db_path() {
+            defaults.push(PersistedSource {
+                path: p.to_string_lossy().to_string(),
+                db_type: "PI".to_string(),
+            });
+        }
+    }
     if !defaults.is_empty() {
         return auto_load_paths(&state, defaults);
     }
@@ -250,6 +259,10 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
     // 再扫描 Kimi(若数据目录存在),保证 KimiDbService 打开时已有数据
     if let Ok(app_db) = state.app_db.lock() {
         let _ = crate::services::kimi_scanner::scan_kimi(&app_db);
+    }
+    // 再扫描 PI(pi / oh-my-pi,若数据目录存在),保证 PiDbService 打开时已有数据
+    if let Ok(app_db) = state.app_db.lock() {
+        let _ = crate::services::pi_scanner::scan_pi(&app_db);
     }
     // 再扫描 Proma(若数据目录存在),保证 PromaDbService 打开时已有数据
     if let Ok(app_db) = state.app_db.lock() {
@@ -468,6 +481,28 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
                         sources.push(entry);
                     }
                     Err(e) => log::error!("[DB] Kimi 源加载失败: {}", e),
+                }
+            }
+        }
+    }
+
+    // PI:若数据目录存在,补注册数据源(读取路径为应用库 pricing.db;数据已由开头 scan_pi 入库)
+    if crate::services::pi_scanner::pi_source_available() {
+        let already = sources
+            .iter()
+            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Pi));
+        if !already {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                let path_str = p.to_string_lossy().to_string();
+                match crate::services::data_source::create_source_entry_with_type(
+                    &path_str,
+                    Some(&crate::services::data_source::DbType::Pi),
+                ) {
+                    Ok(entry) => {
+                        log::info!("[DB] 自动加载 PI 源: {}", path_str);
+                        sources.push(entry);
+                    }
+                    Err(e) => log::error!("[DB] PI 源加载失败: {}", e),
                 }
             }
         }
@@ -698,6 +733,21 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         }
     }
 
+    // PI:增量扫描(若存在 PI 源)。scanner 内部按 mtime 跳过未变文件,开销可接受
+    {
+        let has_pi = {
+            let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+            sources
+                .iter()
+                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Pi))
+        };
+        if has_pi {
+            if let Ok(app_db) = state.app_db.lock() {
+                let _ = crate::services::pi_scanner::scan_pi(&app_db);
+            }
+        }
+    }
+
     // DSH:增量扫描(若存在 DSH 源,按当前模式扫插件数据或会话日志)。
     // scanner 内部按 mtime 跳过未变文件,开销可接受
     let (dsh_plugin_mode, dsh_plugin_dir) = {
@@ -905,6 +955,57 @@ pub fn scan_kimi_now(state: State<AppState>) -> Result<crate::services::dsh_scan
                         save_paths(&state, &info);
                     }
                     Err(e) => log::error!("[DB] Kimi 源注册失败: {}", e),
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn scan_pi_now(state: State<AppState>) -> Result<crate::services::dsh_scanner::DshScanResult, String> {
+    // 1. 扫描 pi / oh-my-pi 会话日志入库(增量)
+    let (result, pi_available) = {
+        if crate::services::pi_scanner::pi_source_available() {
+            let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+            let result = crate::services::pi_scanner::scan_pi(&app_db)?;
+            (result, true)
+        } else {
+            let mut result = crate::services::dsh_scanner::DshScanResult {
+                files_scanned: 0,
+                imported: 0,
+                skipped: 0,
+                errors: 0,
+                total_records: 0,
+            };
+            if let Ok(app_db) = state.app_db.lock() {
+                result.total_records = app_db
+                    .get_session_log_count(crate::services::pi_scanner::PI_SOURCE)
+                    .unwrap_or(0);
+            }
+            (result, false)
+        }
+    };
+    // 2. 确保 PI 源已注册
+    if pi_available {
+        let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+        let already = sources
+            .iter()
+            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Pi));
+        if !already {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                let path_str = p.to_string_lossy().to_string();
+                match crate::services::data_source::create_source_entry_with_type(
+                    &path_str,
+                    Some(&crate::services::data_source::DbType::Pi),
+                ) {
+                    Ok(entry) => {
+                        log::info!("[DB] 注册 PI 源: {}", path_str);
+                        sources.push(entry);
+                        let info: Vec<SourceInfo> = sources.iter().map(|s| s.to_info()).collect();
+                        save_paths(&state, &info);
+                    }
+                    Err(e) => log::error!("[DB] PI 源注册失败: {}", e),
                 }
             }
         }
@@ -1190,6 +1291,7 @@ pub struct DefaultPaths {
     pub minimax: Option<String>,
     pub antigravity: Option<String>,
     pub kimi: Option<String>,
+    pub pi: Option<String>,
 }
 
 #[tauri::command]
@@ -1217,7 +1319,9 @@ pub fn get_default_paths() -> Result<DefaultPaths, String> {
         .map(|p| p.to_string_lossy().to_string());
     let kimi = crate::services::kimi_scanner::primary_kimi_dir()
         .map(|p| p.to_string_lossy().to_string());
-    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code, proma, dsh, minimax, antigravity, kimi })
+    let pi = crate::services::pi_scanner::primary_pi_dir()
+        .map(|p| p.to_string_lossy().to_string());
+    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code, proma, dsh, minimax, antigravity, kimi, pi })
 }
 
 fn cursor_should_auto_load() -> bool {
@@ -1312,6 +1416,11 @@ pub(crate) fn source_mtime(
         DbType::Kimi => {
             // Kimi 数据源 path 是 pricing.db;内容变化发生在 Kimi 会话目录下
             crate::services::kimi_scanner::latest_session_file_mtime()
+                .or_else(|| std::fs::metadata(path).ok())
+        }
+        DbType::Pi => {
+            // PI 数据源 path 是 pricing.db;内容变化发生在 ~/.pi 与 ~/.omp 会话目录下
+            crate::services::pi_scanner::latest_session_file_mtime()
                 .or_else(|| std::fs::metadata(path).ok())
         }
         _ => std::fs::metadata(path).ok(),

@@ -269,6 +269,7 @@ export interface DefaultPaths {
   minimax: string | null
   antigravity: string | null
   kimi: string | null
+  pi: string | null
 }
 
 export interface DshScanResult {
@@ -318,6 +319,7 @@ export interface PlatformAdapter {
   scanDshNow(): Promise<DshScanResult>
   scanMinimaxNow(): Promise<DshScanResult>
   scanKimiNow(): Promise<DshScanResult>
+  scanPiNow(): Promise<DshScanResult>
   scanAntigravityNow(): Promise<DshScanResult>
   scanPromaNow(): Promise<DshScanResult>
   getDshSettings(): Promise<DshSettings>

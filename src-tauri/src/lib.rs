@@ -180,6 +180,7 @@ pub fn run() {
             commands::database::scan_dsh_now,
             commands::database::scan_minimax_now,
             commands::database::scan_kimi_now,
+            commands::database::scan_pi_now,
             commands::database::scan_antigravity_now,
             commands::database::scan_proma_now,
             commands::database::dsh_settings,
