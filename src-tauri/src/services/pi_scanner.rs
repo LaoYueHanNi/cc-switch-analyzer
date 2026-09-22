@@ -23,9 +23,15 @@
 //! request_id 不能含文件标识，用 `"{entry_id}:{毫秒时间戳}"` 跨文件去重，
 //! 否则 fork 会话的历史用量会被双计。
 //!
+//! 增量：只以文件 mtime 为游标（`session_log_sync.last_modified`），mtime 未变即跳过；
+//! 一旦变化则整文件重读，重复 entry 靠 request_id 主键去重。**不使用行号游标**——
+//! OMP 会原地等宽重写头部 title 槽，会话迁移/恢复会整文件重写，读取瞬间还可能遇到
+//! 半行（写入未完成），按行号跳过前缀会永久漏掉这些行。
+//!
 //! 解析后的数据增量写入应用自有库 `pricing.db::session_request_logs`，`source = "PI"`。
-//! 会话与标题写入 `sessions` 和 `session_titles` 表（OMP 的 title 条目优先，
-//! pi 无标题机制时回退首条用户消息文本）。
+//! 会话与标题写入 `sessions` 和 `session_titles` 表。标题取 `title` / `title_change`
+//! 条目中时间最新的非空值（`title` 为原地重写行，`title_change` 为追加树节点），
+//! 会话改名后续写回；pi 无标题机制时回退首条用户消息文本。
 
 use std::path::{Path, PathBuf};
 use serde_json::Value;
@@ -281,7 +287,10 @@ fn scan_pi_file_incremental(app_db: &AppDbService, path: &Path) -> Result<(u32, 
         .map_err(|e| format!("读取文件元数据失败: {}", e))?;
     let file_modified = metadata_modified_nanos(&metadata);
 
-    let (last_modified, last_offset) = app_db
+    // PI 只使用 mtime 游标：会话文件会被原地重写标题槽、迁移/恢复时整文件重写，
+    // 按行号跳过前缀会漏掉改写过的旧行与被截断的半行，故 mtime 变化即整文件重读，
+    // 重复 entry 由 session_request_logs 的 request_id 主键去重。
+    let (last_modified, _) = app_db
         .get_session_log_sync_state(PI_SOURCE, &file_path_str)
         .unwrap_or((0, 0));
 
@@ -303,13 +312,12 @@ fn scan_pi_file_incremental(app_db: &AppDbService, path: &Path) -> Result<(u32, 
     let mut session_id = String::new();
     let mut project_dir = String::new();
     let mut title = String::new();
+    // 标题条目的时间戳（毫秒），用于在 `title` 与 `title_change` 两条写入路径间取最新
+    let mut title_ts = i64::MIN;
 
     let mut line_offset = 0i64;
     for line in text.lines() {
         line_offset += 1;
-        if line_offset <= last_offset {
-            continue;
-        }
 
         if let Ok(v) = serde_json::from_str::<Value>(line.trim()) {
             match v.get("type").and_then(|t| t.as_str()).unwrap_or("") {
@@ -325,11 +333,19 @@ fn scan_pi_file_incremental(app_db: &AppDbService, path: &Path) -> Result<(u32, 
                         }
                     }
                 }
-                // OMP 的标题条目（原地等宽重写，可能多次更新，取最后一次非空值）
-                "title" => {
+                // OMP 的标题条目：`title`（原地等宽重写，尾部 pad 补齐）与
+                // `title_change`（追加的树节点）两条写入路径，取时间最新的非空值
+                "title" | "title_change" => {
                     if let Some(t) = v.get("title").and_then(|t| t.as_str()) {
-                        if !t.trim().is_empty() {
+                        let ts = v
+                            .get("updatedAt")
+                            .or_else(|| v.get("timestamp"))
+                            .and_then(|s| s.as_str())
+                            .and_then(parse_iso_ms)
+                            .unwrap_or(i64::MIN);
+                        if !t.trim().is_empty() && ts >= title_ts {
                             title = clean_title(t);
+                            title_ts = ts;
                         }
                     }
                 }
@@ -411,7 +427,7 @@ fn scan_pi_file_incremental(app_db: &AppDbService, path: &Path) -> Result<(u32, 
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(session_id) DO UPDATE SET
                project_dir = CASE WHEN sessions.project_dir = '' THEN excluded.project_dir ELSE sessions.project_dir END,
-               title = CASE WHEN sessions.title = '' THEN excluded.title ELSE sessions.title END",
+               title = CASE WHEN excluded.title <> '' THEN excluded.title ELSE sessions.title END",
             rusqlite::params![
                 session_id,
                 project_dir,
@@ -429,12 +445,13 @@ fn scan_pi_file_incremental(app_db: &AppDbService, path: &Path) -> Result<(u32, 
         }
     }
 
+    // PI 无行号游标（整文件重读），行号字段仅保留表结构兼容，恒写 0
     AppDbService::update_session_log_sync_on_conn(
         &tx,
         PI_SOURCE,
         &file_path_str,
         file_modified,
-        line_offset,
+        0,
     )?;
 
     tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
@@ -580,9 +597,130 @@ mod tests {
         assert_eq!(title, "你好，帮我看个问题");
         assert_eq!(project, "/tmp/proj");
 
-        // 4. 二次扫描命中增量游标，不再导入
+        // 4. 二次扫描 mtime 未变，整文件跳过（重复 entry 由 request_id 去重兜底）
         let r2 = scan_pi_roots(&app_db, &[pi_root]).unwrap();
         assert_eq!(r2.imported, 0);
+        assert_eq!(r2.total_records, 1);
+    }
+
+    /// 把文件 mtime 设到未来，确保 > 已记录的旧 mtime 以触发重扫
+    fn set_mtime_future(path: &Path) {
+        use std::time::{Duration, SystemTime};
+        let future = SystemTime::now() + Duration::from_secs(120);
+        if let Ok(f) = std::fs::File::open(path) {
+            let _ = f.set_modified(future);
+        }
+    }
+
+    /// 读取 sessions 表的标题（应用展示口径）
+    fn sessions_title(app_db: &AppDbService, session_id: &str) -> String {
+        app_db
+            .conn()
+            .query_row(
+                "SELECT title FROM sessions WHERE session_id = ?1",
+                rusqlite::params![session_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    /// 读取 session_titles 缓存的标题
+    fn cached_session_title(app_db: &AppDbService, session_id: &str) -> String {
+        app_db
+            .conn()
+            .query_row(
+                "SELECT title FROM session_titles WHERE session_id = ?1",
+                rusqlite::params![session_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    /// OMP 原地重写 title 槽（等宽 pad）+ 追加 title_change 后重扫：
+    /// 标题必须续写回 sessions / session_titles，新增 entry 必须入账且不重复计旧行
+    #[test]
+    fn test_rescan_after_rewrite_updates_title() {
+        let app_db = AppDbService::new_in_memory().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let pi_root = temp_dir.path().join("pi_root");
+        let session_dir = pi_root.join("--tmp-proj--");
+        std::fs::create_dir_all(&session_dir).unwrap();
+
+        let session_id = "01a00000-0000-7000-8000-000000000001";
+        let file = session_dir.join(format!(
+            "2026-09-01T00-00-00-000Z_{}.jsonl",
+            session_id
+        ));
+        let header = format!(
+            r#"{{"type":"session","version":3,"id":"{}","timestamp":"2026-09-01T00:00:00.000Z","cwd":"/tmp/proj"}}"#,
+            session_id
+        );
+        let empty_title = r#"{"type":"title","v":1,"title":"","updatedAt":"2026-09-01T00:00:00.000Z","pad":"   "}"#;
+        let user_line = r#"{"type":"message","id":"84d4cd80","parentId":null,"timestamp":"2026-09-01T00:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"你好，帮我看个问题"}],"timestamp":1789992001000}}"#;
+        let asst1 = r#"{"type":"message","id":"3783b6d9","parentId":"84d4cd80","timestamp":"2026-09-01T00:00:05.950Z","message":{"role":"assistant","model":"kimi-for-coding","usage":{"input":100,"output":10,"cacheRead":0,"cacheWrite":0},"timestamp":1789992005950}}"#;
+        std::fs::write(
+            &file,
+            format!("{}\n{}\n{}\n{}\n", header, empty_title, user_line, asst1),
+        )
+        .unwrap();
+
+        // 首次扫描：无标题条目，回退首条用户消息
+        let r1 = scan_pi_roots(&app_db, &[pi_root.clone()]).unwrap();
+        assert_eq!(r1.imported, 1);
+        assert_eq!(sessions_title(&app_db, session_id), "你好，帮我看个问题");
+
+        // OMP 生成标题：头部 title 槽原地等宽重写，并追加 title_change 与新 assistant entry
+        let new_title_line = r#"{"type":"title","v":1,"title":"查看PR评论","source":"auto","updatedAt":"2026-09-01T00:10:00.000Z","pad":"                                        "}"#;
+        let title_change = r#"{"type":"title_change","id":"8ea2a0c3","parentId":"3783b6d9","timestamp":"2026-09-01T00:10:00.000Z","title":"查看PR评论","source":"auto"}"#;
+        let asst2 = r#"{"type":"message","id":"f1c0ffee","parentId":"8ea2a0c3","timestamp":"2026-09-01T00:11:00.000Z","message":{"role":"assistant","model":"kimi-for-coding","usage":{"input":200,"output":20,"cacheRead":0,"cacheWrite":0},"timestamp":1789992660000}}"#;
+        std::fs::write(
+            &file,
+            format!(
+                "{}\n{}\n{}\n{}\n{}\n{}\n",
+                header, new_title_line, user_line, asst1, title_change, asst2
+            ),
+        )
+        .unwrap();
+        set_mtime_future(&file);
+
+        let r2 = scan_pi_roots(&app_db, &[pi_root]).unwrap();
+        assert_eq!(r2.imported, 1, "仅新增 entry 应入账");
+        assert_eq!(r2.total_records, 2);
+        assert_eq!(sessions_title(&app_db, session_id), "查看PR评论");
+        assert_eq!(cached_session_title(&app_db, session_id), "查看PR评论");
+    }
+
+    /// 写入中的半行 JSON 被跳过、补齐后必须重新入账（行号游标已废除的回归点）
+    #[test]
+    fn test_partial_last_line_is_reread() {
+        let app_db = AppDbService::new_in_memory().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let pi_root = temp_dir.path().join("pi_root");
+        let session_dir = pi_root.join("--tmp-proj--");
+        std::fs::create_dir_all(&session_dir).unwrap();
+
+        let session_id = "01a00000-0000-7000-8000-000000000003";
+        let file = session_dir.join(format!(
+            "2026-09-01T00-00-00-000Z_{}.jsonl",
+            session_id
+        ));
+        let header = format!(
+            r#"{{"type":"session","version":3,"id":"{}","timestamp":"2026-09-01T00:00:00.000Z","cwd":"/tmp/proj"}}"#,
+            session_id
+        );
+        let asst = r#"{"type":"message","id":"3783b6d9","parentId":null,"timestamp":"2026-09-01T00:00:05.950Z","message":{"role":"assistant","model":"kimi-for-coding","usage":{"input":100,"output":10,"cacheRead":0,"cacheWrite":0},"timestamp":1789992005950}}"#;
+
+        // 尾部半行（写入未完成，无换行结尾）
+        std::fs::write(&file, format!("{}\n{}", header, &asst[..60])).unwrap();
+        let r1 = scan_pi_roots(&app_db, &[pi_root.clone()]).unwrap();
+        assert_eq!(r1.imported, 0, "不完整的行不应入账");
+
+        // 该行补齐后重扫
+        std::fs::write(&file, format!("{}\n{}\n", header, asst)).unwrap();
+        set_mtime_future(&file);
+
+        let r2 = scan_pi_roots(&app_db, &[pi_root]).unwrap();
+        assert_eq!(r2.imported, 1, "补齐后的行必须入账");
         assert_eq!(r2.total_records, 1);
     }
 
@@ -614,8 +752,15 @@ mod tests {
         assert!(r1.files_scanned > 0, "应扫描到至少一个会话文件");
         assert!(r1.imported > 0, "应成功导入用量记录");
 
-        // 再次扫描，应命中增量游标全部跳过
+        // 再次扫描：mtime 未变的文件全部跳过，只有扫描期间仍在写入的活跃会话会带来少量新增，
+        // 绝不允许历史记录被整批重算入库
         let r2 = scan_pi(&app_db).unwrap();
-        assert_eq!(r2.imported, 0, "二次扫描不应导入重复记录");
+        assert!(
+            r2.imported * 10 < r1.imported,
+            "二次扫描应只处理增量，不应重复导入历史记录 (imported={} vs {})",
+            r2.imported,
+            r1.imported
+        );
+        assert!(r2.total_records >= r1.total_records);
     }
 }
