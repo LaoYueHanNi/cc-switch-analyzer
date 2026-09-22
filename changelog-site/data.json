@@ -1,6 +1,32 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-09-22",
+    "commits": [
+      {
+        "hash": "09544d8",
+        "subject": "fix(minimax): 只入库带请求耗时的 LLM 响应，并清掉误导入的累计用量",
+        "date": "2026-09-22"
+      },
+      {
+        "hash": "3cb1455",
+        "subject": "fix(pricing): Cursor 聚合记录不再按上下文档位计价",
+        "date": "2026-09-22"
+      },
+      {
+        "hash": "5377c8f",
+        "subject": "docs: 新增 AGENTS.md，并把决策记录要求收进项目铁律",
+        "date": "2026-09-22"
+      },
+      {
+        "hash": "c825b1d",
+        "subject": "feat(pi): 接入 pi / oh-my-pi 会话数据源 (#5)",
+        "date": "2026-09-22"
+      }
+    ]
+  },
+  {
+    "version": "0.8.6",
     "date": "2026-09-19",
     "commits": [
       {
