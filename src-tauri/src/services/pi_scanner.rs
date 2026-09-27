@@ -7,8 +7,8 @@
 //! 目录结构：
 //! - 主会话：`sessions/<编码cwd>/<ISO时间戳>_<uuid>.jsonl`
 //! - 更深层级为 fork / 子代理转录（如 `<会话文件名>/SleepTest.jsonl`、`run-N/session.jsonl`），
-//!   entry 格式相同，递归收集；OMP 的 profiles/*/agent/sessions 与 OMP 自身 stats.db
-//!   口径一致，暂不扫描。
+//!   entry 格式相同，递归收集。OMP 桌面版（omp-desktop 等）会话在
+//!   `~/.omp/profiles/<profile>/agent/sessions` 下，同样纳入扫描。
 //!
 //! JSONL：`type=="session"` 头行携带会话 id 与 cwd（OMP 会把 title 行写在最前，
 //! 头行不一定在第 1 行，故全文件解析后再回填）。每行一个 entry，计费口径对齐
@@ -228,7 +228,8 @@ pub fn get_all_pi_session_roots() -> Vec<PathBuf> {
         roots.push(pi_sessions);
     }
 
-    // 2. OMP：PI_CONFIG_DIR 是配置根目录（默认 ~/.omp），会话在其 agent/sessions 下
+    // 2. OMP：PI_CONFIG_DIR 是配置根目录（默认 ~/.omp），CLI 会话在其 agent/sessions 下；
+    //    桌面版每个 profile 另有一份 agent/sessions，一并纳入
     let omp_config_dir = match std::env::var("PI_CONFIG_DIR") {
         Ok(env_dir) if !env_dir.trim().is_empty() => PathBuf::from(env_dir.trim()),
         _ => home.join(".omp"),
@@ -237,14 +238,35 @@ pub fn get_all_pi_session_roots() -> Vec<PathBuf> {
     if omp_sessions.is_dir() && !roots.contains(&omp_sessions) {
         roots.push(omp_sessions);
     }
+    for profile_root in omp_profile_session_roots(&omp_config_dir) {
+        if !roots.contains(&profile_root) {
+            roots.push(profile_root);
+        }
+    }
 
     roots
 }
 
-/// 返回主要/推荐展示的 PI 目录路径（供 get_default_paths 使用）
-pub fn primary_pi_dir() -> Option<PathBuf> {
-    get_all_pi_session_roots().into_iter().next()
+/// 展开 OMP `profiles/<profile>/agent/sessions` 各 profile 的会话根目录。
+/// 桌面版（omp-desktop 等）每个 profile 一份独立 agent 目录，entry 格式与 CLI 一致。
+pub fn omp_profile_session_roots(omp_config_dir: &Path) -> Vec<PathBuf> {
+    let profiles_dir = omp_config_dir.join("profiles");
+    let entries = match std::fs::read_dir(&profiles_dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let mut roots: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .map(|p| p.join("agent").join("sessions"))
+        .filter(|p| p.is_dir())
+        .collect();
+    // read_dir 顺序不确定，排序保证扫描与展示稳定
+    roots.sort();
+    roots
 }
+
 
 /// 检查是否存在 PI 数据源
 pub fn pi_source_available() -> bool {
@@ -730,6 +752,53 @@ mod tests {
         assert_eq!(clean_title("第一行\n第二行"), "第一行 第二行");
         let long: String = "字".repeat(80);
         assert_eq!(clean_title(&long).chars().count(), TITLE_MAX_LEN);
+    }
+
+    #[test]
+    fn test_omp_profile_roots_discovered() {
+        // profiles/<profile>/agent/sessions 各自纳入；无 sessions 的 profile 忽略；目录按名排序
+        let temp = tempfile::tempdir().unwrap();
+        let profiles = temp.path().join("profiles");
+        let a = profiles.join("omp-desktop").join("agent").join("sessions");
+        let b = profiles.join("zeta").join("agent").join("sessions");
+        let no_sessions = profiles.join("empty-profile").join("agent");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::create_dir_all(&no_sessions).unwrap();
+        std::fs::write(profiles.join("stray.txt"), "x").unwrap();
+
+        let roots = omp_profile_session_roots(temp.path());
+        assert_eq!(roots, vec![a, b]);
+
+        // profiles 目录不存在 → 空结果不报错
+        let temp2 = tempfile::tempdir().unwrap();
+        assert!(omp_profile_session_roots(temp2.path()).is_empty());
+    }
+
+    #[test]
+    fn test_scan_omp_profile_session() {
+        // 桌面版 profile 下的会话与 CLI 会话同构，纳入 roots 即可扫描入库
+        let app_db = AppDbService::new_in_memory().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let profile_sessions = temp
+            .path()
+            .join("profiles")
+            .join("omp-desktop")
+            .join("agent")
+            .join("sessions")
+            .join("--proj--");
+        std::fs::create_dir_all(&profile_sessions).unwrap();
+        let header = r#"{"type":"session","version":3,"id":"01a00000-0000-7000-8000-00000000000a","timestamp":"2026-09-26T00:00:00.000Z","cwd":"/proj"}"#;
+        let asst = r#"{"type":"message","id":"aaa11111","timestamp":"2026-09-26T00:00:05.000Z","message":{"role":"assistant","provider":"zhipu","model":"glm-5.3","usage":{"input":100,"output":20,"cacheRead":0,"cacheWrite":0},"timestamp":1790000005000}}"#;
+        std::fs::write(
+            profile_sessions.join("2026-09-26T00-00-00-000Z_01a00000-0000-7000-8000-00000000000a.jsonl"),
+            format!("{}\n{}\n", header, asst),
+        )
+        .unwrap();
+
+        let r = scan_pi_roots(&app_db, &[temp.path().join("profiles").join("omp-desktop").join("agent").join("sessions")]).unwrap();
+        assert_eq!(r.imported, 1);
+        assert_eq!(r.total_records, 1);
     }
 
     #[test]

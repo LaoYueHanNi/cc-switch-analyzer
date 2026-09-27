@@ -1291,7 +1291,7 @@ pub struct DefaultPaths {
     pub minimax: Option<String>,
     pub antigravity: Option<String>,
     pub kimi: Option<String>,
-    pub pi: Option<String>,
+    pub pi: Vec<String>,
 }
 
 #[tauri::command]
@@ -1319,8 +1319,10 @@ pub fn get_default_paths() -> Result<DefaultPaths, String> {
         .map(|p| p.to_string_lossy().to_string());
     let kimi = crate::services::kimi_scanner::primary_kimi_dir()
         .map(|p| p.to_string_lossy().to_string());
-    let pi = crate::services::pi_scanner::primary_pi_dir()
-        .map(|p| p.to_string_lossy().to_string());
+    let pi = crate::services::pi_scanner::get_all_pi_session_roots()
+        .into_iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
     Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code, proma, dsh, minimax, antigravity, kimi, pi })
 }
 
@@ -1419,7 +1421,7 @@ pub(crate) fn source_mtime(
                 .or_else(|| std::fs::metadata(path).ok())
         }
         DbType::Pi => {
-            // PI 数据源 path 是 pricing.db;内容变化发生在 ~/.pi 与 ~/.omp 会话目录下
+            // PI 数据源 path 是 pricing.db;内容变化发生在 ~/.pi、~/.omp 及其 profiles 会话目录下
             crate::services::pi_scanner::latest_session_file_mtime()
                 .or_else(|| std::fs::metadata(path).ok())
         }

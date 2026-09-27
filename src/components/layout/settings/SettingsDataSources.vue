@@ -30,7 +30,7 @@
       <!-- 路径/状态 + 操作（Cursor 已并入账号行，此处仅其它数据源） -->
       <div v-if="slot.key !== 'cursor'" class="source-path-row">
         <span class="path-label">{{ isScanSource(slot.key) ? '数据目录' : '数据库地址' }}</span>
-        <span class="source-path" :title="slot.path || ''">{{ slot.path || (slot.key === 'cc-switch' ? '未启用（可开启自动发现）' : '未选择') }}</span>
+        <span class="source-path" :class="{ multiline: slot.path.includes('\n') }" :title="slot.path || ''">{{ slot.path || (slot.key === 'cc-switch' ? '未启用（可开启自动发现）' : '未选择') }}</span>
         <div class="path-actions">
           <button
             type="button"
@@ -430,7 +430,7 @@ const emptyQuad = (): TokenQuad => ({ input: 0, output: 0, cacheRead: 0, cacheCr
 const dbStore = useDatabaseStore()
 const { addDatabase, removeDatabase, refreshAfterToggle, autoLoadDatabase } = useDatabase()
 
-const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null, cursor: null, zCode: null, proma: null, dsh: null, minimax: null, antigravity: null, kimi: null, pi: null })
+const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null, cursor: null, zCode: null, proma: null, dsh: null, minimax: null, antigravity: null, kimi: null, pi: [] })
 
 // ===== CCS 自动发现（默认关闭，作为 CCS 数据源的独立子项配置）=====
 const ccsAutoDiscover = ref(false)
@@ -1072,13 +1072,16 @@ const slots = computed(() => [
     key: 'pi',
     label: 'PI',
     path: (() => {
-      const base = defaultPaths.value.pi || ''
+      const dirs = defaultPaths.value.pi
       const src = dbStore.sources.find(s => s.dbType === 'PI')
-      return src && src.recordCount > 0
-        ? base + `  (已导入 ${src.recordCount} 条)`
-        : base
+      const count = src && src.recordCount > 0 ? `(已导入 ${src.recordCount} 条)` : ''
+      if (dirs.length <= 1) {
+        const base = dirs[0] || ''
+        return count ? base + `  ${count}` : base
+      }
+      return count ? dirs.join('\n') + `\n${count}` : dirs.join('\n')
     })(),
-    defaultPath: defaultPaths.value.pi,
+    defaultPath: defaultPaths.value.pi[0] || '',
     sourceId: dbStore.sources.find(s => s.dbType === 'PI')?.id || '',
     enabled: dbStore.sources.find(s => s.dbType === 'PI')?.enabled ?? true,
   },
@@ -1148,7 +1151,7 @@ async function onSelect(key: string): Promise<void> {
     }
     return
   }
-  // PI 固定扫描 ~/.pi/agent/sessions 与 ~/.omp/agent/sessions,不走目录选择
+  // PI 固定扫描 ~/.pi、~/.omp 与 ~/.omp/profiles/*/agent/sessions,不走目录选择
   if (key === 'pi') {
     try {
       const result = await platformAdapter.scanPiNow()
@@ -1385,6 +1388,18 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.source-path.multiline {
+  white-space: pre-line;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.7;
+  word-break: break-all;
+}
+
+.source-path-row:has(.source-path.multiline) {
+  align-items: flex-start;
 }
 
 .path-actions {

@@ -269,7 +269,7 @@ export interface DefaultPaths {
   minimax: string | null
   antigravity: string | null
   kimi: string | null
-  pi: string | null
+  pi: string[]
 }
 
 export interface DshScanResult {
