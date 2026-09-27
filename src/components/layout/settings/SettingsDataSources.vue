@@ -454,11 +454,15 @@ async function onToggleCcsDiscover(enabled: boolean): Promise<void> {
 // ===== CCS 会话日志同步写入记录过滤 =====
 // 对应 cc-switch proxy_request_logs.data_source != 'proxy'（会话日志同步写入）的记录，
 // 按 app_type 区分终端类型排除，仅代理转发（proxy）记录保留。
+// 覆盖 cc-switch 已支持的全部会话同步终端；claude-desktop 记录已全局排除，无需在此列出。
 const CCS_SESSION_APPS = [
   { value: 'opencode', label: 'OpenCode' },
   { value: 'claude', label: 'Claude Code' },
   { value: 'codex', label: 'Codex' },
   { value: 'grokbuild', label: 'Grok Build' },
+  { value: 'mcode', label: 'MCode' },
+  { value: 'gemini', label: 'Gemini CLI' },
+  { value: 'hermes', label: 'Hermes' },
 ]
 
 const filterStore = useFilterStore()
