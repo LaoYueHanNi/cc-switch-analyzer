@@ -310,6 +310,14 @@ export interface MenubarStatus {
   running: boolean
 }
 
+/** 后台常驻模式状态 */
+export interface BackgroundModeStatus {
+  /** 当前是否处于后台模式（WebView 窗口已销毁，仅 Rust 进程存活） */
+  active: boolean
+  /** 关闭按钮是否配置为销毁窗口（false = 仅隐藏窗口） */
+  destroyOnClose: boolean
+}
+
 export interface PlatformAdapter {
   // 数据库
   autoLoadDatabase(): Promise<SourceInfo[]>
@@ -426,6 +434,12 @@ export interface PlatformAdapter {
   downloadTrafficMonitorPlugin(arch: 'x86' | 'x64'): Promise<string>
   getMenubarStatus(): Promise<MenubarStatus>
   toggleMenubarDisplay(enabled: boolean): Promise<MenubarStatus>
+  // 后台常驻模式
+  getBackgroundMode(): Promise<BackgroundModeStatus>
+  setBackgroundMode(enabled: boolean): Promise<BackgroundModeStatus>
+  /** 立即切换：进入（销毁窗口）或退出（重建窗口），返回切换后是否在后台 */
+  toggleHeadlessMode(): Promise<boolean>
+  consumePendingUpdate(): Promise<boolean>
   // 任务管理
   listTasks(): Promise<TaskWithStats[]>
   getTaskDetail(taskId: number): Promise<TaskDetail>

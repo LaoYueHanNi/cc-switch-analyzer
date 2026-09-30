@@ -1,5 +1,6 @@
 pub mod cursor;
 pub mod database;
+pub mod headless;
 pub mod menubar;
 pub mod pricing;
 pub mod query;

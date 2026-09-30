@@ -36,6 +36,37 @@ fn toggle_menubar_display(app: &tauri::AppHandle) -> bool {
     h.is_running()
 }
 
+/// 触发更新检查：窗口不在（后台模式）时置待处理标志，等窗口唤起后由前端
+/// `consume_pending_update` 拉取——`emit` 在 webview 缺席时无人接收。
+fn request_check_update(app: &tauri::AppHandle) {
+    use services::headless;
+    if headless::is_headless_mode() {
+        headless::set_pending_update();
+        log::info!("[Headless] 后台模式，更新检查已排队，窗口唤起时补发");
+    } else {
+        let _ = app.emit("check-update", ());
+    }
+}
+
+/// 菜单栏/托盘里的「后台模式」：**立即**切换（进入则销毁窗口 / 退出则重建），
+/// 返回切换后是否处于后台模式。
+///
+/// 用 `try_state` 而非 `state`：菜单回调跑在主线程，panic 无法 unwind 会直接
+/// abort 整个进程（取的类型一旦与 `setup` 里 `manage` 的不一致就是这个下场）。
+fn toggle_background_mode(app: &tauri::AppHandle) -> bool {
+    if app.try_state::<services::headless::HeadlessState>().is_none() {
+        log::error!("后台模式状态未注册，无法切换");
+        return false;
+    }
+    match services::headless::toggle_headless(app) {
+        Ok(now_in_background) => now_in_background,
+        Err(e) => {
+            log::error!("[Headless] 切换后台模式失败: {e}");
+            services::headless::is_headless_mode()
+        }
+    }
+}
+
 // 跨线程共享的状态（Tauri 命令 + HTTP 服务共用）
 pub struct SharedState {
     pub data_sources: RwLock<Vec<SourceEntry>>,
@@ -86,16 +117,37 @@ pub fn run() {
     // macOS Cmd+Q 先触发 ExitRequested 再触发 CloseRequested
     // 用此标记区分"系统退出"和"用户点关闭按钮"
     let should_exit = Arc::new(AtomicBool::new(false));
-    let should_exit_close = should_exit.clone();
+    let should_exit_window = should_exit.clone();
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // 第二个实例启动时，激活已有窗口
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.show();
-                let _ = win.set_focus();
-            }
+            // 第二个实例启动时，激活已有窗口（后台模式下窗口已销毁 → 重建）
+            services::headless::show_or_rebuild_window(app);
         }))
+        // 窗口关闭拦截挂在 Builder 上而非具体窗口实例上：后台模式会销毁
+        // 窗口，绑定实例的拦截器在重建后的新窗口上会失效
+        .on_window_event(move |window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if should_exit_window.load(Ordering::SeqCst) {
+                    // Cmd+Q / 系统关机等，允许关闭
+                    return;
+                }
+                api.prevent_close();
+                let app = window.app_handle();
+                let destroy = app
+                    .try_state::<services::headless::HeadlessState>()
+                    .map(|h| h.destroy_on_close())
+                    .unwrap_or(false);
+                if destroy {
+                    if let Err(e) = services::headless::enter_headless_mode(app) {
+                        log::error!("进入后台模式失败: {}", e);
+                        let _ = window.hide();
+                    }
+                } else {
+                    let _ = window.hide();
+                }
+            }
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
@@ -105,11 +157,16 @@ pub fn run() {
                     .build(),
             )?;
 
+            // 后台模式状态：先于任何回调注册（菜单回调会读它）
+            app.manage(services::headless::HeadlessState::load(app.handle()));
+
             // 系统托盘（Windows / Linux；macOS 使用原生 NSStatusItem，见下方分支）
             #[cfg(not(target_os = "macos"))]
             {
                 let menu = tauri::menu::MenuBuilder::new(app)
                     .item(&tauri::menu::MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?)
+                    .separator()
+                    .item(&tauri::menu::MenuItem::with_id(app, "background-mode", "进入后台模式", true, None::<&str>)?)
                     .separator()
                     .item(&tauri::menu::MenuItem::with_id(app, "check-update", "检查更新", true, None::<&str>)?)
                     .item(&tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?)
@@ -130,22 +187,30 @@ pub fn run() {
                             ..
                         } = event
                         {
-                            if let Some(win) = tray.app_handle().get_webview_window("main") {
-                                let _ = win.show();
-                                let _ = win.set_focus();
-                            }
+                            services::headless::show_or_rebuild_window(tray.app_handle());
                         }
                     })
                     .on_menu_event(move |app_handle, event| {
                         if event.id() == "quit" {
                             app_handle.exit(0);
                         } else if event.id() == "show" {
-                            if let Some(win) = app_handle.get_webview_window("main") {
-                                let _ = win.show();
-                                let _ = win.set_focus();
+                            services::headless::show_or_rebuild_window(app_handle);
+                        } else if event.id() == "background-mode" {
+                            // 动作项：点击立即进入/退出门面，顺带把标题改成反向文案
+                            let in_background = toggle_background_mode(app_handle);
+                            if let Some(item) = app_handle
+                                .menu()
+                                .and_then(|m| m.get("background-mode"))
+                            {
+                                let _ = item.set_text(if in_background {
+                                    "退出门面（返回界面）"
+                                } else {
+                                    "进入后台模式"
+                                });
                             }
+                            log::info!("[Headless] 后台模式切换 → {}", in_background);
                         } else if event.id() == "check-update" {
-                            let _ = app_handle.emit("check-update", ());
+                            request_check_update(app_handle);
                         }
                     })
                     .build(app)?;
@@ -158,18 +223,17 @@ pub fn run() {
                 let app_handle = app.handle().clone();
                 let show_handle = app_handle.clone();
                 let toggle_handle = app_handle.clone();
+                let background_handle = app_handle.clone();
                 let update_handle = app_handle.clone();
                 let quit_handle = app_handle.clone();
                 let callbacks = MenuCallbacks {
                     show_window: Box::new(move || {
-                        if let Some(win) = show_handle.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.set_focus();
-                        }
+                        services::headless::show_or_rebuild_window(&show_handle);
                     }),
                     toggle_enabled: Box::new(move || toggle_menubar_display(&toggle_handle)),
+                    toggle_background: Box::new(move || toggle_background_mode(&background_handle)),
                     check_update: Box::new(move || {
-                        let _ = update_handle.emit("check-update", ());
+                        request_check_update(&update_handle);
                     }),
                     quit: Box::new(move || quit_handle.exit(0)),
                 };
@@ -178,21 +242,6 @@ pub fn run() {
                     callbacks,
                 )?;
             }
-
-            // 点击关闭按钮时隐藏到托盘（系统退出请求除外）
-            let win = app.get_webview_window("main").unwrap();
-            let win_clone = win.clone();
-            win.on_window_event(move |event| {
-                if let WindowEvent::CloseRequested { api, .. } = event {
-                    if should_exit_close.load(Ordering::SeqCst) {
-                        // Cmd+Q / 系统关机等，允许关闭
-                    } else {
-                        // 用户点击关闭按钮，隐藏到托盘
-                        api.prevent_close();
-                        let _ = win_clone.hide();
-                    }
-                }
-            });
 
             // 菜单栏显示服务 + 按持久化设置恢复（仅 macOS 生效）
             app.manage(Mutex::new(services::menubar::MenubarHandle::new(
@@ -215,6 +264,13 @@ pub fn run() {
                         services::menubar_macos::set_toggle_state(true);
                     });
                 }
+
+                // 「后台模式」动作项按当前实际状态初始化（AppKit 要求主线程）
+                let _ = app.run_on_main_thread(|| {
+                    services::menubar_macos::set_background_state(
+                        services::headless::is_headless_mode(),
+                    );
+                });
             }
 
             // 恢复 HTTP 服务状态（如果上次启用，仅 Windows）
@@ -349,6 +405,11 @@ pub fn run() {
             // 菜单栏显示（macOS）
             commands::menubar::get_menubar_status,
             commands::menubar::toggle_menubar_display,
+            // 后台常驻模式
+            commands::headless::get_background_mode,
+            commands::headless::set_background_mode,
+            commands::headless::toggle_headless_mode,
+            commands::headless::consume_pending_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -358,15 +419,22 @@ pub fn run() {
     // Reopen: 点击 Dock 图标时重新显示窗口
     app.run(move |app_handle, event| {
         match event {
-            RunEvent::ExitRequested { .. } => {
+            RunEvent::ExitRequested { api, code, .. } => {
+                // Tauri v2 在「所有窗口被销毁」时会自动退出进程（官方 issue
+                // #13511 至今 open）。后台模式下窗口正是被我们主动销毁的，
+                // 此时必须阻止退出，否则托盘/菜单栏会随之消失。
+                // code 为 None 即代表这个「被动」来源；code 为 Some(_) 是用户
+                // 主动 app.exit(0)（托盘菜单"退出" / Cmd+Q），照常退出。
+                if code.is_none() && services::headless::is_headless_mode() {
+                    log::info!("[Headless] 无存活窗口的退出请求，阻止退出并保持后台常驻");
+                    api.prevent_exit();
+                    return;
+                }
                 should_exit.store(true, Ordering::SeqCst);
             }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => {
-                if let Some(win) = app_handle.get_webview_window("main") {
-                    let _ = win.show();
-                    let _ = win.set_focus();
-                }
+                services::headless::show_or_rebuild_window(app_handle);
             }
             _ => {}
         }

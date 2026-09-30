@@ -167,6 +167,13 @@ onMounted(async () => {
   await filterStore.loadCcsSessionFilter()
   await autoLoadDatabase()
   unlistenCheckUpdate = await platformAdapter.onCheckUpdateRequested(() => updaterStore.checkForUpdate())
+  // 后台常驻模式下界面被销毁，托盘的"检查更新"无法 emit 到已销毁的 webview，
+  // Rust 侧改为排队；这里在监听注册完成后补拉一次
+  try {
+    if (await platformAdapter.consumePendingUpdate()) {
+      updaterStore.checkForUpdate()
+    }
+  } catch { /* ignore */ }
 })
 
 onUnmounted(() => {

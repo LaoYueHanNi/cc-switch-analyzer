@@ -42,6 +42,8 @@ pub struct MenuCallbacks {
     pub show_window: Box<dyn Fn() + Send + Sync>,
     /// 切换"菜单栏显示"开关，返回新状态
     pub toggle_enabled: Box<dyn Fn() -> bool + Send + Sync>,
+    /// **立即**切换后台模式（进入则销毁窗口 / 退出则重建窗口），返回切换后是否处于后台
+    pub toggle_background: Box<dyn Fn() -> bool + Send + Sync>,
     pub check_update: Box<dyn Fn() + Send + Sync>,
     pub quit: Box<dyn Fn() + Send + Sync>,
 }
@@ -56,6 +58,7 @@ const TAG_SHOW: isize = 0;
 const TAG_TOGGLE: isize = 1;
 const TAG_UPDATE: isize = 2;
 const TAG_QUIT: isize = 3;
+const TAG_BACKGROUND: isize = 4;
 
 thread_local! {
     /// NSStatusBar 不持有 status item，必须自行保活（否则创建后立即从菜单栏消失）
@@ -65,6 +68,7 @@ thread_local! {
     /// 应用图标模板图，与文字合成到同一张内容图
     static ICON: RefCell<Option<Retained<NSImage>>> = const { RefCell::new(None) };
     static ENABLE_ITEM: RefCell<Option<Retained<NSMenuItem>>> = const { RefCell::new(None) };
+    static BACKGROUND_ITEM: RefCell<Option<Retained<NSMenuItem>>> = const { RefCell::new(None) };
     static TARGET: RefCell<Option<Retained<MenuTarget>>> = const { RefCell::new(None) };
 }
 
@@ -112,6 +116,20 @@ define_class! {
                     }
                     TAG_UPDATE => (cb.check_update)(),
                     TAG_QUIT => (cb.quit)(),
+                    TAG_BACKGROUND => {
+                        let on = (cb.toggle_background)();
+                        // 动作式菜单项：标题随状态变化，勾选态仅作辅助提示
+                        item.setTitle(&NSString::from_str(if on {
+                            "退出门面（返回界面）"
+                        } else {
+                            "进入后台模式"
+                        }));
+                        item.setState(if on {
+                            NSControlStateValueOn
+                        } else {
+                            NSControlStateValueOff
+                        });
+                    }
                     _ => {}
                 }
             }
@@ -180,6 +198,9 @@ pub fn init(mtm: MainThreadMarker, callbacks: MenuCallbacks) -> Result<(), Strin
     let toggle = add_item("启用菜单栏显示", TAG_TOGGLE);
     toggle.setState(NSControlStateValueOff);
     ENABLE_ITEM.with_borrow_mut(|slot| *slot = Some(toggle));
+    let background = add_item("进入后台模式", TAG_BACKGROUND);
+    background.setState(NSControlStateValueOff);
+    BACKGROUND_ITEM.with_borrow_mut(|slot| *slot = Some(background));
     menu.addItem(NSMenuItem::separatorItem(mtm).as_ref());
     add_item("检查更新", TAG_UPDATE);
     add_item("退出", TAG_QUIT);
@@ -409,6 +430,27 @@ pub fn set_toggle_state(on: bool) {
     ENABLE_ITEM.with_borrow(|slot| {
         if let Some(item) = slot {
             item.setState(if on {
+                NSControlStateValueOn
+            } else {
+                NSControlStateValueOff
+            });
+        }
+    });
+}
+
+/// 同步「后台模式」勾选态与标题（状态变化时调用，需主线程）
+///
+/// 这是**动作**项而非纯配置开关：标题始终提示点击后会发生什么
+/// （进入后台 / 退出门面），勾选态只表示当前是否已在后台模式。
+pub fn set_background_state(in_background: bool) {
+    BACKGROUND_ITEM.with_borrow(|slot| {
+        if let Some(item) = slot {
+            item.setTitle(&NSString::from_str(if in_background {
+                "退出门面（返回界面）"
+            } else {
+                "进入后台模式"
+            }));
+            item.setState(if in_background {
                 NSControlStateValueOn
             } else {
                 NSControlStateValueOff

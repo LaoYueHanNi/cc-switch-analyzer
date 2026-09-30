@@ -3,7 +3,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import { check } from '@tauri-apps/plugin-updater'
-import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, CcsSessionFilter, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, CursorCsvPreviewPage, CursorOverrideAction, HookBackupResult, HookMergeResult, DefaultPaths, DshScanResult, DshSettings, TmServiceStatus, MenubarStatus } from './types'
+import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, CcsSessionFilter, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, CursorCsvPreviewPage, CursorOverrideAction, HookBackupResult, HookMergeResult, DefaultPaths, DshScanResult, DshSettings, TmServiceStatus, MenubarStatus, BackgroundModeStatus } from './types'
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
 import type { PricingData, PricingFamily } from '@/types/pricing'
@@ -364,6 +364,19 @@ export const platformAdapter: PlatformAdapter = {
   },
   async toggleMenubarDisplay(enabled: boolean): Promise<MenubarStatus> {
     return invoke<MenubarStatus>('toggle_menubar_display', { enabled })
+  },
+  // 后台常驻模式
+  async getBackgroundMode(): Promise<BackgroundModeStatus> {
+    return invoke<BackgroundModeStatus>('get_background_mode')
+  },
+  async setBackgroundMode(enabled: boolean): Promise<BackgroundModeStatus> {
+    return invoke<BackgroundModeStatus>('set_background_mode', { enabled })
+  },
+  async toggleHeadlessMode(): Promise<boolean> {
+    return invoke<boolean>('toggle_headless_mode')
+  },
+  async consumePendingUpdate(): Promise<boolean> {
+    return invoke<boolean>('consume_pending_update')
   },
   // 任务管理
   async listTasks(): Promise<TaskWithStats[]> {
