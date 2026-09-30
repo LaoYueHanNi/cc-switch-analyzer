@@ -9,6 +9,7 @@ use crate::services::http_server::TrafficMonitorServerHandle;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TmServiceStatus {
+    pub supported: bool,
     pub enabled: bool,
     pub running: bool,
     pub port: u16,
@@ -26,6 +27,7 @@ pub fn get_http_service_status(
 
     let server = tm_server.lock().unwrap();
     TmServiceStatus {
+        supported: true,
         enabled,
         running: server.is_running(),
         port: if server.is_running() { server.port() } else { crate::utils::TM_API_PORT },
@@ -53,6 +55,7 @@ pub fn toggle_http_service(
     }
 
     Ok(TmServiceStatus {
+        supported: true,
         enabled,
         running: server.is_running(),
         port: if server.is_running() { server.port() } else { crate::utils::TM_API_PORT },

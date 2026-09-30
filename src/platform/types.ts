@@ -298,9 +298,16 @@ export interface DshSettings {
 }
 
 export interface TmServiceStatus {
+  supported: boolean
   enabled: boolean
   running: boolean
   port: number
+}
+
+export interface MenubarStatus {
+  supported: boolean
+  enabled: boolean
+  running: boolean
 }
 
 export interface PlatformAdapter {
@@ -412,11 +419,13 @@ export interface PlatformAdapter {
   getAppVersion(): Promise<string>
   pickDirectory(title: string): Promise<string | null>
   onCheckUpdateRequested(callback: () => void): Promise<() => void>
-  // 默认路径 / TrafficMonitor 插件
+  // 默认路径 / TrafficMonitor 插件 / macOS 菜单栏显示
   getDefaultPaths(): Promise<DefaultPaths>
   getHttpServiceStatus(): Promise<TmServiceStatus>
   toggleHttpService(enabled: boolean): Promise<TmServiceStatus>
   downloadTrafficMonitorPlugin(arch: 'x86' | 'x64'): Promise<string>
+  getMenubarStatus(): Promise<MenubarStatus>
+  toggleMenubarDisplay(enabled: boolean): Promise<MenubarStatus>
   // 任务管理
   listTasks(): Promise<TaskWithStats[]>
   getTaskDetail(taskId: number): Promise<TaskDetail>

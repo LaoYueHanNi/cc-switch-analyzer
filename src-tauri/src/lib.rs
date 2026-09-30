@@ -10,8 +10,31 @@ use services::app_db::AppDbService;
 use services::data_source::SourceEntry;
 use services::dedup::RequestCache;
 use services::pricing_engine::PricingEngine;
+#[cfg(not(target_os = "macos"))]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder};
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
+
+/// 原生菜单里的"启用菜单栏显示"开关：切换运行状态并持久化（主线程调用，
+/// 返回新状态供菜单项同步勾选）
+#[cfg(target_os = "macos")]
+fn toggle_menubar_display(app: &tauri::AppHandle) -> bool {
+    let app_state = app.state::<AppState>();
+    let handle = app.state::<Mutex<services::menubar::MenubarHandle>>();
+    let mut h = handle.lock().unwrap();
+    let enable = !h.is_running();
+    {
+        let app_db = app_state.app_db.lock().unwrap();
+        let _ = app_db.set_setting("menubar_display_enabled", if enable { "1" } else { "0" });
+    }
+    if enable {
+        if let Err(e) = h.start(app_state.shared.clone()) {
+            log::error!("菜单栏显示启动失败: {}", e);
+        }
+    } else {
+        h.stop();
+    }
+    h.is_running()
+}
 
 // 跨线程共享的状态（Tauri 命令 + HTTP 服务共用）
 pub struct SharedState {
@@ -82,48 +105,79 @@ pub fn run() {
                     .build(),
             )?;
 
-            // 系统托盘
-            let menu = tauri::menu::MenuBuilder::new(app)
-                .item(&tauri::menu::MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?)
-                .separator()
-                .item(&tauri::menu::MenuItem::with_id(app, "check-update", "检查更新", true, None::<&str>)?)
-                .item(&tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?)
-                .build()?;
-            let tray_builder = if let Some(icon) = app.default_window_icon() {
-                TrayIconBuilder::new().icon(icon.clone())
-            } else {
-                TrayIconBuilder::new()
-            };
-            let _tray = tray_builder
-                .icon_as_template(true)
-                .tooltip("CC-Switch Analyzer")
-                .menu(&menu)
-                .on_tray_icon_event(|tray, event| {
-                    if let tauri::tray::TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        if let Some(win) = tray.app_handle().get_webview_window("main") {
+            // 系统托盘（Windows / Linux；macOS 使用原生 NSStatusItem，见下方分支）
+            #[cfg(not(target_os = "macos"))]
+            {
+                let menu = tauri::menu::MenuBuilder::new(app)
+                    .item(&tauri::menu::MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?)
+                    .separator()
+                    .item(&tauri::menu::MenuItem::with_id(app, "check-update", "检查更新", true, None::<&str>)?)
+                    .item(&tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?)
+                    .build()?;
+                let tray_builder = if let Some(icon) = app.default_window_icon() {
+                    TrayIconBuilder::new().icon(icon.clone())
+                } else {
+                    TrayIconBuilder::new()
+                };
+                let _tray = tray_builder
+                    .icon_as_template(true)
+                    .tooltip("CC-Switch Analyzer")
+                    .menu(&menu)
+                    .on_tray_icon_event(|tray, event| {
+                        if let tauri::tray::TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            if let Some(win) = tray.app_handle().get_webview_window("main") {
+                                let _ = win.show();
+                                let _ = win.set_focus();
+                            }
+                        }
+                    })
+                    .on_menu_event(move |app_handle, event| {
+                        if event.id() == "quit" {
+                            app_handle.exit(0);
+                        } else if event.id() == "show" {
+                            if let Some(win) = app_handle.get_webview_window("main") {
+                                let _ = win.show();
+                                let _ = win.set_focus();
+                            }
+                        } else if event.id() == "check-update" {
+                            let _ = app_handle.emit("check-update", ());
+                        }
+                    })
+                    .build(app)?;
+            }
+
+            // macOS 原生菜单栏（NSStatusItem：图标 + 两行小字 + 原生菜单）
+            #[cfg(target_os = "macos")]
+            {
+                use services::menubar_macos::{self, MenuCallbacks};
+                let app_handle = app.handle().clone();
+                let show_handle = app_handle.clone();
+                let toggle_handle = app_handle.clone();
+                let update_handle = app_handle.clone();
+                let quit_handle = app_handle.clone();
+                let callbacks = MenuCallbacks {
+                    show_window: Box::new(move || {
+                        if let Some(win) = show_handle.get_webview_window("main") {
                             let _ = win.show();
                             let _ = win.set_focus();
                         }
-                    }
-                })
-                .on_menu_event(move |app_handle, event| {
-                    if event.id() == "quit" {
-                        app_handle.exit(0);
-                    } else if event.id() == "show" {
-                        if let Some(win) = app_handle.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.set_focus();
-                        }
-                    } else if event.id() == "check-update" {
-                        let _ = app_handle.emit("check-update", ());
-                    }
-                })
-                .build(app)?;
+                    }),
+                    toggle_enabled: Box::new(move || toggle_menubar_display(&toggle_handle)),
+                    check_update: Box::new(move || {
+                        let _ = update_handle.emit("check-update", ());
+                    }),
+                    quit: Box::new(move || quit_handle.exit(0)),
+                };
+                menubar_macos::init(
+                    objc2::MainThreadMarker::new().expect("菜单栏初始化必须在主线程"),
+                    callbacks,
+                )?;
+            }
 
             // 点击关闭按钮时隐藏到托盘（系统退出请求除外）
             let win = app.get_webview_window("main").unwrap();
@@ -139,6 +193,29 @@ pub fn run() {
                     }
                 }
             });
+
+            // 菜单栏显示服务 + 按持久化设置恢复（仅 macOS 生效）
+            app.manage(Mutex::new(services::menubar::MenubarHandle::new(
+                app.handle().clone(),
+            )));
+
+            #[cfg(target_os = "macos")]
+            {
+                let app_state = app.state::<AppState>();
+                let app_db = app_state.app_db.lock().unwrap();
+                let enabled = app_db.get_setting("menubar_display_enabled").as_deref() == Some("1");
+                drop(app_db);
+                if enabled {
+                    let handle = app.state::<Mutex<services::menubar::MenubarHandle>>();
+                    let mut h = handle.lock().unwrap();
+                    if let Err(e) = h.start(app_state.shared.clone()) {
+                        log::error!("恢复菜单栏显示失败: {}", e);
+                    }
+                    let _ = app.run_on_main_thread(|| {
+                        services::menubar_macos::set_toggle_state(true);
+                    });
+                }
+            }
 
             // 恢复 HTTP 服务状态（如果上次启用，仅 Windows）
             #[cfg(target_os = "windows")]
@@ -269,6 +346,9 @@ pub fn run() {
             commands::traffic_monitor::get_http_service_status,
             commands::traffic_monitor::toggle_http_service,
             commands::traffic_monitor::download_traffic_monitor_plugin,
+            // 菜单栏显示（macOS）
+            commands::menubar::get_menubar_status,
+            commands::menubar::toggle_menubar_display,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

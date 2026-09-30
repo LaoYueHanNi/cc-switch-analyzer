@@ -25,6 +25,9 @@ pub mod external_db;
 pub mod grok_sessions;
 #[cfg(target_os = "windows")]
 pub mod http_server;
+pub mod menubar;
+#[cfg(target_os = "macos")]
+pub mod menubar_macos;
 pub mod multi_terminal;
 pub mod opencode_db;
 pub mod pipeline;
@@ -34,6 +37,7 @@ pub mod proma_db;
 pub mod proma_dir;
 pub mod proma_scanner;
 pub mod session_title;
+pub mod today_query;
 pub mod zcode_db;
 pub mod zcode_scanner;
 

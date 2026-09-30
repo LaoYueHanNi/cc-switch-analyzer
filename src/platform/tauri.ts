@@ -3,7 +3,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import { check } from '@tauri-apps/plugin-updater'
-import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, CcsSessionFilter, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, CursorCsvPreviewPage, CursorOverrideAction, HookBackupResult, HookMergeResult, DefaultPaths, DshScanResult, DshSettings, TmServiceStatus } from './types'
+import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, CcsSessionFilter, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, CursorCsvPreviewPage, CursorOverrideAction, HookBackupResult, HookMergeResult, DefaultPaths, DshScanResult, DshSettings, TmServiceStatus, MenubarStatus } from './types'
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
 import type { PricingData, PricingFamily } from '@/types/pricing'
@@ -357,6 +357,13 @@ export const platformAdapter: PlatformAdapter = {
   },
   async downloadTrafficMonitorPlugin(arch: 'x86' | 'x64'): Promise<string> {
     return invoke<string>('download_traffic_monitor_plugin', { arch })
+  },
+  // macOS 菜单栏显示
+  async getMenubarStatus(): Promise<MenubarStatus> {
+    return invoke<MenubarStatus>('get_menubar_status')
+  },
+  async toggleMenubarDisplay(enabled: boolean): Promise<MenubarStatus> {
+    return invoke<MenubarStatus>('toggle_menubar_display', { enabled })
   },
   // 任务管理
   async listTasks(): Promise<TaskWithStats[]> {

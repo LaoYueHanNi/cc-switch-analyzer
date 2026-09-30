@@ -1,5 +1,6 @@
 pub mod cursor;
 pub mod database;
+pub mod menubar;
 pub mod pricing;
 pub mod query;
 pub mod session_manager;
@@ -17,6 +18,7 @@ pub mod traffic_monitor {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct TmServiceStatus {
+        pub supported: bool,
         pub enabled: bool,
         pub running: bool,
         pub port: u16,
@@ -24,7 +26,7 @@ pub mod traffic_monitor {
 
     #[tauri::command]
     pub fn get_http_service_status() -> TmServiceStatus {
-        TmServiceStatus { enabled: false, running: false, port: 0 }
+        TmServiceStatus { supported: false, enabled: false, running: false, port: 0 }
     }
 
     #[tauri::command]
