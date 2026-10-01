@@ -163,10 +163,18 @@ pub fn run() {
             // 系统托盘（Windows / Linux；macOS 使用原生 NSStatusItem，见下方分支）
             #[cfg(not(target_os = "macos"))]
             {
+                // 「后台模式」是动作项，点击后要把标题改成反向文案，因此单独
+                // 持有 MenuItem 引用：托盘菜单不是 app-wide menu，拿不到
+                // `AppHandle::menu()`，而 `MenuItemKind` 也没有 `set_text`，
+                // 必须持有具体 MenuItem 才能改标题。
+                let background_item =
+                    tauri::menu::MenuItem::with_id(app, "background-mode", "进入后台模式", true, None::<&str>)?;
+                let background_item_menu = background_item.clone();
+                let background_item_event = background_item.clone();
                 let menu = tauri::menu::MenuBuilder::new(app)
                     .item(&tauri::menu::MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?)
                     .separator()
-                    .item(&tauri::menu::MenuItem::with_id(app, "background-mode", "进入后台模式", true, None::<&str>)?)
+                    .item(&background_item_menu)
                     .separator()
                     .item(&tauri::menu::MenuItem::with_id(app, "check-update", "检查更新", true, None::<&str>)?)
                     .item(&tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?)
@@ -198,15 +206,12 @@ pub fn run() {
                         } else if event.id() == "background-mode" {
                             // 动作项：点击立即进入/退出门面，顺带把标题改成反向文案
                             let in_background = toggle_background_mode(app_handle);
-                            if let Some(item) = app_handle
-                                .menu()
-                                .and_then(|m| m.get("background-mode"))
-                            {
-                                let _ = item.set_text(if in_background {
-                                    "退出门面（返回界面）"
-                                } else {
-                                    "进入后台模式"
-                                });
+                            if let Err(e) = background_item_event.set_text(if in_background {
+                                "退出门面（返回界面）"
+                            } else {
+                                "进入后台模式"
+                            }) {
+                                log::warn!("[Headless] 更新托盘菜单标题失败: {e}");
                             }
                             log::info!("[Headless] 后台模式切换 → {}", in_background);
                         } else if event.id() == "check-update" {
@@ -443,3 +448,4 @@ pub fn run() {
         let _ = &app_handle;
     });
 }
+

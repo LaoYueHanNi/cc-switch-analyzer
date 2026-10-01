@@ -1,6 +1,32 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-09-30",
+    "commits": [
+      {
+        "hash": "f70c30e",
+        "subject": "feat(headless): 后台常驻模式销毁 WebView 窗口仅保留 Rust 进程",
+        "date": "2026-09-30"
+      },
+      {
+        "hash": "e162c99",
+        "subject": "feat(menubar): macOS 菜单栏改用原生 NSStatusItem 显示两行 Token 与费用",
+        "date": "2026-09-30"
+      },
+      {
+        "hash": "174e312",
+        "subject": "feat(ccs): 补全会话日志同步过滤的终端类型",
+        "date": "2026-09-27"
+      },
+      {
+        "hash": "53abf80",
+        "subject": "fix(pi): 纳入OMP profiles桌面版会话扫描并展示全部数据目录",
+        "date": "2026-09-27"
+      }
+    ]
+  },
+  {
+    "version": "0.8.7",
     "date": "2026-09-22",
     "commits": [
       {
