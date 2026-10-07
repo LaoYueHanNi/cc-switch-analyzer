@@ -65,6 +65,10 @@ pub fn set_ccs_session_filter(
     drop(app_db);
     // 即时广播到数据源（实时流式查询等不再等待下一轮设置）
     let filter_apps = if enabled && !apps.is_empty() { Some(apps.clone()) } else { None };
+    *state
+        .ccs_filter_session_apps
+        .write()
+        .map_err(|e| e.to_string())? = filter_apps.clone();
     let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
     for s in sources.iter_mut() {
         s.source.set_ccs_filter_apps(filter_apps.as_deref());

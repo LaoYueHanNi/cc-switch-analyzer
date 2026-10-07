@@ -74,6 +74,11 @@ pub fn query_today_data(
     let today_start_local = local_now - (local_now % 86400);
     let from_epoch = today_start_local - tz_offset * 3600;
     let to_epoch = from_epoch + 86400;
+    let ccs_filter_session_apps = shared
+        .ccs_filter_session_apps
+        .read()
+        .map_err(|e| e.to_string())?
+        .clone();
 
     let params = FilterParams {
         from_epoch: Some(from_epoch),
@@ -81,7 +86,7 @@ pub fn query_today_data(
         tz_offset: Some(tz_offset),
         provider_id: None,
         model_id: None,
-        ccs_filter_session_apps: None,
+        ccs_filter_session_apps,
     };
 
     // 只在锁期间读取 (路径, 类型) 列表，释放后用于 staleness 判断

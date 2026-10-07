@@ -71,15 +71,36 @@ fn toggle_background_mode(app: &tauri::AppHandle) -> bool {
 pub struct SharedState {
     pub data_sources: RwLock<Vec<SourceEntry>>,
     pub pricing_engine: RwLock<PricingEngine>,
+    /// CCS 会话日志同步过滤配置，供前台查询与后台常驻查询共用。
+    pub ccs_filter_session_apps: RwLock<Option<Vec<String>>>,
 }
 
 impl SharedState {
-    pub fn new(pricing_engine: PricingEngine) -> Self {
+    pub fn new(
+        pricing_engine: PricingEngine,
+        ccs_filter_session_apps: Option<Vec<String>>,
+    ) -> Self {
         Self {
             data_sources: RwLock::new(Vec::new()),
             pricing_engine: RwLock::new(pricing_engine),
+            ccs_filter_session_apps: RwLock::new(ccs_filter_session_apps),
         }
     }
+}
+
+/// 从应用设置读取 CCS 会话日志过滤配置。
+///
+/// None 表示不启用过滤；空列表也按 None 处理，保持前台查询口径。
+pub(crate) fn load_ccs_filter_session_apps(
+    app_db: &AppDbService,
+) -> Option<Vec<String>> {
+    if app_db.get_setting("ccs_filter_session_enabled").as_deref() != Some("1") {
+        return None;
+    }
+    app_db
+        .get_setting("ccs_filter_session_apps")
+        .and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok())
+        .filter(|apps| !apps.is_empty())
 }
 
 // 全局应用状态
@@ -103,8 +124,9 @@ impl std::ops::Deref for AppState {
 pub fn run() {
     let app_db = AppDbService::new().expect("初始化应用数据库失败");
     let pricing_engine = PricingEngine::new();
+    let ccs_filter_session_apps = load_ccs_filter_session_apps(&app_db);
 
-    let shared = Arc::new(SharedState::new(pricing_engine));
+    let shared = Arc::new(SharedState::new(pricing_engine, ccs_filter_session_apps));
 
     let state = AppState {
         shared: shared.clone(),
@@ -448,4 +470,3 @@ pub fn run() {
         let _ = &app_handle;
     });
 }
-
