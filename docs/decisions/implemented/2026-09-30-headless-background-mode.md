@@ -57,6 +57,12 @@ Status: implemented
 - `check-update` 事件：后台时 `emit` 无人接收，改为置 `PENDING_UPDATE` 标志，前端 `AppLayout` 挂载并注册监听后调 `consume_pending_update` 补拉
 - `WindowEvent::CloseRequested` 拦截器从 `win.on_window_event`（绑定窗口实例）移到 Builder 级 `on_window_event`——销毁后重建的窗口不受实例级拦截器保护
 
+### 数据新鲜度边界（2026-10-10 核对）
+
+后台独立线程负责今日查询与展示，不能据此推断所有来源都持续采集。ZCode、Proma、DSH、MiniMax、Antigravity、Kimi、PI 的扫描仍由前端刷新命令触发，WebView 销毁后没有常驻扫描调度；CCS、OpenCode、AI-Proxy 的只读连接可以继续读取源库新记录。初始化依赖前端、Windows 插件断连恢复、查询错误与窗口尺寸恢复等已知问题见 [轻量模式审计](../../audits/2026-10-10-lightweight-mode.md)。本次补充描述当前实现，相关修复尚未落地。
+
+Cursor 后台只展示已经下载的 CSV，不自动请求云端。按用户降低请求频率的约束，后续本地后台采集修复也不新增 Cursor API 自动请求，不缩短现有前台 24 小时有效期；用户需要最新用量时手动同步，Cursor 不属于后台实时更新验收范围。
+
 ## Alternatives considered
 
 - **维持现状 `hide()`** —— 零成本、恢复瞬时，但内存一分不省、后台照跑轮询，与要解决的问题正交。
@@ -70,4 +76,4 @@ Status: implemented
 ## Consequences
 
 - 代价：进入后台后重新打开窗口需 0.5–2s 重建，且回到默认路由、筛选条件与已打开的设置面板状态丢失；macOS 上 Dock 图标消失（`Accessory` 策略），需从菜单栏唤起；多出 `close_destroys_window` / `window_geometry` 两个 settings 键。
-- 换来：实测销毁后 WebView 相关进程（`com.apple.WebKit.WebContent` + `GPU` + `Networking`）合计 **137.1MB 全部释放**，主进程仅 103.2MB 常驻；菜单栏两行小字与 TrafficMonitor HTTP 服务在后台照常工作。默认仍为「关闭即隐藏」，后台模式是可选项，灰度与回滚零成本。
+- 换来：2026-09-30 的 macOS 测量中，销毁后 WebView 相关进程（`com.apple.WebKit.WebContent` + `GPU` + `Networking`）合计 **137.1MB 全部释放**，主进程仅 103.2MB 常驻；菜单栏与 TrafficMonitor HTTP 查询服务继续运行。这项历史测量不验证全部来源的持续采集，也不代表 Windows 资源释放已完成真机验收。默认仍为「关闭即隐藏」，后台模式是可选项，灰度与回滚零成本。

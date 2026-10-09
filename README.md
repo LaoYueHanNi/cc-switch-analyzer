@@ -1,142 +1,178 @@
 # CC-Switch Analyzer
 
-CC-Switch、OpenCode、AI-Proxy、Cursor 与 Grok 用量数据的桌面分析工具。基于 Tauri v2 构建，提供 Token 消耗、模型分布、成本分析等多维度统计；多数据源可同时接入，透明合并查询并做请求级去重。
+多数据源 AI 用量桌面分析工具，基于 Tauri v2、Rust 和 Vue 3 构建。支持 CC-Switch、OpenCode、AI-Proxy、Cursor、ZCode、Proma、DSH、MiniMax Code、Antigravity、Kimi 与 PI（pi / oh-my-pi），提供 Token、费用、模型分布、会话与实时请求分析。
+
+**当前代码版本：0.8.8**。多数据源可同时接入，合并查询并按请求去重。
 
 ## 功能特性
 
 ### 数据分析
 
-- **按模型统计** - 各 LLM 模型的 Token 消耗、成本分布和对比
-- **按供应商统计** - 按供应商维度聚合分析使用情况
-- **趋势分析** - 按日 / 小时 / 星期查看 Token 与费用趋势；支持按模型对比模式（汇总 tip 可展开 Top N）
-- **摘要栏** - 顶部汇总统计（总费用、总 Token、请求数、缓存命中率等）
-- **多维筛选** - 按供应商、模型、日期范围快速过滤，支持快捷日期选择
-- **多源合并** - 并行查询各数据源，请求级去重与增量缓存，避免跨代理重复计数
+- **按模型 / 供应商统计**：查看 Token 消耗、费用和缓存命中率，支持多模型对比。
+- **趋势分析**：按日、小时、星期查看用量与费用趋势，支持按模型对比和 Top N 提示。
+- **摘要与筛选**：顶部汇总费用、Token、请求数等指标；按数据源、供应商、模型和日期筛选。
+- **多源合并**：各数据源可独立启用 / 禁用，合并时去重，并利用增量扫描与缓存减少重复读取。
+- **CCS 会话同步过滤**：可排除指定终端的会话同步记录，保留代理转发记录，减少与本地数据源的重复统计；主页面与常驻显示共用过滤配置。
+- **本地源历史保留**：扫描结果存入应用自身数据库；ZCode 已导入用量不随源库的 30 天裁剪消失。
 
 ### Cursor 用量
 
-- **CSV 同步** - 使用 Session Token 登录后从 Cursor API 同步用量 CSV；可配置北京时间同步窗口（1 天 / 7 天 / 30 天 / 全部）
-- **多账号隔离** - 按账号本地分目录缓存；多账号可同时查询，仅当前绑定账号可同步；退出登录默认保留已下载 CSV
-- **本机精准归因** - 用本机 Hook 日志按分钟窗（±5）+ 模型家族过滤 CSV；归因起始时间可配；支持行级申诉改判
-- **CSV 预览** - 分页预览用量明细，支持按模型筛选、查看过滤原因与改判
-- **Hook 运维** - 同步后可备份 `requests.jsonl`；支持归整压缩；Hook 写入异常时工具栏红灯预警
+- **CSV 同步**：使用 Session Token 登录并从 Cursor API 同步用量，支持北京时间窗口（1 天 / 7 天 / 30 天 / 全部）。
+- **后台缓存展示**：轻量模式只展示已下载用量，允许滞后；需要最新数据时手动同步。前台自动同步保留 24 小时有效期，后台不额外请求 Cursor API。
+- **多账号隔离**：按账号缓存，多账号可同时查询，仅当前绑定账号可同步；退出登录默认保留缓存。
+- **本机精准归因**：每个账号可独立开关；按本机 Hook 日志的分钟窗（±5）与模型家族匹配，可设置归因起始时间并行级改判。
+- **CSV 预览与 Hook 运维**：分页预览、按模型筛选、查看过滤原因；支持 Hook 日志备份、归整压缩和异常预警。
+- **聚合用量计价**：Cursor 聚合记录使用基础定价与分时规则，避免把聚合 Token 误判为单次请求的高上下文档位。
 
 ### 会话与任务
 
-- **会话分析** - 按项目分组的会话级详细分析，支持密度热力图和模型分解
-- **会话标题识别** - 多来源解析会话标题，快速定位目标会话
-- **Codex 会话** - 识别 Codex 请求并按真实 session 聚合；OpenAI API token 归一化
-- **Grok Build 会话** - 从本地 Grok 元数据读取会话标题，支持 Grok 终端启动与恢复
-- **终端启动** - 一键启动 / 恢复 Claude Code、OpenCode、Codex、Grok Build（Windows / macOS）
-- **供应商配置启动** - 右键 Claude 图标可选择 CC-Switch 供应商配置启动终端
-- **任务 Tab** - 跨目录、跨 agent 聚合多个会话；一键按分屏规则打开全部会话
+- **会话分析**：按项目查看会话统计、热力图和模型分解；支持会话管理的数据源会补充标题与项目路径。
+- **Codex / Grok 元数据**：辅助识别真实会话、标题和工作目录；Grok 本地文件用于元数据补充，用量来自已接入的用量源。
+- **终端启动与恢复**：Windows / macOS 支持 Claude Code、OpenCode、Codex、Grok Build；Claude 可选择 CC-Switch 供应商配置启动。
+- **任务 Tab**：跨目录、跨 agent 聚合会话，并按分屏规则打开支持恢复的会话。
+- **Kimi / PI 会话**：导入 Kimi CLI / Code / Work、pi / oh-my-pi 的会话信息，包含 OMP 桌面版 profiles。
+
+各数据源的会话、项目归属能力不同；能统计用量不代表支持一键恢复该终端。
 
 ### 定价系统
 
-- **自定义定价** - 手动编辑任意模型的输入/输出/缓存读写定价
-- **分时定价** - 按时间段设置不同费率，匹配供应商的动态调价
-- **上下文阶梯定价** - 按上下文窗口大小设置阶梯费率
-- **模型别名** - 为同一模型设置多个别名，适配不同供应商的模型命名
-- **模型家族分组** - 定价 Tab 按云端模型家族分组展示
-- **模型对比** - 多模型费用对比计算
-- **云端定价同步** - 启动时自动拉取云端最新定价数据
+- **自定义定价与别名**：编辑输入、输出、缓存读写价格，配置模型别名；缺定价模型可从模型卡片原地设置。
+- **分时与上下文阶梯**：支持时间段、星期 / 工作日规则与上下文窗口阶梯费率。
+- **带入真实用量**：hover 模型卡片时显示“带入定价”，一键把四项 Token 填入定价 Tab。
+- **三种展示模式**：家族分组、全部模型卡片和紧凑排行榜；按模拟费用或模型名排序，用箭头切换升降序。
+- **Token 单位自适应**：四项各自按量显示 K / M / B。手动输入结束后（失焦或 Enter）自动按 `1000 K = 1 M`、`1000 M = 1 B` 进位；输入期间保留原文，清空立即回到 K。
+- **模型费用比较**：用同一组实际 Token 模拟不同模型费用，显示单位换算不改变计算数量。
+- **云端同步**：启动时获取云端模型定价，也可使用本地覆盖。
 
-### 实时监控
+### 实时监控与后台常驻
 
-- **实时 Token 监控** - 实时 Token 消耗监控窗口；Codex 请求按真实 session 聚合
-- **TrafficMonitor 插件** - 在 Windows 任务栏显示今日 Token 消耗和费用；支持插件下载、本地 HTTP 服务与端口自动发现（仅 Windows）
+- **实时请求页**：按数据源展示请求，支持源筛选、会话分组和增量刷新；分别查看首字时间、请求耗时、输出 / 总速度，速度两部分可分别隐藏。指标以源数据为准，缺失时显示占位。
+- **Windows TrafficMonitor**：从设置下载 x86 / x64 插件，并启用本地 HTTP 服务，在任务栏展示今日 Token 与费用；HTTP 结果缓存 30 秒。
+- **macOS 菜单栏**：原生两行小字显示今日 Token 与费用，每 30 秒刷新，适配深色 / 亮色外观。
+- **后台模式**：可立即销毁界面，仅保留 Rust 进程与常驻服务；再次打开时重建窗口。也可配置关闭窗口时自动进入后台模式。
+- **系统托盘与更新**：默认关闭窗口隐藏到托盘，支持单实例唤起、明暗主题和应用内自动更新，可配置 GitHub 更新代理。
 
-### 系统功能
+后台模式重建界面时恢复窗口位置与大小，页面与筛选回到默认状态。退出应用会停止常驻服务。
 
-- **多数据源** - 同时支持 CC-Switch、OpenCode、AI-Proxy、Cursor、Grok Build；各源可独立启用 / 禁用并持久化
-- **深色/亮色模式** - 支持明暗主题切换，配色针对对比度优化
-- **系统托盘** - 最小化到系统托盘后台运行；单实例，重复启动激活已有窗口
-- **自动更新** - 应用内检测和安装更新，可配置代理地址访问 GitHub
-
-## 技术栈
-
-| 层级 | 技术 |
-|------|------|
-| 前端 | Vue 3 + TypeScript 5.5 + Naive UI 2.39 + ECharts 5.5 + Pinia 2 |
-| 后端 | Rust 2021 + rusqlite 0.31 + Tauri v2 |
-| 插件 | C++17 + WinHTTP（TrafficMonitor 插件） |
-| 构建 | pnpm + Vite 5.4 + Cargo |
-
-## 安装
-
-### 从 Releases 下载
-
-前往 [GitHub Releases](https://github.com/LaoYueHanNi/cc-switch-analyzer/releases) 下载对应平台的安装包。
-
-### 从源码构建
-
-**前置要求：**
-- Node.js >= 18
-- pnpm
-- Rust 工具链（rustup）
-
-```bash
-# 克隆仓库
-git clone https://github.com/LaoYueHanNi/cc-switch-analyzer.git
-cd cc-switch-analyzer
-
-# 安装依赖
-pnpm install
-
-# 开发模式（热加载）
-pnpm dev:tauri
-
-# 生产构建
-pnpm build:tauri
-```
-
-## 项目结构
-
-```
-src/                      # Vue 3 前端
-  components/             # UI 组件（charts/, layout/, model/, pricing/, session/, task/）
-  views/                  # 页面（ByModel, ByProvider, Trend, Session, Realtime, Pricing, Task）
-  stores/                 # Pinia 状态管理
-  platform/               # 平台适配器抽象层
-  composables/            # 组合式函数
-  types/                  # TypeScript 类型定义
-  utils/                  # 工具函数
-
-src-tauri/                # Rust 后端
-  src/commands/           # Tauri 命令（database, pricing, query, session, cursor, …）
-  src/services/           # 业务逻辑（pipeline, pricing_engine, cursor_*, ai_proxy_db,
-                          #           codex_sessions, external_db, app_db, http_server, …）
-  src/models.rs           # 数据模型
-  src/utils.rs            # 路径与缓存工具
-
-traffic-monitor-plugin/   # TrafficMonitor 插件（仅 Windows）
-  CCSwitchAnalyzer.h/cpp  # 插件主类（WinHTTP 请求 + JSON 解析）
-  TodayTokenItem.h/cpp    # 显示项（Tokens + Cost）
-  build.bat / build64.bat # MSVC x86 / x64 编译脚本
-```
+当前后台查询可以读取 CCS、OpenCode、AI-Proxy 数据库的新记录；ZCode、Proma、DSH、MiniMax、Antigravity、Kimi、PI 的扫描仍依赖前端刷新，销毁界面后只展示上次导入的数据。Windows 插件在服务端口变化后也存在恢复问题。详细证据及待修复项见 [轻量模式审计](docs/audits/2026-10-10-lightweight-mode.md)。
 
 ## 数据来源
 
-本工具访问以下数据源（外部 SQLite **只读**；Cursor 为本机缓存）：
+外部数据库只读打开；本地文件 / RPC 用量只写入分析器自己的缓存或数据库。支持的数据源如下，`~` 表示当前用户主目录：
 
-| 数据源 | 典型路径 / 说明 |
-|--------|----------------|
-| **CC-Switch** | `~/.cc-switch/cc-switch.db` |
-| **OpenCode** | 系统数据目录下的 `opencode/opencode.db` |
-| **AI-Proxy** | 本地 AI-Proxy SQLite（设置中可选） |
-| **Cursor** | `~/.cc-switch-analyzer/cursor-cache/<userId>/`（API 同步的 `usage.csv`）；本机 Hook 日志用于精准归因 |
-| **Grok Build** | `~/.grok/{sessions,archived_sessions}/`（只读本地会话元数据） |
+| 数据源 | 默认路径 / 采集方式 |
+|--------|--------------------|
+| **CC-Switch（CCS）** | `~/.cc-switch/cc-switch.db`，读取代理与会话同步用量 |
+| **OpenCode** | 默认 `~/.local/share/opencode/opencode.db`，也可在设置中指定实际数据库 |
+| **AI-Proxy** | 默认 `~/.ai-agent-tools/data/access_log.db`，可选择其他本地数据库 |
+| **Cursor** | API 同步 CSV 到 `~/.cc-switch-analyzer/cursor-cache/<userId>/`，本机 Hook 用于归因 |
+| **ZCode** | 只读 `~/.zcode/cli/db/db.sqlite`，增量保存精简用量到应用库 |
+| **Proma** | `~/.proma/agent-sessions/*.jsonl`，结合会话 / 工作区索引导入 |
+| **DSH** | 默认扫描 `~/.dsh/sessions/` 的 JSONL / zstd；可切换到 dsh-token-usage 插件的按天 JSONL |
+| **MiniMax Code（Mavis）** | 优先只读 `~/.minimax/v2/sqlite/runtime-state.sqlite`；缺少 SQLite 时回退 `~/.minimax/v2/sessions/` 的旧版 JSONL |
+| **Antigravity** | 从 `~/.gemini/antigravity*` 发现会话，向运行中的 language server 读取用量并缓存 |
+| **Kimi** | Kimi CLI 的 `~/.kimi/sessions/`、Kimi Code 的 `~/.kimi-code/sessions/`，以及 Kimi Work 桌面缓存目录 |
+| **PI（pi / oh-my-pi）** | `~/.pi/agent/sessions/`、`~/.omp/agent/sessions/`、`~/.omp/profiles/<profile>/agent/sessions/` |
 
-> **重要**: 绝不修改 CC-Switch / OpenCode / AI-Proxy 等外部数据库（`SQLITE_OPEN_READ_ONLY`）。Cursor 仅写入应用自身缓存与凭证目录，不改 Cursor 源文件。
+DSH 插件目录可在设置中选择，默认按 `$DSH_HOME/token-usage` 或 `~/.dsh/token-usage` 解析。PI 支持 `PI_CODING_AGENT_DIR` 与 `PI_CONFIG_DIR`，Kimi Code 支持 `KIMI_CODE_HOME` 覆盖默认目录；设置页列出实际发现的目录。
+
+Kimi Work 默认会话位于 macOS 的 `~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/` 或 Windows 的 `%APPDATA%/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/`，并支持桌面配置中的 `shareDir`。
+
+Grok 会话标题和项目路径从 `$GROK_HOME` 或 `~/.grok/{sessions,archived_sessions}/` 的元数据补充。Antigravity 采集新用量时需要其 IDE / language server 正在运行，已导入历史在关闭 IDE 后仍可查询。
+
+**数据保护**：绝不修改 CC-Switch、OpenCode、AI-Proxy、ZCode、MiniMax 等外部数据库。应用自有库 `~/.cc-switch-analyzer/pricing.db` 保存定价、设置、任务与扫描型源的派生数据；Cursor 缓存按账号隔离。
+
+## 安装与构建
+
+### 从 Releases 下载
+
+前往 [GitHub Releases](https://github.com/LaoYueHanNi/cc-switch-analyzer/releases) 下载 Windows 安装包或 macOS 安装包。当前 CI 构建 Windows MSI 和 macOS DMG，并生成应用内更新清单。
+
+### 从源码构建
+
+需要 Node.js、pnpm 和 Rust stable 工具链；CI 使用 Node.js 20 与 pnpm 10.26。Windows 需要 MSVC 构建工具及 WebView2 Runtime，macOS 需要 Xcode Command Line Tools。平台依赖见 [Tauri 开发环境说明](https://v2.tauri.app/start/prerequisites/)。
+
+```bash
+git clone https://github.com/LaoYueHanNi/cc-switch-analyzer.git
+cd cc-switch-analyzer
+pnpm install
+
+# Tauri 开发模式（前端热加载 + Rust 增量编译）
+pnpm dev:tauri
+
+# 生产构建与安装包
+pnpm build:tauri
+
+# Windows 免安装 EXE（跳过安装包，仍包含生产前端）
+pnpm tauri build --no-bundle
+```
+
+Windows 免安装产物为 `src-tauri/target/release/cc-switch-analyzer.exe`，运行时需要系统已有 WebView2 Runtime。macOS 安装包位于 `src-tauri/target/release/bundle/dmg/`。
+
+### 验证与前端开发
+
+以下命令从仓库根目录执行：
+
+```bash
+pnpm dev:tauri-frontend    # 仅 Vite 前端
+pnpm build:tauri-frontend  # TypeScript 检查 + 前端构建
+pnpm test                  # Vitest
+pnpm test:rust             # 自动进入 src-tauri 运行 cargo test
+node docs/decisions/check.mjs # 决策记录校验
+```
+
+### TrafficMonitor 插件编译（仅 Windows）
+
+插件已有 x86 / x64 DLL，可从应用设置页下载。修改插件 C++ 源码时，使用 Visual Studio 2022 Build Tools，在仓库根目录的 PowerShell 中执行：
+
+```powershell
+Push-Location traffic-monitor-plugin
+.\build.bat
+.\build64.bat
+Pop-Location
+```
+
+脚本将产出复制到 `src-tauri/resources/`，随后重新构建 Tauri 应用以嵌入新 DLL。macOS / Linux 不执行插件编译。
+
+## 技术栈与项目结构
+
+| 层级 | 技术 |
+|------|------|
+| 前端 | Vue 3.5 + TypeScript 5.9 + Naive UI 2.44 + ECharts 5.6 + Pinia 2.3 + Vue Router 4.6 |
+| 后端 | Rust 2021 + rusqlite 0.31 + ureq 3 + zstd + Tauri v2 |
+| macOS 菜单栏 | objc2 + AppKit / Core Text |
+| Windows 插件 | C++17 + WinHTTP，x86 / x64 DLL |
+| 构建与测试 | pnpm + Vite 5.4 + Cargo + Vitest |
+
+依赖的精确版本见 `pnpm-lock.yaml` 与 `src-tauri/Cargo.lock`。
+
+```text
+src/
+  components/             # common、charts、layout/settings、model、pricing 等
+  views/                  # 模型、供应商、趋势、会话、实时、定价、任务
+  stores/                 # Pinia 状态管理
+  platform/               # Tauri IPC 适配器与契约类型
+  composables/            # 加载、定价、会话、轮询与 Token 输入逻辑
+  types/ / utils/         # 数据类型与工具
+
+src-tauri/
+  src/commands/           # IPC 命令
+  src/services/           # 数据源、扫描器、查询管道、会话与常驻服务
+  src/lib.rs              # 应用入口与共享状态
+  resources/              # 静态嵌入的 Windows 插件 DLL
+
+traffic-monitor-plugin/   # TrafficMonitor 插件源代码与编译脚本
+tests/frontend/           # 前端测试
+docs/decisions/            # 决策记录
+changelog-site/            # 变更日志生成与展示
+.github/workflows/        # Windows / macOS 发布构建
+```
+
+开发约定见 [AGENTS.md](AGENTS.md) 与 [CLAUDE.md](CLAUDE.md)。非平凡变更需携带 [决策记录](docs/decisions/README.md)；项目约定、版本说明与用户功能文档随代码同步维护。
 
 ## 云端定价数据
 
-应用内置的模型定价数据来自：
-
-- **数据源**: [model-price-table](https://gitee.com/oyw125/model-price-table)（Gitee 公开仓库）
-- **更新方式**: 应用启动时自动从云端拉取最新定价
-
-你也可以在应用内手动编辑定价，或使用本地 `model_pricing.json` 文件覆盖。
+模型定价来自 [model-price-table](https://gitee.com/oyw125/model-price-table)（Gitee 公开仓库），应用启动时拉取最新数据。可在应用内编辑模型定价并保存本地覆盖。
 
 ## 许可证
 
