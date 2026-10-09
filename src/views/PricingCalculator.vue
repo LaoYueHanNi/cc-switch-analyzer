@@ -24,29 +24,107 @@
           />
         </div>
         <div class="filter-group">
+          <span class="filter-label">展示</span>
+          <CompactSelect
+            :model-value="displayMode"
+            :options="displayModeOptions"
+            @update:model-value="setDisplayMode"
+          />
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">排序</span>
+          <CompactSelect
+            :model-value="sortKey"
+            :options="sortOptions"
+            @update:model-value="setSortKey"
+          />
+          <button
+            type="button"
+            class="sort-direction-btn"
+            :aria-label="sortDirection === 'desc' ? '当前降序，点击切换升序' : '当前升序，点击切换降序'"
+            :title="sortDirection === 'desc' ? '降序，点击切换升序' : '升序，点击切换降序'"
+            @click="toggleSortDirection"
+          >{{ sortDirection === 'desc' ? '↓' : '↑' }}</button>
+        </div>
+        <div class="filter-group">
           <span class="filter-label">输入</span>
-          <CompactNumber v-model:model-value="simInput" :min="0" :step="1" width="52px" />
-          <span class="filter-label">K</span>
+          <CompactTokenInput v-model="simInput" label="输入" />
         </div>
         <div class="filter-group">
           <span class="filter-label">缓存读</span>
-          <CompactNumber v-model:model-value="simCacheRead" :min="0" :step="1" width="52px" />
-          <span class="filter-label">K</span>
+          <CompactTokenInput v-model="simCacheRead" label="缓存读" />
         </div>
         <div class="filter-group">
           <span class="filter-label">输出</span>
-          <CompactNumber v-model:model-value="simOutput" :min="0" :step="1" width="52px" />
-          <span class="filter-label">K</span>
+          <CompactTokenInput v-model="simOutput" label="输出" />
         </div>
         <div class="filter-group">
           <span class="filter-label">缓存写</span>
-          <CompactNumber v-model:model-value="simCacheCreation" :min="0" :step="1" width="52px" />
-          <span class="filter-label">K</span>
+          <CompactTokenInput v-model="simCacheCreation" label="缓存写" />
+        </div>
+      </div>
+    </div>
+
+    <div v-if="displayMode === 'all'" class="pricing-section all-models-section">
+      <div class="section-title subsection-title">
+        <span>全部模型</span>
+        <span class="sort-summary">{{ activeSortLabel }}</span>
+      </div>
+      <div class="pricing-grid">
+        <PricingCard
+          v-for="card in sortedCards"
+          :key="card.modelId"
+          :pricing="card"
+          :model-name="card.modelId"
+          :computed-cost="card.computedCost"
+          :is-override="card?.isOverride || false"
+          :time-rules="card?.timeRules || []"
+          :cloud-time-rules="card?.cloudTimeRules || []"
+          :context-tiers="card?.contextTiers || []"
+          :sim-tokens="simTokens"
+          :aliases="card.aliases || []"
+          @edit="openEditDialog(card.modelId, card)"
+          @add-time-rule="onAddTimeRule(card.modelId)"
+          @edit-time-rule="(rule) => onEditTimeRule(rule)"
+          @delete-time-rule="(rule) => onDeleteTimeRule(rule)"
+          @view-time-rule="(rule) => onViewTimeRule(rule)"
+          @manage-aliases="onManageAliases(card)"
+        />
+      </div>
+    </div>
+
+    <div v-else-if="displayMode === 'ranking'" class="pricing-ranking-section">
+      <div class="section-title subsection-title">
+        <span>费用排行榜</span>
+        <span class="sort-summary">{{ activeSortLabel }}</span>
+      </div>
+      <div class="pricing-ranking">
+        <div class="ranking-header">
+          <span>#</span>
+          <span>模型</span>
+          <span>家族</span>
+          <span>模拟费用</span>
+          <span>操作</span>
+        </div>
+        <div
+          v-for="(card, index) in sortedCards"
+          :key="card.modelId"
+          class="ranking-row"
+        >
+          <span class="ranking-index">{{ index + 1 }}</span>
+          <div class="ranking-model">
+            <strong>{{ card.modelId }}</strong>
+            <span v-if="!card.isUsed" class="ranking-unused">未使用</span>
+          </div>
+          <span class="ranking-family">{{ getFamilyLabel(card) }}</span>
+          <span class="ranking-cost">¥{{ formatRate(card.computedCost) }}</span>
+          <button type="button" class="ranking-edit" @click.stop="openEditDialog(card.modelId, card)">编辑</button>
         </div>
       </div>
     </div>
 
     <div
+      v-else
       v-for="group in familyGroups"
       :key="group.family.id"
       class="pricing-family-section"
@@ -150,7 +228,7 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useMessage } from 'naive-ui'
 import CompactSelect from '@/components/common/CompactSelect.vue'
-import CompactNumber from '@/components/common/CompactNumber.vue'
+import CompactTokenInput from '@/components/common/CompactTokenInput.vue'
 import { platformAdapter } from '@/platform'
 import { useDatabaseStore } from '@/stores/database'
 import { usePricingStore } from '@/stores/pricing'
@@ -165,8 +243,8 @@ import {
   getEffectiveFamilies,
   resolveFamilyId as resolveFamilyIdFromRaw
 } from '@/utils/family'
-import type { PricingData, PricingFamily, TimePricingRule, CloudPricingTimeRule, ContextTier, DailySlot } from '@/types/pricing'
-import { epochToDateStr } from '@/utils/format'
+import type { PricingData, PricingFamily, TimePricingRule, CloudPricingTimeRule, ContextTier, DailySlot, TokenDimensions } from '@/types/pricing'
+import { epochToDateStr, formatRate } from '@/utils/format'
 
 const dbStore = useDatabaseStore()
 const pricingStore = usePricingStore()
@@ -174,11 +252,39 @@ const message = useMessage()
 
 const searchModel = ref('')
 const searchFamily = ref('')
-const simInput = ref(1)
-const simCacheRead = ref(70)
-const simOutput = ref(1)
+type DisplayMode = 'family' | 'all' | 'ranking'
+type SortKey = 'cost' | 'name'
+type SortDirection = 'asc' | 'desc'
+
+const displayMode = ref<DisplayMode>('family')
+const sortKey = ref<SortKey>('cost')
+const sortDirection = ref<SortDirection>('desc')
+const displayModeOptions = [
+  { label: '按家族分组', value: 'family' },
+  { label: '全部模型', value: 'all' },
+  { label: '排行榜', value: 'ranking' }
+]
+const sortOptions = [
+  { label: '费用', value: 'cost' },
+  { label: '模型名', value: 'name' }
+]
+const simInput = ref(1000)
+const simCacheRead = ref(70_000)
+const simOutput = ref(1000)
 const simCacheCreation = ref(0)
 const expandedUnusedFamilies = ref<Set<string>>(new Set())
+
+function setDisplayMode(value: string): void {
+  if (value === 'family' || value === 'all' || value === 'ranking') displayMode.value = value
+}
+
+function setSortKey(value: string): void {
+  if (value === 'cost' || value === 'name') sortKey.value = value
+}
+
+function toggleSortDirection(): void {
+  sortDirection.value = sortDirection.value === 'desc' ? 'asc' : 'desc'
+}
 
 // 编辑定价弹窗（状态与保存逻辑见 usePricingOverride，模型页原地定价复用同一套）
 const {
@@ -251,7 +357,7 @@ const timeDialogData = computed(() => {
   return undefined
 })
 
-// 模拟 Token 参数（以千为单位，200ms 防抖）
+// 模拟参数保存实际 Token，显示单位由输入组件管理，200ms 防抖。
 const debouncedInput = ref(simInput.value)
 const debouncedCacheRead = ref(simCacheRead.value)
 const debouncedOutput = ref(simOutput.value)
@@ -271,11 +377,24 @@ function scheduleTokenUpdate(): void {
 watch([simInput, simCacheRead, simOutput, simCacheCreation], scheduleTokenUpdate)
 onBeforeUnmount(() => clearTimeout(tokenTimer))
 
+function applyImportedTokens(tokens: TokenDimensions): void {
+  simInput.value = tokens.input
+  simCacheRead.value = tokens.cacheRead
+  simOutput.value = tokens.output
+  simCacheCreation.value = tokens.cacheCreation
+  message.success('已将模型四项 Token 带入定价')
+}
+
+watch(() => pricingStore.pendingTokenImport, () => {
+  const tokens = pricingStore.consumeTokenImport()
+  if (tokens) applyImportedTokens(tokens)
+}, { immediate: true })
+
 const simTokens = computed(() => ({
-  input: debouncedInput.value * 1000,
-  output: debouncedOutput.value * 1000,
-  cacheRead: debouncedCacheRead.value * 1000,
-  cacheCreation: debouncedCacheCreation.value * 1000
+  input: debouncedInput.value,
+  output: debouncedOutput.value,
+  cacheRead: debouncedCacheRead.value,
+  cacheCreation: debouncedCacheCreation.value
 }))
 
 const effectiveFamilies = computed<PricingFamily[]>(() =>
@@ -295,8 +414,19 @@ const familyOptions = computed(() =>
   }))
 )
 
+const activeSortLabel = computed(() => {
+  const label = sortOptions.find(option => option.value === sortKey.value)?.label || '费用'
+  if (sortKey.value === 'name') return `${label} ${sortDirection.value === 'desc' ? 'Z-A' : 'A-Z'}`
+  return `${label} ${sortDirection.value === 'desc' ? '↓' : '↑'}`
+})
+
 function resolveFamilyId(p: PricingData): string {
   return resolveFamilyIdFromRaw(p.family, effectiveFamilies.value)
+}
+
+function getFamilyLabel(p: PricingData): string {
+  const familyId = resolveFamilyId(p)
+  return effectiveFamilies.value.find(f => f.id === familyId)?.label || familyId
 }
 
 function matchesModelFilter(p: PricingData): boolean {
@@ -350,7 +480,16 @@ const allCards = computed<CardEntry[]>(() => {
         computedCost: cost
       }
     })
-    .sort((a, b) => b.computedCost - a.computedCost)
+})
+
+const sortedCards = computed<CardEntry[]>(() => {
+  const cards = [...allCards.value]
+  return cards.sort((a, b) => {
+    const delta = sortKey.value === 'name'
+      ? a.modelId.localeCompare(b.modelId)
+      : a.computedCost - b.computedCost
+    return sortDirection.value === 'desc' ? -delta : delta
+  })
 })
 
 interface FamilyGroup {
@@ -366,7 +505,7 @@ const familyGroups = computed<FamilyGroup[]>(() => {
 
   return familiesToShow
     .map(family => {
-      const cards = allCards.value.filter(c => resolveFamilyId(c) === family.id)
+      const cards = sortedCards.value.filter(c => resolveFamilyId(c) === family.id)
       return {
         family,
         used: cards.filter(c => c.isUsed),
@@ -595,6 +734,106 @@ watch(() => dbStore.hasDatabase, async (val) => {
   margin-bottom: 16px;
 }
 
+.all-models-section {
+  margin-top: 2px;
+}
+
+.pricing-ranking-section {
+  margin-top: 2px;
+}
+
+.pricing-ranking {
+  overflow: hidden;
+  background: var(--bg-card);
+  border-radius: var(--card-radius);
+  box-shadow: var(--shadow-card);
+}
+
+.ranking-header,
+.ranking-row {
+  display: grid;
+  grid-template-columns: 32px minmax(180px, 1.8fr) minmax(100px, 1fr) 110px 48px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  font-size: 11px;
+}
+
+.ranking-header {
+  color: var(--text-muted);
+  font-size: 10px;
+  background: var(--bg-card-alt);
+}
+
+.ranking-row {
+  min-height: 38px;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border-light);
+}
+
+.ranking-index {
+  color: var(--text-muted);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.ranking-model {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+}
+
+.ranking-model strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.ranking-unused {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.ranking-family {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ranking-cost {
+  color: var(--color-cost);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.ranking-edit {
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--color-blue);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.ranking-edit:hover { opacity: 0.7; }
+
+@media (max-width: 620px) {
+  .ranking-header,
+  .ranking-row {
+    grid-template-columns: 28px minmax(130px, 1fr) 86px 42px;
+  }
+
+  .ranking-header span:nth-child(3),
+  .ranking-row .ranking-family {
+    display: none;
+  }
+}
+
 .section-title {
   font-size: 14px;
   font-weight: 600;
@@ -604,6 +843,26 @@ watch(() => dbStore.hasDatabase, async (val) => {
   align-items: center;
   gap: 4px;
 }
+
+.sort-summary {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.sort-direction-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: var(--bg-card);
+  color: var(--color-blue);
+  font-size: 13px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.sort-direction-btn:hover { border-color: var(--color-blue); }
 
 .section-title.collapsible {
   cursor: pointer;

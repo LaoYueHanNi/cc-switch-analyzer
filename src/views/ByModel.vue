@@ -29,6 +29,7 @@
         @compare="onCompare"
         @set-pricing="onSetPricing"
         @pin="onPin"
+        @import-tokens="onImportTokens"
       />
     </div>
 
@@ -59,6 +60,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { NSpin } from 'naive-ui'
 import { useQueryStore } from '@/stores/query'
 import { usePricingStore } from '@/stores/pricing'
@@ -67,11 +69,12 @@ import ModelCompareDialog from '@/components/model/ModelCompareDialog.vue'
 import PricingEditDialog from '@/components/pricing/PricingEditDialog.vue'
 import { usePricingOverride } from '@/composables/usePricingOverride'
 import type { ModelBreakdown } from '@/types/database'
-import type { PricingData, TimePricingRule, CloudPricingTimeRule } from '@/types/pricing'
+import type { PricingData, TimePricingRule, CloudPricingTimeRule, TokenDimensions } from '@/types/pricing'
 import type { CompareBucket } from '@/types/common'
 
 const queryStore = useQueryStore()
 const pricingStore = usePricingStore()
+const router = useRouter()
 const pinnedModel = ref<string | null>(null)
 
 function onPin(modelId: string): void {
@@ -174,6 +177,11 @@ const {
 function onSetPricing(modelId: string): void {
   const card = modelCards.value.find(c => c.modelData.model === modelId)
   openEditDialog(modelId, card?.pricing ?? null)
+}
+
+function onImportTokens(tokens: TokenDimensions): void {
+  pricingStore.requestTokenImport(tokens)
+  router.push({ name: 'pricing' })
 }
 </script>
 

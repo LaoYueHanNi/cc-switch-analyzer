@@ -58,6 +58,20 @@
       :cache-creation-rate="getRateStr('cacheCreationCostPerMillion')"
     />
 
+    <button
+      type="button"
+      class="import-tokens-btn"
+      title="将这张卡片的四项 Token 带入定价页"
+      @click.stop="emit('importTokens', {
+        input: modelData?.inputTokens ?? 0,
+        output: modelData?.outputTokens ?? 0,
+        cacheRead: modelData?.cacheRead ?? 0,
+        cacheCreation: modelData?.cacheCreation ?? 0
+      })"
+    >
+      带入定价
+    </button>
+
     <!-- 计费明细入口 -->
     <div v-if="showBreakdownBtn" class="breakdown-btn" @click.stop="showBreakdownDialog = true">计费明细</div>
     <PricingBreakdownDialog
@@ -77,7 +91,7 @@ import { formatNum, formatRate, formatCost, formatPercent, epochToDateStr } from
 import PricingGrid from '@/components/common/PricingGrid.vue'
 import PricingBreakdownDialog from './PricingBreakdownDialog.vue'
 import type { ModelBreakdown } from '@/types/database'
-import type { PricingData, TimePricingRule, CloudPricingTimeRule } from '@/types/pricing'
+import type { PricingData, TimePricingRule, CloudPricingTimeRule, TokenDimensions } from '@/types/pricing'
 import type { CompareBucket } from '@/types/common'
 
 const props = defineProps<{
@@ -97,6 +111,7 @@ const emit = defineEmits<{
   compare: [modelId: string]
   setPricing: [modelId: string]
   pin: [modelId: string]
+  importTokens: [tokens: TokenDimensions]
 }>()
 
 const modelId = computed(() => props.modelData.model)
@@ -353,4 +368,24 @@ const showBreakdownBtn = computed(() => {
   cursor: pointer;
 }
 .breakdown-btn:hover { opacity: 0.7; }
+
+.import-tokens-btn {
+  margin-top: 6px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--color-blue);
+  font-size: 10px;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--transition-speed), visibility var(--transition-speed);
+}
+.model-card:hover .import-tokens-btn {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+.import-tokens-btn:hover { opacity: 0.7; }
 </style>
