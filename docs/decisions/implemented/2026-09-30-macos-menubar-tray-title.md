@@ -11,9 +11,9 @@ Windows 端已有 TrafficMonitor 插件（本地 HTTP API + C++ DLL）在任务�
 > [!NOTE]
 > 本决策中的「菜单栏 title 文本显示实现」已于 2026-09-30 由 [DR: macOS 菜单栏显示改用原生 NSStatusItem 实现两行小字](2026-09-30-native-nsstatusitem-menubar.md) 部分取代：`TrayIcon::set_title` 纯文本方案升级为原生 `NSStatusItem` 两行小字；本决策关于「原生托盘而非外部宿主插件」「共享查询管道抽取」「按平台各走最优路径」的核心取舍继续有效。
 
-macOS 用应用自身托盘的 `TrayIcon::set_title`（NSStatusItem 原生能力）常驻显示今日数据：`services/menubar.rs` 起一个 `menubar-refresh` 线程，每 30s 调共享查询管道取今日 Token 总量与费用，格式化为紧凑标题（如 `345.60k 12.34¥`，Token 用 k/M 缩写控制在 ~12 字符防菜单栏截断）写入托盘 title；查询失败或无数据源时显示 `—`。设置键 `menubar_display_enabled` 持久化开关（`pricing.db::settings`，同 `tm_service_enabled` 模式），应用启动时恢复；开关命令 `get_menubar_status` / `toggle_menubar_display` 仅在 macOS 生效（非 macOS 返回 `supported: false` 或报错，前端据此隐藏区块）。与"关闭窗口隐藏到托盘"的既有常驻模式配合，托盘图标 + 菜单保持不变，仅追加 title 文本（模板图标 + 系统渲染文本，深浅色自动适配）。
+macOS 用应用自身托盘的 `TrayIcon::set_title`（NSStatusItem 原生能力）常驻显示今日数据：`services/menubar.rs` 起一个 `menubar-refresh` 线程，每 5s 调共享查询管道取今日 Token 总量与费用，格式化为紧凑标题（如 `345.60k 12.34¥`，Token 用 k/M 缩写控制在 ~12 字符防菜单栏截断）写入托盘 title；查询失败或无数据源时显示 `—`。设置键 `menubar_display_enabled` 持久化开关（`pricing.db::settings`，同 `tm_service_enabled` 模式），应用启动时恢复；开关命令 `get_menubar_status` / `toggle_menubar_display` 仅在 macOS 生效（非 macOS 返回 `supported: false` 或报错，前端据此隐藏区块）。与"关闭窗口隐藏到托盘"的既有常驻模式配合，托盘图标 + 菜单保持不变，仅追加 title 文本（模板图标 + 系统渲染文本，深浅色自动适配）。
 
-支撑重构：原 Windows-only `http_server.rs` 内嵌的今日查询管道（`query_today_data`、`TmSourceCache`、`TmTodayData`）抽为全平台共享模块 `services/today_query.rs`，HTTP 服务与菜单栏各自持有独立的 `TodaySourceCache`（长驻 DataSource 缓存，锁不共享、互不阻塞），`TodayData` 增加 `#[serde(skip)] total_cost_value: f64` 供菜单栏自行格式化，HTTP JSON 字段与格式完全不变。
+支撑重构：原 Windows-only `http_server.rs` 内嵌的今日查询管道（`query_today_data`、`TmSourceCache`、`TmTodayData`）抽为全平台共享模块 `services/today_query.rs`，HTTP 服务与菜单栏各自持有独立的 `TodaySourceCache`（长驻 DataSource 缓存，锁不共享、互不阻塞），`TodayData` 增加 `#[serde(skip)] total_cost_value: f64` 供菜单栏自行格式化，原有 HTTP JSON 字段与格式保留，后台采集修复补充 `stale/errors/updatedAt`，见 [Rust 后台采集与状态栏及时更新](2026-10-10-background-local-collection.md)。
 
 ## Alternatives considered
 
@@ -24,5 +24,5 @@ macOS 用应用自身托盘的 `TrayIcon::set_title`（NSStatusItem 原生能力
 
 ## Consequences
 
-- 代价：`http_server.rs` 的查询逻辑搬家（行为不变、纯抽取）；菜单栏数据刷新要求主进程存活（Cmd+Q 后停止，与 HTTP 服务同一约束）；30s 刷新粒度不做推送。
+- 代价：`http_server.rs` 的查询逻辑搬家（行为不变、纯抽取）；菜单栏数据刷新要求主进程存活（Cmd+Q 后停止，与 HTTP 服务同一约束）；5s 刷新粒度不做推送。
 - 换来：macOS 零依赖、零安装门槛的状态栏显示；今日查询管道全平台共享，未来 Linux 等平台可直接复用；设置页两个插件区块按平台（`supported` 字段）各显各的，macOS 不再显示无效的 Windows 下载按钮。

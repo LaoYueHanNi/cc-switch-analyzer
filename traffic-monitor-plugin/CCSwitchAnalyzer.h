@@ -22,6 +22,7 @@ public:
 
 private:
     bool FetchTodayData();
+    bool RequestTodayData();
     bool TryConnect(int port);
     bool AutoDiscoverPort();
     void LoadConfig();
@@ -34,7 +35,9 @@ private:
     int64_t m_total_tokens{};
     std::string m_total_cost_str{};
     bool m_connected{};
-    bool m_discovery_attempted{};
+    bool m_server_reachable{};
+    uint64_t m_next_discovery_ms{};
+    int m_discovery_port{ 19810 };
 
     int m_port{ 19810 };
     std::wstring m_config_dir;

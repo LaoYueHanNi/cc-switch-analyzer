@@ -75,11 +75,12 @@ impl ZCodeDbService {
                         input_tokens, output_tokens, cache_read, cache_creation, latency
                  FROM session_request_logs
                  WHERE source = 'ZCode'
+                   AND created_at >= ?1 AND created_at < ?2
                  ORDER BY created_at",
             )
             .map_err(|e| format!("查询 ZCode 记录失败: {}", e))?;
         let rows = stmt
-            .query_map([], |row| {
+            .query_map(rusqlite::params![params.from_epoch.filter(|v| *v > 0).unwrap_or(i64::MIN), params.to_epoch.filter(|v| *v > 0).unwrap_or(i64::MAX)], |row| {
                 Ok(RawRecord {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),

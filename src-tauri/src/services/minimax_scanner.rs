@@ -210,9 +210,9 @@ pub fn scan_minimax_sqlite_at(
     sqlite_path: &Path,
 ) -> Result<DshScanResult, String> {
     let file_path_str = sqlite_path.to_string_lossy().to_string();
-    let metadata = std::fs::metadata(sqlite_path)
+    let _metadata = std::fs::metadata(sqlite_path)
         .map_err(|e| format!("读取 MiniMax 数据库元数据失败: {}", e))?;
-    let mtime = metadata_modified_nanos(&metadata);
+    let mtime = crate::utils::sqlite_content_stamp(sqlite_path);
     let prev = app_db.get_session_log_sync_state(MINIMAX_SOURCE, &file_path_str);
 
     if let Some((prev_mtime, _)) = prev {
@@ -656,6 +656,8 @@ mod tests {
         )
         .unwrap();
 
+        src.pragma_update(None, "journal_mode", "WAL").unwrap();
+        src.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
         // 首次扫描
         let r1 = scan_minimax_sqlite_at(&app_db, &sqlite_path).unwrap();
         assert_eq!(r1.files_scanned, 1);
@@ -678,7 +680,8 @@ mod tests {
         let r2 = scan_minimax_sqlite_at(&app_db, &sqlite_path).unwrap();
         assert_eq!(r2.imported, 0);
 
-        // 插入第二条记录并触碰 mtime
+        let main_mtime = std::fs::metadata(&sqlite_path).unwrap().modified().unwrap();
+        // 新提交只更新 WAL，主库 mtime 不动
         let data2 = serde_json::json!({
             "thinking_duration_ms": 800,
             "usage": { "input": 30, "output": 40, "request_duration_ms": 2000 },
@@ -693,10 +696,7 @@ mod tests {
         )
         .unwrap();
 
-        // 触碰 mtime 到未来以模拟更新
-        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(120);
-        let f = std::fs::File::open(&sqlite_path).unwrap();
-        let _ = f.set_modified(future);
+        assert_eq!(std::fs::metadata(&sqlite_path).unwrap().modified().unwrap(), main_mtime);
 
         let r3 = scan_minimax_sqlite_at(&app_db, &sqlite_path).unwrap();
         assert_eq!(r3.imported, 1);

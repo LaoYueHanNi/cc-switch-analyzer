@@ -74,3 +74,5 @@ pub mod http_server {
         pub fn port(&self) -> u16 { 0 }
     }
 }
+
+pub mod background_collection;

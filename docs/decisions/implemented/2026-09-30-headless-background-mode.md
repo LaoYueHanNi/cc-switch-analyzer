@@ -11,7 +11,7 @@ Status: implemented
 1. **常驻内存不降**。前端是 Vue 3 + Naive UI + ECharts 5.5，WebView 侧渲染引擎（Windows WebView2 / macOS WKWebView）加上页面 JS 堆与 ECharts canvas 是内存大户，而菜单栏两行小字（见 [DR: macOS 菜单栏显示改用原生 NSStatusItem 实现两行小字](../implemented/2026-09-30-native-nsstatusitem-menubar.md)）与 TrafficMonitor HTTP 服务都是**纯后台能力**——用户关掉窗口后并不需要任何前端渲染，却仍在为一个看不见的界面付出内存。
 2. **「隐藏」不等于「释放」**。用户对「我已经关掉了」的直觉预期是进程不再做无用功；`hide()` 做不到，还让被隐藏的页面继续跑 `setInterval` 自动刷新与实时轮询（`useAutoRefresh.ts` / `useRealtimePolling.ts`），持续 IPC 拉数、持续 `queryPrecompute`。
 
-一个有利前提是：analyzer 的后台能力**天生与 WebView 解耦**——`services/http_server.rs` 是独立 `std::thread` + 同步 TCP，`services/menubar.rs` 是独立 `menubar-refresh` 线程（30s 轮询），二者都持有独立的 `TodaySourceCache`（见 [DR: macOS 菜单栏显示用原生托盘 title 而非外部宿主插件](../implemented/2026-09-30-macos-menubar-tray-title.md)），不经过前端查询管道。前端侧 `components/layout/AppLayout.vue` 的 `onMounted` 已是完整自恢复入口（`loadCcsSessionFilter()` → `autoLoadDatabase()` → `watch(dbStore.hasDatabase)` 立即触发 `queryPrecompute`），`stores/theme.ts` 与 `stores/updater.ts` 走 `localStorage`。**即前端是无状态可重建的**。
+一个有利前提是：analyzer 的后台能力**天生与 WebView 解耦**——`services/http_server.rs` 是独立 `std::thread` + 同步 TCP，`services/menubar.rs` 是独立 `menubar-refresh` 线程（每轮查询后等待 5 秒），二者都持有独立的 `TodaySourceCache`（见 [DR: macOS 菜单栏显示用原生托盘 title 而非外部宿主插件](../implemented/2026-09-30-macos-menubar-tray-title.md)），不经过前端查询管道。前端侧 `components/layout/AppLayout.vue` 的 `onMounted` 已是完整自恢复入口（`loadCcsSessionFilter()` → `autoLoadDatabase()` → `watch(dbStore.hasDatabase)` 立即触发 `queryPrecompute`），`stores/theme.ts` 与 `stores/updater.ts` 走 `localStorage`。**即前端是无状态可重建的**。
 
 ## Decision
 
@@ -19,7 +19,7 @@ Status: implemented
 
 ### 窗口生命周期
 
-`src-tauri/src/services/headless.rs` 以 `AtomicBool` 记录状态并提供四个入口：
+`src-tauri/src/services/headless.rs` 以 `AtomicU8` 记录可见、销毁中、后台、重建中四态，切换在主线程执行，Destroyed 事件确认销毁；快速唤起在确认后重建，并提供四个入口：
 
 - `enter_headless_mode(app)` — 保存窗口几何 → 切平台外观 → `window.destroy()`
 - `exit_headless_mode(app)` — 窗口已存在则 `unminimize/show/set_focus`；否则从 `app.config().app.windows` 找回 `label == "main"` 的配置并 `WebviewWindowBuilder::from_config(app, &cfg)?.build()` 重建，再 `restore_geometry` + 显示
@@ -49,7 +49,7 @@ Status: implemented
 
 ### 两个关键工程约束
 
-1. **窗口几何自存 `settings` 而非 `tauri-plugin-window-state`**：销毁后 `WebviewWindowBuilder` 动态建窗与启动期建窗路径不同，插件的窗口创建 hook 时序不可靠；改为 destroy 前存 `{w,h,x,y,maximized}`、重建后显式应用。附带 `is_position_visible()` 校验——拔掉外接显示器后旧坐标指向不存在的区域，直接套用会把窗口丢到屏外无法拖回，此时退回 `center()`。
+1. **窗口几何自存 `settings` 而非 `tauri-plugin-window-state`**：销毁后 `WebviewWindowBuilder` 动态建窗与启动期建窗路径不同，插件的窗口创建 hook 时序不可靠；改为 destroy 前存内部尺寸与正常态 `{w,h,x,y,maximized,inner_size}`、仅重建后显式应用；已有隐藏窗口直接显示，旧版外部尺寸不用于内部尺寸恢复。附带 `is_position_visible()` 校验——拔掉外接显示器后旧坐标指向不存在的区域，直接套用会把窗口丢到屏外无法拖回，此时退回 `center()`。
 2. **所有 `app.state::<T>()` 一律用 `try_state` 降级**：菜单栏回调跑在主线程，panic 无法 unwind 会直接 `SIGABRT`（开发期实测：`manage` 的是 `HeadlessState`、取的却是 `Mutex<HeadlessState>`，类型不匹配编译期查不出来、运行期整个进程 abort）。这是**编译期不可见、运行期致命**的一类错误，只能靠编码纪律防御。
 
 ### 附带处理
@@ -59,9 +59,9 @@ Status: implemented
 
 ### 数据新鲜度边界（2026-10-10 核对）
 
-后台独立线程负责今日查询与展示，不能据此推断所有来源都持续采集。ZCode、Proma、DSH、MiniMax、Antigravity、Kimi、PI 的扫描仍由前端刷新命令触发，WebView 销毁后没有常驻扫描调度；CCS、OpenCode、AI-Proxy 的只读连接可以继续读取源库新记录。初始化依赖前端、Windows 插件断连恢复、查询错误与窗口尺寸恢复等已知问题见 [轻量模式审计](../../audits/2026-10-10-lightweight-mode.md)。本次补充描述当前实现，相关修复尚未落地。
+Rust 启动阶段恢复数据源与缓存定价，`background_collection.rs` 独立线程扫描已启用的七类本地源，每轮结束后等待 5 秒；前端刷新复用同一采集闸门。CCS、OpenCode、AI-Proxy 的只读连接读取源库新提交。今日查询改为当日专用汇总，Windows HTTP 按请求计算，macOS 每轮查询后等待 5 秒；失败显式标记并重试。实现取舍及回归验证见 [Rust 后台采集与状态栏及时更新](2026-10-10-background-local-collection.md)，修复前证据保留在 [轻量模式审计](../../audits/2026-10-10-lightweight-mode.md)。
 
-Cursor 后台只展示已经下载的 CSV，不自动请求云端。按用户降低请求频率的约束，后续本地后台采集修复也不新增 Cursor API 自动请求，不缩短现有前台 24 小时有效期；用户需要最新用量时手动同步，Cursor 不属于后台实时更新验收范围。
+Cursor 后台只展示已经下载的 CSV，不自动请求云端。按用户降低请求频率的约束，本地后台采集不新增 Cursor API 自动请求，不缩短现有前台 24 小时有效期；用户需要最新用量时手动同步，Cursor 不属于后台实时更新验收范围。
 
 ## Alternatives considered
 

@@ -1,8 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
-use crate::services::today_query::{query_today_data, TodayData, TodaySourceCache};
+use crate::services::today_query::{query_today_data, TodaySourceCache, TodayTimezone};
 use crate::SharedState;
 
 /// TrafficMonitor 插件 HTTP 服务的管理句柄
@@ -10,6 +9,7 @@ pub struct TrafficMonitorServerHandle {
     shutdown: Arc<AtomicBool>,
     port: u16,
     running: AtomicBool,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl TrafficMonitorServerHandle {
@@ -18,6 +18,7 @@ impl TrafficMonitorServerHandle {
             shutdown: Arc::new(AtomicBool::new(false)),
             port: 0,
             running: AtomicBool::new(false),
+            thread: None,
         }
     }
 
@@ -30,21 +31,26 @@ impl TrafficMonitorServerHandle {
         let (port, listener) = bind_port()?;
 
         let shutdown = Arc::new(AtomicBool::new(false));
-        let cache: Arc<Mutex<TmCache>> = Arc::new(Mutex::new(TmCache::default()));
-        let source_cache: Arc<Mutex<TodaySourceCache>> = Arc::new(Mutex::new(TodaySourceCache::default()));
+        let source_cache: Arc<Mutex<TodaySourceCache>> =
+            Arc::new(Mutex::new(TodaySourceCache::default()));
 
         let thread_shutdown = shutdown.clone();
-        let thread_cache = cache.clone();
         let thread_source_cache = source_cache.clone();
         let thread_shared = shared;
 
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("tm-api-server".into())
             .spawn(move || {
-                run_server(listener, thread_cache, thread_source_cache, thread_shutdown, thread_shared);
+                run_server(
+                    listener,
+                    thread_source_cache,
+                    thread_shutdown,
+                    thread_shared,
+                );
             })
             .map_err(|e| format!("启动服务线程失败: {}", e))?;
 
+        self.thread = Some(thread);
         self.shutdown = shutdown;
         self.port = port;
         self.running.store(true, Ordering::SeqCst);
@@ -61,6 +67,9 @@ impl TrafficMonitorServerHandle {
         if self.port > 0 {
             let _ = std::net::TcpStream::connect(format!("127.0.0.1:{}", self.port));
         }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
         self.running.store(false, Ordering::SeqCst);
         log::info!("[TM] TrafficMonitor API 服务已停止");
     }
@@ -74,21 +83,9 @@ impl TrafficMonitorServerHandle {
     }
 }
 
-// ========== 缓存 ==========
-
-struct TmCache {
-    data: Option<TodayData>,
-    tz: Option<i64>,
-    updated_at: Option<Instant>,
-}
-
-impl Default for TmCache {
-    fn default() -> Self {
-        Self {
-            data: None,
-            tz: None,
-            updated_at: None,
-        }
+impl Drop for TrafficMonitorServerHandle {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -96,7 +93,6 @@ impl Default for TmCache {
 
 fn run_server(
     listener: std::net::TcpListener,
-    cache: Arc<Mutex<TmCache>>,
     source_cache: Arc<Mutex<TodaySourceCache>>,
     shutdown: Arc<AtomicBool>,
     shared: Arc<SharedState>,
@@ -115,16 +111,15 @@ fn run_server(
         };
 
         stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
             .ok();
         stream
-            .set_write_timeout(Some(std::time::Duration::from_secs(5)))
+            .set_write_timeout(Some(std::time::Duration::from_secs(1)))
             .ok();
 
-        let cache = cache.clone();
         let source_cache = source_cache.clone();
         let shared = shared.clone();
-        handle_request(stream, cache, source_cache, shared);
+        handle_request(stream, source_cache, shared);
     }
 
     log::info!("[TM] API 服务线程已退出");
@@ -132,7 +127,6 @@ fn run_server(
 
 fn handle_request(
     mut stream: std::net::TcpStream,
-    cache: Arc<Mutex<TmCache>>,
     source_cache: Arc<Mutex<TodaySourceCache>>,
     shared: Arc<SharedState>,
 ) {
@@ -154,14 +148,25 @@ fn handle_request(
     let path_with_query = parts[1];
 
     let (status, body) = if method != "GET" {
-        ("405 Method Not Allowed".to_string(), r#"{"error":"method_not_allowed"}"#.to_string())
+        (
+            "405 Method Not Allowed".to_string(),
+            r#"{"error":"method_not_allowed"}"#.to_string(),
+        )
     } else if path_with_query.starts_with("/api/ping") {
         ("200 OK".to_string(), r#"{"status":"ok"}"#.to_string())
     } else if path_with_query.starts_with("/api/today") {
-        let tz = parse_tz_param(path_with_query);
-        handle_today(cache, source_cache, shared, tz)
+        match parse_tz_param(path_with_query) {
+            Ok(tz) => handle_today(source_cache, shared, tz),
+            Err(e) => (
+                "400 Bad Request".into(),
+                serde_json::json!({"error": e}).to_string(),
+            ),
+        }
     } else {
-        ("404 Not Found".to_string(), r#"{"error":"not_found"}"#.to_string())
+        (
+            "404 Not Found".to_string(),
+            r#"{"error":"not_found"}"#.to_string(),
+        )
     };
 
     // NOTE: `\` 续行符跳过换行及前导空白，缩进不会出现在实际 HTTP 响应中
@@ -182,43 +187,45 @@ fn handle_request(
 }
 
 fn handle_today(
-    cache: Arc<Mutex<TmCache>>,
     source_cache: Arc<Mutex<TodaySourceCache>>,
     shared: Arc<SharedState>,
-    tz: i64,
+    tz: TodayTimezone,
 ) -> (String, String) {
-    {
-        let c = cache.lock().unwrap();
-        if let (Some(data), Some(cached_tz), Some(updated)) = (&c.data, c.tz, c.updated_at) {
-            if cached_tz == tz && updated.elapsed().as_secs() < crate::utils::TM_CACHE_TTL_SECS {
-                return ("200 OK".to_string(), serde_json::to_string(data).unwrap());
-            }
-        }
-    }
-
+    // Minimal aggregation is cheap enough to query on demand. No TTL can cross midnight
+    // or hide source/filter/pricing changes, including external SQLite WAL commits.
     match query_today_data(&shared, tz, &source_cache) {
-        Ok(data) => {
-            let mut c = cache.lock().unwrap();
-            c.data = Some(data.clone());
-            c.tz = Some(tz);
-            c.updated_at = Some(Instant::now());
-            ("200 OK".to_string(), serde_json::to_string(&data).unwrap())
-        }
+        Ok(data) => ("200 OK".into(), serde_json::to_string(&data).unwrap()),
         Err(e) => (
-            "500 Internal Server Error".to_string(),
+            "503 Service Unavailable".into(),
             serde_json::json!({"error": e}).to_string(),
         ),
     }
 }
 
-fn parse_tz_param(path: &str) -> i64 {
-    path.split('?')
-        .nth(1)
-        .unwrap_or("")
-        .split('&')
-        .find(|p| p.starts_with("tz="))
-        .and_then(|p| p[3..].parse().ok())
-        .unwrap_or(8)
+fn parse_tz_param(path: &str) -> Result<TodayTimezone, String> {
+    let params: Vec<_> = path
+        .split_once('?')
+        .map(|(_, q)| q.split('&').collect())
+        .unwrap_or_default();
+    if params.contains(&"tz=local") {
+        return Ok(TodayTimezone::Local);
+    }
+    if let Some(p) = params.iter().find_map(|p| p.strip_prefix("tz_minutes=")) {
+        let minutes: i32 = p.parse().map_err(|_| "invalid_timezone")?;
+        if !(-1439..=1439).contains(&minutes) {
+            return Err("invalid_timezone".into());
+        }
+        return Ok(TodayTimezone::OffsetMinutes(minutes));
+    }
+    // Backward compatibility for existing DLLs: tz remains an integer hour offset.
+    if let Some(p) = params.iter().find_map(|p| p.strip_prefix("tz=")) {
+        let hours: i32 = p.parse().map_err(|_| "invalid_timezone")?;
+        if !(-23..=23).contains(&hours) {
+            return Err("invalid_timezone".into());
+        }
+        return Ok(TodayTimezone::OffsetMinutes(hours * 60));
+    }
+    Ok(TodayTimezone::Local)
 }
 
 // ========== 端口绑定 ==========
@@ -235,4 +242,63 @@ fn bind_port() -> Result<(u16, std::net::TcpListener), String> {
         "无法绑定端口 {}-{}，所有端口均被占用",
         TM_API_PORT, TM_API_PORT_MAX
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::today_query::tests::{fixture, insert};
+
+    #[test]
+    fn response_sees_wal_and_source_toggle_without_ttl() {
+        let (_dir, db, shared, cache) = fixture();
+        let now = crate::utils::now_epoch_seconds();
+        insert(&db, "PI", "first", now, 100);
+        let (_, body) = handle_today(cache.clone(), shared.clone(), TodayTimezone::Local);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()["totalTokens"],
+            160
+        );
+        insert(&db, "PI", "second", now, 600);
+        let (_, body) = handle_today(cache.clone(), shared.clone(), TodayTimezone::Local);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()["totalTokens"],
+            820
+        );
+        shared.data_sources.write().unwrap()[0].enabled = false;
+        assert_eq!(
+            handle_today(cache, shared, TodayTimezone::Local).0,
+            "503 Service Unavailable"
+        );
+    }
+
+    #[test]
+    fn legacy_hours_and_fractional_offsets_are_validated() {
+        assert!(matches!(
+            parse_tz_param("/api/today?tz=8"),
+            Ok(TodayTimezone::OffsetMinutes(480))
+        ));
+        assert!(matches!(
+            parse_tz_param("/api/today?tz_minutes=330"),
+            Ok(TodayTimezone::OffsetMinutes(330))
+        ));
+        assert!(matches!(
+            parse_tz_param("/api/today?tz=local"),
+            Ok(TodayTimezone::Local)
+        ));
+        assert!(parse_tz_param("/api/today?tz_minutes=-2147483648").is_err());
+        assert!(parse_tz_param("/api/today?tz=99999999999999999").is_err());
+    }
+
+    #[test]
+    fn stop_joins_listener_and_allows_immediate_restart_on_same_port() {
+        let (_dir, _db, shared, _cache) = fixture();
+        let mut server = TrafficMonitorServerHandle::new();
+        let port = server.start(shared.clone()).unwrap();
+        server.stop();
+        let probe = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+        drop(probe);
+        assert_eq!(server.start(shared).unwrap(), port);
+        server.stop();
+    }
 }

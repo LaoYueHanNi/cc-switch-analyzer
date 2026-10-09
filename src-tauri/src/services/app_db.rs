@@ -31,6 +31,7 @@ impl AppDbService {
             .map_err(|e| format!("设置 WAL 模式失败: {}", e))?;
         let mut svc = Self { db: conn };
         svc.init_schema()?;
+        svc.db.execute_batch("CREATE INDEX IF NOT EXISTS idx_srl_source_created ON session_request_logs(source, created_at);").map_err(|e| e.to_string())?;
         Ok(svc)
     }
 
@@ -414,6 +415,7 @@ impl AppDbService {
                 latency INTEGER NOT NULL DEFAULT 0,
                 first_token_latency INTEGER NOT NULL DEFAULT 0
             );
+            CREATE INDEX IF NOT EXISTS idx_srl_source_created ON session_request_logs(source, created_at);
             CREATE INDEX IF NOT EXISTS idx_srl_source  ON session_request_logs(source);
             CREATE INDEX IF NOT EXISTS idx_srl_created ON session_request_logs(created_at);
             CREATE INDEX IF NOT EXISTS idx_srl_model   ON session_request_logs(model);
@@ -1826,6 +1828,15 @@ impl AppDbService {
         Ok(svc)
     }
 
+    /// Isolated on-disk fixture, using the test schema and never the user's DB/migrations.
+    pub(crate) fn new_test_file(path: &Path) -> Result<Self, String> {
+        let conn = Connection::open(path).map_err(|e| e.to_string())?;
+        conn.pragma_update(None, "journal_mode", "WAL").map_err(|e| e.to_string())?;
+        let mut svc = Self { db: conn };
+        svc.init_schema_in_memory()?;
+        Ok(svc)
+    }
+
     fn init_schema_in_memory(&mut self) -> Result<(), String> {
         self.db.execute_batch(
             "CREATE TABLE IF NOT EXISTS settings (
@@ -1935,6 +1946,7 @@ impl AppDbService {
                 latency INTEGER NOT NULL DEFAULT 0,
                 first_token_latency INTEGER NOT NULL DEFAULT 0
             );
+            CREATE INDEX IF NOT EXISTS idx_srl_source_created ON session_request_logs(source, created_at);
             CREATE INDEX IF NOT EXISTS idx_srl_source  ON session_request_logs(source);
             CREATE INDEX IF NOT EXISTS idx_srl_created ON session_request_logs(created_at);
             CREATE INDEX IF NOT EXISTS idx_srl_model   ON session_request_logs(model);

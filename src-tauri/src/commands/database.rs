@@ -28,7 +28,10 @@ pub fn get_ccs_auto_discover(state: State<AppState>) -> Result<bool, String> {
 pub fn set_ccs_auto_discover(enabled: bool, state: State<AppState>) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     let value = if enabled { "on" } else { "off" };
-    app_db.set_setting("ccs_auto_discover", value)
+    app_db.set_setting("ccs_auto_discover", value)?;
+    drop(app_db);
+    if enabled { *state.sources_initialized.lock().map_err(|e| e.to_string())? = false; }
+    Ok(())
 }
 
 /// CCS 会话日志同步记录过滤配置（settings 键 ccs_filter_session_enabled /
@@ -78,6 +81,21 @@ pub fn set_ccs_session_filter(
 
 #[tauri::command]
 pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, String> {
+    initialize_sources(&state)
+}
+
+/// Backend startup and IPC share one initialization; rebuilding a WebView only lists sources.
+pub(crate) fn initialize_sources(state: &AppState) -> Result<Vec<SourceInfo>, String> {
+    let mut initialized = state.sources_initialized.lock().map_err(|e| e.to_string())?;
+    if !*initialized {
+        refresh_pricing(state)?;
+        restore_sources(state)?;
+        *initialized = true;
+    }
+    Ok(state.data_sources.read().map_err(|e| e.to_string())?.iter().map(|s| s.to_info()).collect())
+}
+
+fn restore_sources(state: &AppState) -> Result<Vec<SourceInfo>, String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     let paths_json = app_db.get_setting("last_db_paths");
     drop(app_db);
@@ -174,7 +192,7 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
             });
         }
     }
-    // DSH:当前模式数据目录存在(~/.dsh 或插件 token-usage 目录)则注册(读取路径为应用库 pricing.db,扫描在 auto_load_paths 统一执行)
+    // DSH:当前模式数据目录存在(~/.dsh 或插件 token-usage 目录)则注册(读取路径为应用库 pricing.db,采集由 Rust 后台循环执行)
     {
         let dsh_available = state
             .app_db
@@ -190,7 +208,7 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
             }
         }
     }
-    // MiniMax Code v2:数据目录存在(~/.minimax/v2/sessions)则注册(读取路径为应用库 pricing.db,扫描在 auto_load_paths 统一执行)
+    // MiniMax Code v2:数据目录存在(~/.minimax/v2/sessions)则注册(读取路径为应用库 pricing.db,采集由 Rust 后台循环执行)
     if crate::services::minimax_scanner::minimax_source_dir_available() {
         if let Ok(p) = crate::utils::get_app_db_path() {
             defaults.push(PersistedSource {
@@ -217,7 +235,7 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
             }
         }
     }
-    // ZCode:源 sqlite 存在则注册(读取路径为应用库 pricing.db,扫描在 auto_load_paths 统一执行)
+    // ZCode:源 sqlite 存在则注册(读取路径为应用库 pricing.db,采集由 Rust 后台循环执行)
     if crate::services::zcode_scanner::zcode_sqlite_available() {
         if let Ok(p) = crate::utils::get_app_db_path() {
             defaults.push(PersistedSource {
@@ -226,7 +244,7 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
             });
         }
     }
-    // Kimi (Kimi CLI / Kimi Code / Kimi Work): 数据目录存在则注册(读取路径为应用库 pricing.db,扫描在 auto_load_paths 统一执行)
+    // Kimi (Kimi CLI / Kimi Code / Kimi Work): 数据目录存在则注册(读取路径为应用库 pricing.db,采集由 Rust 后台循环执行)
     if crate::services::kimi_scanner::kimi_source_available() {
         if let Ok(p) = crate::utils::get_app_db_path() {
             defaults.push(PersistedSource {
@@ -235,7 +253,7 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
             });
         }
     }
-    // PI (pi / oh-my-pi): 任一会话目录存在则注册(读取路径为应用库 pricing.db,扫描在 auto_load_paths 统一执行)
+    // PI (pi / oh-my-pi): 任一会话目录存在则注册(读取路径为应用库 pricing.db,采集由 Rust 后台循环执行)
     if crate::services::pi_scanner::pi_source_available() {
         if let Ok(p) = crate::utils::get_app_db_path() {
             defaults.push(PersistedSource {
@@ -251,32 +269,16 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
     return Ok(Vec::new());
 }
 
-fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Result<Vec<SourceInfo>, String> {
-    // 先扫描 DSH(若当前模式数据目录存在),保证 DshDbService 打开时已有数据
-    if let Ok(app_db) = state.app_db.lock() {
-        let _ = crate::services::dsh_scanner::scan_dsh_by_mode(&app_db);
+fn auto_load_paths(state: &AppState, mut entries: Vec<PersistedSource>) -> Result<Vec<SourceInfo>, String> {
+    let ccs_discover = state.app_db.lock().map_err(|e| e.to_string()).map(|db| ccs_auto_discover_enabled(&db))?;
+    if ccs_discover && !entries.iter().any(|e| e.db_type == "CCS") {
+        if let Ok(path) = crate::utils::get_default_db_path() {
+            // Legacy path-only entries may already name the default CCS DB.
+            let canonical = std::fs::canonicalize(&path).ok();
+            let already = canonical.as_ref().is_some_and(|target| entries.iter().any(|e| std::fs::canonicalize(&e.path).ok().as_ref() == Some(target)));
+            if path.is_file() && !already { entries.push(PersistedSource { path: path.to_string_lossy().into_owned(), db_type: "CCS".into() }); }
+        }
     }
-    // 再扫描 MiniMax(若数据目录存在),保证 MinimaxDbService 打开时已有数据
-    if let Ok(app_db) = state.app_db.lock() {
-        let _ = crate::services::minimax_scanner::scan_minimax(&app_db);
-    }
-    // 再扫描 Kimi(若数据目录存在),保证 KimiDbService 打开时已有数据
-    if let Ok(app_db) = state.app_db.lock() {
-        let _ = crate::services::kimi_scanner::scan_kimi(&app_db);
-    }
-    // 再扫描 PI(pi / oh-my-pi,若数据目录存在),保证 PiDbService 打开时已有数据
-    if let Ok(app_db) = state.app_db.lock() {
-        let _ = crate::services::pi_scanner::scan_pi(&app_db);
-    }
-    // 再扫描 Proma(若数据目录存在),保证 PromaDbService 打开时已有数据
-    if let Ok(app_db) = state.app_db.lock() {
-        let _ = crate::services::proma_scanner::scan_proma(&app_db);
-    }
-    // 再扫描 ZCode(若源 sqlite 存在),保证 ZCodeDbService 打开时已有数据
-    if let Ok(app_db) = state.app_db.lock() {
-        let _ = crate::services::zcode_scanner::scan_zcode(&app_db);
-    }
-
     let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
     sources.clear();
 
@@ -345,7 +347,7 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
         }
     }
 
-    // DSH:若当前模式数据目录存在,补注册数据源(读取路径为应用库 pricing.db;数据已由开头 scan_dsh_by_mode 入库)
+    // DSH:若当前模式数据目录存在,补注册数据源(读取路径为应用库 pricing.db;数据由后台采集入库)
     // 持久化的 last_db_paths 不含 DSH,需在此补注册,否则启动时 DSH 源不会加载
     {
         let dsh_available = state
@@ -375,7 +377,7 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
         }
     }
 
-    // MiniMax:若数据目录存在,补注册数据源(读取路径为应用库 pricing.db;数据已由开头 scan_minimax 入库)
+    // MiniMax:若数据目录存在,补注册数据源(读取路径为应用库 pricing.db;数据由后台采集入库)
     if crate::services::minimax_scanner::minimax_source_dir_available() {
         let already = sources
             .iter()
@@ -424,7 +426,7 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
         }
     }
 
-    // Proma:若数据目录存在,补注册数据源(读取路径为应用库 pricing.db;数据已由开头 scan_proma 入库)
+    // Proma:若数据目录存在,补注册数据源(读取路径为应用库 pricing.db;数据由后台采集入库)
     if crate::services::proma_scanner::proma_source_dir_available() {
         let already = sources
             .iter()
@@ -446,7 +448,7 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
         }
     }
 
-    // ZCode:若源 sqlite 存在,补注册数据源(读取路径为应用库 pricing.db;数据已由开头 scan_zcode 入库)
+    // ZCode:若源 sqlite 存在,补注册数据源(读取路径为应用库 pricing.db;数据由后台采集入库)
     if crate::services::zcode_scanner::zcode_sqlite_available() {
         let already = sources
             .iter()
@@ -468,7 +470,7 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
         }
     }
 
-    // Kimi:若数据目录存在,补注册数据源(读取路径为应用库 pricing.db;数据已由开头 scan_kimi 入库)
+    // Kimi:若数据目录存在,补注册数据源(读取路径为应用库 pricing.db;数据由后台采集入库)
     if crate::services::kimi_scanner::kimi_source_available() {
         let already = sources
             .iter()
@@ -490,7 +492,7 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
         }
     }
 
-    // PI:若数据目录存在,补注册数据源(读取路径为应用库 pricing.db;数据已由开头 scan_pi 入库)
+    // PI:若数据目录存在,补注册数据源(读取路径为应用库 pricing.db;数据由后台采集入库)
     if crate::services::pi_scanner::pi_source_available() {
         let already = sources
             .iter()
@@ -517,9 +519,9 @@ fn auto_load_paths(state: &State<AppState>, entries: Vec<PersistedSource>) -> Re
     }
 
     // 恢复 disabled 状态
-    let disabled = load_disabled_paths(&state);
+    let disabled = load_disabled_sources(state);
     for entry in sources.iter_mut() {
-        if disabled.contains(&entry.path) {
+        if source_is_disabled(entry, &disabled) {
             entry.enabled = false;
         }
     }
@@ -651,128 +653,11 @@ pub fn list_databases(state: State<AppState>) -> Result<Vec<SourceInfo>, String>
 pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String> {
     let _ = crate::commands::cursor::sync_and_reload_if_needed(&state);
 
-    // MiniMax:增量扫描(若存在 MiniMax 源)。scanner 内部按 mtime 跳过未变文件,开销可接受
-    {
-        let has_minimax = {
-            let sources = state.data_sources.read().map_err(|e| e.to_string())?;
-            sources
-                .iter()
-                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Minimax))
-        };
-        if has_minimax {
-            if let Ok(app_db) = state.app_db.lock() {
-                let _ = crate::services::minimax_scanner::scan_minimax(&app_db);
-            }
-        }
-    }
-
-    // Antigravity:增量扫描(若存在 Antigravity 源)。scanner 先按会话 mtime 判断,
-    // 全无变化时不会去枚举进程,此处开销仅一次目录遍历。IDE 未运行时静默失败——
-    // 刷新是高频操作,不该因为 IDE 没开就报错。
-    //
-    // 记下导入条数供 Phase 1 使用:其他源"文件即数据",mtime 变了才有新数据;
-    // Antigravity 是"文件只是信号、用量在 RPC 里",两者可能不同步(上一轮响应还在
-    // 生成、这一轮才取到用量,而转录文件 mtime 未再变),此时不能被 mtime 判据挡掉。
-    let antigravity_imported = {
-        let has_antigravity = {
-            let sources = state.data_sources.read().map_err(|e| e.to_string())?;
-            sources
-                .iter()
-                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Antigravity))
-        };
-        let mut imported = 0u32;
-        if has_antigravity {
-            if let Ok(app_db) = state.app_db.lock() {
-                match crate::services::antigravity_scanner::scan_antigravity(&app_db) {
-                    Ok(result) => imported = result.imported,
-                    Err(e) => log::debug!("[ANTIGRAVITY] 刷新时扫描跳过: {}", e),
-                }
-            }
-        }
-        imported
-    };
-
-    // Proma:增量扫描(若存在 Proma 源)。scanner 内部按 mtime 跳过未变文件,开销可接受
-    {
-        let has_proma = {
-            let sources = state.data_sources.read().map_err(|e| e.to_string())?;
-            sources
-                .iter()
-                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Proma))
-        };
-        if has_proma {
-            if let Ok(app_db) = state.app_db.lock() {
-                let _ = crate::services::proma_scanner::scan_proma(&app_db);
-            }
-        }
-    }
-
-    // ZCode:增量扫描(若存在 ZCode 源)。scanner 内部按源 sqlite mtime 跳过,开销可接受
-    {
-        let has_zcode = {
-            let sources = state.data_sources.read().map_err(|e| e.to_string())?;
-            sources
-                .iter()
-                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::ZCode))
-        };
-        if has_zcode {
-            if let Ok(app_db) = state.app_db.lock() {
-                let _ = crate::services::zcode_scanner::scan_zcode(&app_db);
-            }
-        }
-    }
-
-    // Kimi:增量扫描(若存在 Kimi 源)。scanner 内部按 mtime 跳过未变文件,开销可接受
-    {
-        let has_kimi = {
-            let sources = state.data_sources.read().map_err(|e| e.to_string())?;
-            sources
-                .iter()
-                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Kimi))
-        };
-        if has_kimi {
-            if let Ok(app_db) = state.app_db.lock() {
-                let _ = crate::services::kimi_scanner::scan_kimi(&app_db);
-            }
-        }
-    }
-
-    // PI:增量扫描(若存在 PI 源)。scanner 内部按 mtime 跳过未变文件,开销可接受
-    {
-        let has_pi = {
-            let sources = state.data_sources.read().map_err(|e| e.to_string())?;
-            sources
-                .iter()
-                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Pi))
-        };
-        if has_pi {
-            if let Ok(app_db) = state.app_db.lock() {
-                let _ = crate::services::pi_scanner::scan_pi(&app_db);
-            }
-        }
-    }
-
-    // DSH:增量扫描(若存在 DSH 源,按当前模式扫插件数据或会话日志)。
-    // scanner 内部按 mtime 跳过未变文件,开销可接受
+    crate::services::background_collection::collect_local_sources(&state)?;
     let (dsh_plugin_mode, dsh_plugin_dir) = {
-        let has_dsh = {
-            let sources = state.data_sources.read().map_err(|e| e.to_string())?;
-            sources
-                .iter()
-                .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Dsh))
-        };
-        if has_dsh {
-            if let Ok(app_db) = state.app_db.lock() {
-                let use_plugin = crate::services::dsh_scanner::dsh_use_plugin(&app_db);
-                let _ = crate::services::dsh_scanner::scan_dsh_by_mode(&app_db);
-                let plugin_dir = crate::services::dsh_scanner::resolve_dsh_plugin_dir(&app_db).ok();
-                (use_plugin, plugin_dir)
-            } else {
-                (false, None)
-            }
-        } else {
-            (false, None)
-        }
+        let db = state.app_db.lock().map_err(|e| e.to_string())?;
+        (crate::services::dsh_scanner::dsh_use_plugin(&db),
+         crate::services::dsh_scanner::resolve_dsh_plugin_dir(&db).ok())
     };
 
     // Phase 1: 快速检查文件 mtime，无变化则直接返回
@@ -783,9 +668,9 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
         }
 
         let mut mtimes = state.db_file_mtimes.lock().map_err(|e| e.to_string())?;
-        let mut any_changed = antigravity_imported > 0;
+        let mut any_changed = false;
         for entry in sources.iter() {
-            let mtime = source_mtime(&entry.path, &entry.db_type, dsh_plugin_mode, dsh_plugin_dir.as_deref())
+            let mtime = if matches!(entry.db_type, crate::services::data_source::DbType::Cursor) { source_mtime(&entry.path, &entry.db_type, dsh_plugin_mode, dsh_plugin_dir.as_deref()) } else { crate::utils::sqlite_latest_metadata(std::path::Path::new(&entry.path)) }
                 .and_then(|m| m.modified().ok());
             if track_source_mtime(&mut mtimes, &entry.db_type, &entry.path, mtime) {
                 any_changed = true;
@@ -804,11 +689,6 @@ pub fn refresh_database(state: State<AppState>) -> Result<RefreshResult, String>
     let current_max = sources.iter()
         .filter_map(|s| s.source.get_latest_timestamp())
         .max();
-    let prev_max = *state.db_latest_timestamp.lock().map_err(|e| e.to_string())?;
-
-    if current_max == prev_max {
-        return Ok(RefreshResult { has_new: false, record_count: None });
-    }
 
     // Phase 3: 增量流式更新请求缓存
     {
@@ -1231,11 +1111,11 @@ fn refresh_pricing(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
-fn save_paths(state: &State<AppState>, info: &[SourceInfo]) {
+fn save_paths(state: &AppState, info: &[SourceInfo]) {
     save_paths_public(state, info);
 }
 
-pub fn save_paths_public(state: &State<AppState>, info: &[SourceInfo]) {
+pub fn save_paths_public(state: &AppState, info: &[SourceInfo]) {
     let entries: Vec<PersistedSource> = info.iter().map(|s| PersistedSource {
         path: s.path.clone(),
         db_type: s.db_type.clone(),
@@ -1249,23 +1129,29 @@ pub fn save_paths_public(state: &State<AppState>, info: &[SourceInfo]) {
     }
 }
 
-fn save_disabled_paths(state: &State<AppState>, sources: &[SourceEntry]) {
-    let disabled: Vec<&str> = sources.iter()
-        .filter(|s| !s.enabled)
-        .map(|s| s.path.as_str())
-        .collect();
+fn source_is_disabled(source: &SourceEntry, disabled: &[PersistedSource]) -> bool {
+    disabled.iter().any(|d| d.path == source.path && (d.db_type.is_empty() || d.db_type == source.db_type.label()))
+}
+
+fn save_disabled_paths(state: &AppState, sources: &[SourceEntry]) {
+    let disabled: Vec<PersistedSource> = sources.iter().filter(|s| !s.enabled)
+        .map(|s| PersistedSource { path: s.path.clone(), db_type: s.db_type.label().to_string() }).collect();
     if let Ok(app_db) = state.app_db.lock() {
         if let Ok(json) = serde_json::to_string(&disabled) {
-            let _ = app_db.set_setting("disabled_source_paths", &json);
+            let _ = app_db.set_setting("disabled_sources", &json);
         }
     }
 }
 
-fn load_disabled_paths(state: &State<AppState>) -> Vec<String> {
-    state.app_db.lock().ok()
-        .and_then(|db| db.get_setting("disabled_source_paths"))
-        .and_then(|json| serde_json::from_str(&json).ok())
-        .unwrap_or_default()
+fn load_disabled_sources(state: &AppState) -> Vec<PersistedSource> {
+    let Ok(db) = state.app_db.lock() else { return Vec::new() };
+    if let Some(json) = db.get_setting("disabled_sources") {
+        return serde_json::from_str(&json).unwrap_or_default();
+    }
+    // Legacy path-only setting retains its previous effect until the next toggle.
+    db.get_setting("disabled_source_paths")
+        .and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok()).unwrap_or_default()
+        .into_iter().map(|path| PersistedSource { path, db_type: String::new() }).collect()
 }
 
 #[tauri::command]
@@ -1574,6 +1460,21 @@ pub fn open_plugin_repo() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_sources_keep_types_separate_on_shared_pricing_path() {
+        let (_dir, _db, shared, _cache) = crate::services::today_query::tests::fixture();
+        let sources = shared.data_sources.read().unwrap();
+        let pi = &sources[0];
+        let dsh = create_source_entry_with_type(&pi.path, Some(&DbType::Dsh)).unwrap();
+        let typed = vec![PersistedSource { path: pi.path.clone(), db_type: "PI".into() }];
+        assert!(source_is_disabled(pi, &typed));
+        assert!(!source_is_disabled(&dsh, &typed));
+        let legacy = vec![PersistedSource { path: pi.path.clone(), db_type: String::new() }];
+        assert!(source_is_disabled(pi, &legacy));
+        assert!(source_is_disabled(&dsh, &legacy));
+    }
+
     use std::collections::HashMap;
     use std::time::{Duration, SystemTime};
 

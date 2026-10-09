@@ -106,41 +106,38 @@ pub fn fetch_deduped_records(
     sources: &[SourceEntry],
     params: &FilterParams,
 ) -> Result<Vec<RawRecord>, String> {
-    // 数据源级过滤：provider_id 命中数据源 canonical 名时，只查询该源并剥离内部 provider 过滤
+    let (records, errors) = fetch_deduped_records_report(sources, params)?;
+    for e in errors { log::warn!("[PIPELINE] {e}"); }
+    Ok(records)
+}
+
+/// Preserve partial failures for consumers; never report a failed total as zero usage.
+pub fn fetch_deduped_records_report(
+    sources: &[SourceEntry], params: &FilterParams,
+) -> Result<(Vec<RawRecord>, Vec<String>), String> {
     let (scoped, scoped_params) = scope_to_provider_source(sources, params);
-    let active: Vec<&SourceEntry> = scoped.into_iter().filter(|s| s.enabled).collect();
-    if active.is_empty() {
-        return Ok(Vec::new());
-    }
-    let all_records: Vec<Vec<RawRecord>> = std::thread::scope(|s| {
+    let active: Vec<_> = scoped.into_iter().filter(|s| s.enabled).collect();
+    if active.is_empty() { return Ok((Vec::new(), Vec::new())); }
+    let results = std::thread::scope(|s| {
         let handles: Vec<_> = active.into_iter().map(|entry| {
             let p = scoped_params.clone();
             let label = entry.db_type.label().to_string();
-            s.spawn(move || {
-                entry.source.get_filtered_records(&p).map_err(|e| {
-                    log::warn!("[PIPELINE] 数据源({}) get_filtered_records 失败: {}", label, e);
-                    e
-                }).ok()
-            })
+            s.spawn(move || entry.source.get_filtered_records(&p).map_err(|e| format!("{label}: {e}")))
         }).collect();
-        handles.into_iter().filter_map(|h| match h.join() {
-            Ok(v) => v,
-            Err(_) => {
-                log::error!("[PIPELINE] 并行查询线程 panic");
-                None
-            }
-        }).collect()
+        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("查询线程 panic".into()))).collect::<Vec<_>>()
     });
-
-    let mut flat: Vec<RawRecord> = all_records.into_iter().flatten().collect();
-
-    // AIProxy 优先：去重先到先保留，AIProxy 有原始 target_model 和准确 input
-    flat.sort_by(|a, b| {
-        let a_priority = a.provider_id == "AIProxy";
-        let b_priority = b.provider_id == "AIProxy";
-        b_priority.cmp(&a_priority)
-    });
-    Ok(super::dedup::dedup_records(flat))
+    let mut flat = Vec::new();
+    let mut errors = Vec::new();
+    let mut succeeded = 0;
+    for result in results {
+        match result {
+            Ok(records) => { succeeded += 1; flat.extend(records); },
+            Err(e) => errors.push(e),
+        }
+    }
+    if succeeded == 0 { return Err(errors.join("; ")); }
+    flat.sort_by(|a, b| (b.provider_id == "AIProxy").cmp(&(a.provider_id == "AIProxy")));
+    Ok((super::dedup::dedup_records(flat), errors))
 }
 
 // ========== 时间辅助函数 ==========

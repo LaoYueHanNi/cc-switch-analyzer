@@ -17,7 +17,7 @@ macOS 端不再创建 Tauri 托盘，改用 `objc2`/`objc2-app-kit` 直接构建
 - **段落取左对齐而非居中**：两行数字位数可能不同（`345.60k` vs `33.98¥`），靠给短行数值前补空格实现数字右对齐与单位同列；居中会吞掉行首空格导致失效
 - 交互：左键唤起主窗口，右键弹出原生 `NSMenu`（显示窗口 / 启用菜单栏显示（勾选态）/ 检查更新 / 退出）；`sendActionOn(LeftMouseUp|RightMouseUp)` 把两种按键都引入统一 action，按 `currentEvent.type` 分流
 - 自定义 ObjC 类 `MenuTarget`（`define_class!`）作为 action target，经静态 `MenuCallbacks` 闭包回调 Rust 逻辑
-- `menubar.rs` 刷新线程不变（30s 轮询共享查询管道），更新文字经 `AppHandle::run_on_main_thread` 进入主线程（AppKit 状态项要求），公开函数以 `MainThreadMarker` 参数为证
+- `menubar.rs` 刷新线程不变（5s 轮询共享查询管道），更新文字经 `AppHandle::run_on_main_thread` 进入主线程（AppKit 状态项要求），公开函数以 `MainThreadMarker` 参数为证
 - Tauri 托盘保留给 Windows/Linux（`#[cfg(not(target_os = "macos"))]`）；`capabilities` 托盘权限与前端适配层不变
 
 objc2 系依赖（objc2 0.6 / objc2-app-kit 0.3.2 / objc2-foundation 0.3 / objc2-core-text 0.3 / objc2-core-graphics 0.3 / objc2-core-foundation 0.3）为 macOS target 专属直接依赖，版本锁定与 Tauri 依赖树内一致，不引入重复编译。

@@ -13,9 +13,9 @@
 //! 参考实现：cc-switch `src-tauri/src/lightweight.rs`（同为 Tauri v2，思路一致，
 //! 但托盘结构不同——它用 Tauri tray 刷新菜单，本项目 macOS 走原生 NSStatusItem）。
 //!
-//! 决策记录：`docs/decisions/proposed/2026-09-30-headless-background-mode.md`
+//! 决策记录：`docs/decisions/implemented/2026-09-30-headless-background-mode.md`
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewWindowBuilder};
@@ -34,7 +34,12 @@ const SETTING_DESTROY_ON_CLOSE: &str = "close_destroys_window";
 const SETTING_GEOMETRY: &str = "window_geometry";
 
 /// 是否处于后台模式（窗口已销毁，主进程存活）
-static HEADLESS_MODE: AtomicBool = AtomicBool::new(false);
+const VISIBLE: u8 = 0;
+const ENTERING: u8 = 1;
+const BACKGROUND: u8 = 2;
+const EXITING: u8 = 3;
+static PHASE: AtomicU8 = AtomicU8::new(VISIBLE);
+static REOPEN_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// 后台期间触发的「检查更新」待处理标志：webview 不存在时 `emit` 无人接收，
 /// 置位后由 [`show_or_rebuild_window`] 在唤起时补发。
@@ -51,6 +56,8 @@ struct WindowGeometry {
     y: i32,
     #[serde(default)]
     maximized: bool,
+    #[serde(default)]
+    inner_size: bool,
 }
 
 impl WindowGeometry {
@@ -120,6 +127,7 @@ pub struct HeadlessStatus {
 /// 关闭事件），走内存而非每次查 SQLite。
 pub struct HeadlessState {
     destroy_on_close: AtomicBool,
+    normal_geometry: std::sync::Mutex<Option<WindowGeometry>>,
 }
 
 impl HeadlessState {
@@ -134,6 +142,7 @@ impl HeadlessState {
         );
         Self {
             destroy_on_close: AtomicBool::new(destroy_on_close),
+            normal_geometry: std::sync::Mutex::new(None),
         }
     }
 
@@ -154,7 +163,7 @@ impl HeadlessState {
 }
 
 pub fn is_headless_mode() -> bool {
-    HEADLESS_MODE.load(Ordering::Acquire)
+    PHASE.load(Ordering::Acquire) != VISIBLE
 }
 
 /// 后台模式下触发的更新检查请求，供窗口唤起时补发
@@ -203,26 +212,29 @@ fn apply_appearance(app: &AppHandle, background: bool) {
     }
 }
 
+/// Resize/move events retain normal geometry so maximized windows restore correctly.
+pub fn track_normal_geometry(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(MAIN_LABEL) else { return };
+    if window.is_maximized().unwrap_or(true) || window.is_minimized().unwrap_or(true) || window.is_fullscreen().unwrap_or(true) { return; }
+    let (Ok(size), Ok(pos)) = (window.inner_size(), window.outer_position()) else { return };
+    if size.width == 0 || size.height == 0 { return; }
+    if let Some(state) = app.try_state::<HeadlessState>() {
+        if let Ok(mut normal) = state.normal_geometry.lock() {
+            *normal = Some(WindowGeometry { w: size.width, h: size.height, x: pos.x, y: pos.y, maximized: false, inner_size: true });
+        }
+    }
+}
+
 fn save_geometry(app: &AppHandle) {
-    let Some(window) = app.get_webview_window(MAIN_LABEL) else {
-        return;
-    };
-    let Ok(size) = window.outer_size() else { return };
-    let Ok(pos) = window.outer_position() else { return };
+    let Some(window) = app.get_webview_window(MAIN_LABEL) else { return };
     let maximized = window.is_maximized().unwrap_or(false);
-    let geometry = WindowGeometry {
-        w: size.width,
-        h: size.height,
-        x: pos.x,
-        y: pos.y,
-        maximized,
-    };
-    let Ok(encoded) = serde_json::to_string(&geometry) else {
-        log::warn!("[Headless] 序列化窗口几何失败");
-        return;
-    };
-    if let Err(e) = write_setting(app, SETTING_GEOMETRY, &encoded) {
-        log::warn!("[Headless] 保存窗口几何失败: {e}");
+    if !maximized { track_normal_geometry(app); }
+    let normal = app.try_state::<HeadlessState>().and_then(|s| s.normal_geometry.lock().ok().and_then(|g| *g));
+    let previous = read_setting(app, SETTING_GEOMETRY).and_then(|v| serde_json::from_str::<WindowGeometry>(&v).ok()).filter(|g| g.inner_size);
+    let Some(mut geometry) = normal.or(previous) else { return };
+    geometry.maximized = maximized;
+    if let Ok(encoded) = serde_json::to_string(&geometry) {
+        if let Err(e) = write_setting(app, SETTING_GEOMETRY, &encoded) { log::warn!("[Headless] 保存几何失败: {e}"); }
     }
 }
 
@@ -236,7 +248,8 @@ fn restore_geometry(app: &AppHandle) {
     let Some(window) = app.get_webview_window(MAIN_LABEL) else {
         return;
     };
-    if geometry.w == 0 || geometry.h == 0 {
+    // Old versions stored outer dimensions; never feed them into set_size (inner size).
+    if !geometry.inner_size || geometry.w == 0 || geometry.h == 0 {
         return;
     }
 
@@ -255,53 +268,83 @@ fn restore_geometry(app: &AppHandle) {
 /// 进入后台模式：保存窗口几何 → 调整平台外观 → 销毁窗口。
 ///
 /// 窗口本来就不存在时只置标志位（幂等）。
-pub fn enter_headless_mode(app: &AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window(MAIN_LABEL) {
-        save_geometry(app);
-        apply_appearance(app, true);
-        window
-            .destroy()
-            .map_err(|e| format!("销毁主窗口失败: {e}"))?;
-    } else {
-        // 已在后台模式：窗口早已销毁，仅确保平台外观正确
-        apply_appearance(app, true);
-    }
+/// Execute each transition on the event loop, including IPC and native callbacks.
+fn on_main<T: Send + 'static>(app: &AppHandle, f: impl FnOnce(&AppHandle) -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = app.clone();
+    app.run_on_main_thread(move || { let _ = tx.send(f(&handle)); }).map_err(|e| e.to_string())?;
+    rx.recv().map_err(|e| e.to_string())?
+}
 
-    HEADLESS_MODE.store(true, Ordering::Release);
+pub fn enter_headless_mode(app: &AppHandle) -> Result<(), String> {
+    on_main(app, enter_on_main)
+}
+
+fn enter_on_main(app: &AppHandle) -> Result<(), String> {
+    if PHASE.load(Ordering::Acquire) == ENTERING { REOPEN_PENDING.store(false, Ordering::Release); return Ok(()); }
+    if PHASE.load(Ordering::Acquire) != VISIBLE { return Ok(()); }
+    REOPEN_PENDING.store(false, Ordering::Release);
+    save_geometry(app);
+    // Set before asynchronous destroy, so the last-window exit request is prevented.
+    PHASE.store(ENTERING, Ordering::Release);
+    apply_appearance(app, true);
+    if let Some(window) = app.get_webview_window(MAIN_LABEL) {
+        if let Err(e) = window.destroy() {
+            PHASE.store(VISIBLE, Ordering::Release);
+            apply_appearance(app, false);
+            sync_tray_label(app);
+            return Err(format!("销毁主窗口失败: {e}"));
+        }
+    } else {
+        PHASE.store(BACKGROUND, Ordering::Release);
+    }
     sync_tray_label(app);
-    log::info!("[Headless] 已进入后台模式，仅保留后台进程");
     Ok(())
 }
 
-/// 退出后台模式：重建窗口（若已被销毁）并显示。
-pub fn exit_headless_mode(app: &AppHandle) -> Result<(), String> {
-    if app.get_webview_window(MAIN_LABEL).is_none() {
-        let config = app
-            .config()
-            .app
-            .windows
-            .iter()
-            .find(|w| w.label == MAIN_LABEL)
-            .ok_or("主窗口配置未找到")?
-            .clone();
-
-        WebviewWindowBuilder::from_config(app, &config)
-            .map_err(|e| format!("加载主窗口配置失败: {e}"))?
-            .build()
-            .map_err(|e| format!("创建主窗口失败: {e}"))?;
-    }
-
-    if let Some(window) = app.get_webview_window(MAIN_LABEL) {
-        restore_geometry(app);
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
-    apply_appearance(app, false);
-    HEADLESS_MODE.store(false, Ordering::Release);
+/// Called from RunEvent after Tauri removes the old window from its manager.
+pub fn window_destroyed(app: &AppHandle) {
+    if PHASE.compare_exchange(ENTERING, BACKGROUND, Ordering::AcqRel, Ordering::Acquire).is_err() { return; }
+    log::info!("[Headless] 主窗口销毁已确认，后台服务继续运行");
     sync_tray_label(app);
-    log::info!("[Headless] 已退出后台模式");
-    Ok(())
+    if REOPEN_PENDING.swap(false, Ordering::AcqRel) {
+        // Enqueue from another thread, after the current native Destroyed event completes.
+        let app = app.clone();
+        std::thread::spawn(move || show_or_rebuild_window(&app));
+    }
+}
+
+pub fn exit_headless_mode(app: &AppHandle) -> Result<(), String> {
+    on_main(app, exit_on_main)
+}
+
+fn exit_on_main(app: &AppHandle) -> Result<(), String> {
+    if PHASE.load(Ordering::Acquire) == ENTERING {
+        REOPEN_PENDING.store(true, Ordering::Release);
+        return Ok(());
+    }
+    let rebuilding = app.get_webview_window(MAIN_LABEL).is_none();
+    PHASE.store(EXITING, Ordering::Release);
+    let result = (|| {
+        if rebuilding {
+            let config = app.config().app.windows.iter().find(|w| w.label == MAIN_LABEL).ok_or("主窗口配置未找到")?.clone();
+            WebviewWindowBuilder::from_config(app, &config).map_err(|e| e.to_string())?
+                .visible(false).build().map_err(|e| format!("创建主窗口失败: {e}"))?;
+            restore_geometry(app);
+        }
+        if let Some(window) = app.get_webview_window(MAIN_LABEL) {
+            window.unminimize().map_err(|e| e.to_string())?;
+            window.show().map_err(|e| e.to_string())?;
+            apply_appearance(app, false);
+            window.set_focus().map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    })();
+    let exists = app.get_webview_window(MAIN_LABEL).is_some();
+    PHASE.store(if exists { VISIBLE } else { BACKGROUND }, Ordering::Release);
+    apply_appearance(app, !exists);
+    sync_tray_label(app);
+    result
 }
 
 /// 同步托盘/菜单栏「后台模式」项的标题与勾选态。
@@ -318,9 +361,14 @@ fn sync_tray_label(app: &AppHandle) {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = app;
+        if let Some(item) = app.try_state::<BackgroundMenuItem>() {
+            let _ = item.0.set_text(if is_headless_mode() { "返回界面" } else { "进入后台模式" });
+        }
     }
 }
+
+#[cfg(not(target_os = "macos"))]
+pub struct BackgroundMenuItem(pub tauri::menu::MenuItem<tauri::Wry>);
 
 /// 统一的窗口唤起入口：托盘点击 / 托盘菜单 / 菜单栏 / 重复启动 / 点 Dock 图标
 /// 全部走这里，内部决定是"show 已有窗口"还是"重建窗口"。
@@ -337,13 +385,15 @@ pub fn show_or_rebuild_window(app: &AppHandle) {
 /// 进入后台时顺带把 `destroy_on_close` 置为 true，否则关掉重建的窗口会立刻
 /// 又被销毁，用户会以为"退不出后台模式"。
 pub fn toggle_headless(app: &AppHandle) -> Result<bool, String> {
-    if is_headless_mode() {
-        exit_headless_mode(app)?;
-    } else {
-        if let Some(h) = app.try_state::<HeadlessState>() {
-            let _ = h.set_destroy_on_close(app, true);
+    on_main(app, |app| {
+        if PHASE.load(Ordering::Acquire) == ENTERING {
+            return Ok(REOPEN_PENDING.fetch_xor(true, Ordering::AcqRel));
         }
-        enter_headless_mode(app)?;
-    }
-    Ok(is_headless_mode())
+        if is_headless_mode() { exit_on_main(app)?; }
+        else {
+            if let Some(h) = app.try_state::<HeadlessState>() { h.set_destroy_on_close(app, true)?; }
+            enter_on_main(app)?;
+        }
+        Ok(is_headless_mode())
+    })
 }

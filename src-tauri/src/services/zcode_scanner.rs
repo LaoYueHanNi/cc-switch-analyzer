@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection, OpenFlags};
 
 use crate::services::app_db::AppDbService;
-use crate::services::dsh_scanner::{metadata_modified_nanos, DshScanResult};
+use crate::services::dsh_scanner::{DshScanResult};
 use crate::utils;
 
 /// 数据源标识（session_request_logs.source / provider_id）
@@ -62,9 +62,9 @@ pub fn scan_zcode(app_db: &AppDbService) -> Result<DshScanResult, String> {
 /// 扫描指定 ZCode sqlite 到应用库。
 pub fn scan_zcode_at(app_db: &AppDbService, sqlite_path: &Path) -> Result<DshScanResult, String> {
     let file_path_str = sqlite_path.to_string_lossy().to_string();
-    let metadata = std::fs::metadata(sqlite_path)
+    let _metadata = std::fs::metadata(sqlite_path)
         .map_err(|e| format!("读取 ZCode 数据库元数据失败: {}", e))?;
-    let mtime = metadata_modified_nanos(&metadata);
+    let mtime = crate::utils::sqlite_content_stamp(sqlite_path);
     let prev = app_db.get_session_log_sync_state(ZCODE_SOURCE, &file_path_str);
 
     if let Some((prev_mtime, _)) = prev {
@@ -256,6 +256,23 @@ mod tests {
         if let Ok(f) = std::fs::File::open(path) {
             let _ = f.set_modified(future);
         }
+    }
+
+    #[test]
+    fn imports_wal_only_commits_without_main_file_mtime_change() {
+        let db = AppDbService::new_in_memory().unwrap();
+        let (path, writer) = temp_zcode_sqlite();
+        writer.pragma_update(None, "journal_mode", "WAL").unwrap();
+        writer.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+        insert_row(&writer, "first", 1_000_000, 150, 20, 50, 7, "completed", 520);
+        assert_eq!(scan_zcode_at(&db, &path).unwrap().imported, 1);
+        let main_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        insert_row(&writer, "same-second", 1_000_000, 300, 40, 100, 14, "completed", 520);
+        assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), main_mtime);
+        assert_eq!(scan_zcode_at(&db, &path).unwrap().imported, 1);
+        assert_eq!(scan_zcode_at(&db, &path).unwrap().imported, 0);
+        drop(writer);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

@@ -13,8 +13,6 @@ pub const REALTIME_WINDOW_SEC: i64 = 3600;
 pub const TM_API_PORT: u16 = 19810;
 /// TrafficMonitor 插件 API 端口搜索上限
 pub const TM_API_PORT_MAX: u16 = 19820;
-/// TrafficMonitor 插件 API 缓存 TTL（秒）
-pub const TM_CACHE_TTL_SECS: u64 = 30;
 
 /// YYYY-MM-DD 字符串转 Unix 秒，解析失败返回 None
 pub fn date_str_to_epoch(date_str: &str) -> Option<i64> {
@@ -468,4 +466,21 @@ mod tests {
         assert_eq!(list[0].user_id, "acc1");
         assert_eq!(list[1].user_id, "acc2");
     }
+}
+/// Observe committed WAL writes without touching the external database.
+pub(crate) fn sqlite_latest_metadata(path: &std::path::Path) -> Option<std::fs::Metadata> {
+    [path.to_path_buf(), std::path::PathBuf::from(format!("{}-wal", path.display()))]
+        .iter().filter_map(|p| std::fs::metadata(p).ok())
+        .max_by_key(|m| m.modified().ok())
+}
+
+/// Persistable change stamp includes both files, lengths and WAL creation/removal.
+pub(crate) fn sqlite_content_stamp(path: &std::path::Path) -> i64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    for p in [path.to_path_buf(), std::path::PathBuf::from(format!("{}-wal", path.display()))] {
+        let stamp = std::fs::metadata(p).ok().map(|m| (m.len(), m.modified().ok()));
+        stamp.hash(&mut hash);
+    }
+    hash.finish() as i64
 }

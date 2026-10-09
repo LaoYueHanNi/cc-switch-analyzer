@@ -135,7 +135,7 @@ PI 默认扫描 `~/.pi/agent/sessions/`、`~/.omp/agent/sessions/` 与 `~/.omp/p
 - **会话扫描**（`dsh_scanner.rs`）：读取 `~/.dsh/sessions/**/session.jsonl.zstd|.jsonl`；`DshParseState` 按 step 跨行维护状态，以 `step/start`、首个 `assistant/chunk` 和 `assistant/message` 推算耗时与首字时间。
 - **插件数据**（`dsh_plugin_scanner.rs`）：读取 [dsh-token-usage](https://github.com/LaoYueHanNi/dsh-token-usage) 写入的按天 JSONL，直接提取 `latencyMs` / `firstTokenLatencyMs`。目录优先使用设置中的 `dsh_plugin_data_dir`，否则按 `$DSH_HOME/token-usage` 或 `~/.dsh/token-usage` 解析。
 
-两种来源统一为 `ParsedRow` 并通过 `scan_file_incremental` 写入应用库（规范 source 为 `DSH`）。扫描旧行时仍需解析以重建跨行状态，仅让 offset 之后的新行入库。读取侧 `dsh_db.rs` 与扫描模式无关；`auto_load_paths`、`refresh_database`、`source_mtime` 按当前模式路由。
+两种来源统一为 `ParsedRow` 并通过 `scan_file_incremental` 写入应用库（规范 source 为 `DSH`）。扫描旧行时仍需解析以重建跨行状态，仅让 offset 之后的新行入库。读取侧 `dsh_db.rs` 与扫描模式无关；Rust 后台采集、手动扫描与 `source_mtime` 按当前模式及自定义目录路由。
 
 ### Cursor 用量与计价
 
@@ -167,8 +167,11 @@ CCS 会话日志同步记录可按 OpenCode、Claude Code、Codex、Grok Build�
 
 ### 常驻服务与后台模式
 
-- **共享今日查询**：`today_query.rs` 复用 `compute_precompute`，HTTP 服务和菜单栏各持独立的 `TodaySourceCache`，避免共享 SQLite 连接导致并发冲突。
-- **Windows TrafficMonitor**：`http_server.rs` 提供 `/api/today`，在 `127.0.0.1:19810–19820` 选择可用端口；费用由后端计算，`totalCost` 返回 `"172.57¥"` 等格式化字符串，插件仅展示。
-- **macOS 菜单栏**：`menubar.rs` 每 30 秒查询今日数据，`menubar_macos.rs` 用原生 `NSStatusItem` 展示两行 Token / 费用，自动适配深浅色。AppKit UI 操作在主线程执行，原生回调取共享状态时用 `try_state` 处理状态尚未注册的情况。
-- **后台常驻**：`headless.rs` 销毁 WebView 窗口以释放界面内存，保留 Rust 进程、托盘/菜单栏和本地服务；通过 `show_or_rebuild_window` 按需重建。默认关闭窗口仅隐藏；“关闭窗口时销毁界面”是配置，“立即进入后台模式”是动作。重建恢复窗口位置与大小，但页面回到默认路由和筛选状态。
-- **当前采集边界**：今日查询服务独立运行，但 ZCode、Proma、DSH、MiniMax、Antigravity、Kimi、PI 的扫描调度仍依赖前端刷新，销毁界面后停止采集。常驻查询不等于后台持续入库，后续修复须保持 Cursor 缓存展示约定。已确认问题与验证范围见 [轻量模式审计](docs/audits/2026-10-10-lightweight-mode.md)。
+- **后端初始化与采集**：启动时由 Rust 恢复数据源、禁用状态和缓存定价；`auto_load_database` 在界面重建时复用已有状态。`background_collection.rs` 启动独立线程，每轮结束后等待 5 秒，扫描已启用的 ZCode、Proma、DSH、MiniMax、Antigravity、Kimi、PI；前端刷新共用采集闸门，Cursor 不进入 API 同步。采集持独立应用库连接，避免长扫描占用界面设置的 Rust Mutex；SQLite 写事务仍由 WAL / busy timeout 协调。
+- **启停与变更检测**：禁用状态以路径 + 类型存入 `disabled_sources`，兼容旧 `disabled_source_paths`。ZCode / MiniMax 源库变更戳覆盖主库与 WAL 的 mtime、长度及创建/删除；前端刷新不再仅凭最新秒级时间戳相等跳过变化。
+- **共享今日查询**：`today_query.rs` 只做当日记录去重、Token 汇总及逐请求定价，复用前台定价引擎（含上下文档位、别名、时间规则与峰谷价），避免完整图表预计算。HTTP 与菜单栏各持独立只读 `TodaySourceCache`；SQL 源实时读库，Cursor CSV 变更时重开。七类扫描源的日期条件在 SQL 执行，应用库建立 `(source, created_at)` 索引；禁止给外部库加索引。
+- **Windows TrafficMonitor**：`http_server.rs` 在 `127.0.0.1:19810–19820` 提供 `/api/today`，按请求计算，不缓存 30 秒结果；停服等待监听线程释放端口。费用由后端计算，`totalCost` 返回 `"172.57¥"` 等格式化字符串。插件在实际请求失败后每次最多探测一个端口，失败轮次有退避，成功后重置；改 C++ 后需重编 x86 / x64 DLL。`traffic-monitor-plugin/test.bat` 验证真实 WinHTTP 断线及二次恢复。
+- **状态与日期**：今日响应附带 `stale`、`errors`、`updatedAt`；全部源失败返回 HTTP 503，部分失败显式标记并重试失败连接。Windows 插件遇到失败/不完整数据显示 `--`；macOS 部分结果以 `*` 标记、全部失败显示 `—`。新版插件与菜单栏按本机日历独立计算两次午夜，支持半小时时区与 23/25 小时日；HTTP 保留整小时 `tz`，新增 `tz_minutes`、`tz=local`。
+- **macOS 菜单栏**：`menubar.rs` 每轮查询后等待 5 秒，`menubar_macos.rs` 用原生 `NSStatusItem` 展示两行 Token / 费用；停止及重新启动通过 generation 校验丢弃旧查询/排队回调。AppKit UI 操作在主线程执行，原生回调用 `try_state` 处理尚未注册的状态。
+- **后台常驻**：`headless.rs` 在主线程协调可见、销毁中、后台、重建中四态；进入后台销毁 WebView、保留 Rust 进程与采集/状态栏服务。Destroyed 确认后才重建，快速唤起排队；外观在失败时回滚，所有入口同步托盘文案。默认关闭只隐藏。“关闭窗口时销毁界面”是配置，“立即进入后台模式”是动作。窗口保存内部尺寸与正常态几何，仅在新建时恢复，忽略旧版外部尺寸；页面回到默认路由和筛选状态。
+- **验证边界**：本地采集与菜单栏各有 5 秒调度间隔，通常目标为源数据可读后约 5–10 秒加扫描/查询耗时；Windows 展示还受 TrafficMonitor 轮询周期影响。Cursor 保持缓存展示，Antigravity 依赖正在运行的 language server。修复与回归范围见 [轻量模式审计](docs/audits/2026-10-10-lightweight-mode.md)；原生窗口、内存及 macOS UI 仍需目标设备验收。

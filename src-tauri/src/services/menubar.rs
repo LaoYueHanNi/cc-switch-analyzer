@@ -1,25 +1,26 @@
 //! macOS 菜单栏常驻显示：在托盘图标旁展示今日 Token 总量与费用。
 //!
 //! 渲染由 `menubar_macos`（原生 NSStatusItem，两行 9pt 小字）承担；
-//! 本模块负责查询调度：后台线程每 30s 调共享查询管道，把结果
+//! 本模块负责查询调度：后台线程每 5s 调共享查询管道，把结果
 //! dispatch 到主线程更新。查询复用 `today_query`，持有独立的
 //! `TodaySourceCache`，与 HTTP 服务 / 前端查询互不干扰。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::services::today_query::{query_today_data, TodaySourceCache};
+use crate::services::today_query::{query_today_data, TodaySourceCache, TodayTimezone};
 use crate::SharedState;
 
-/// 菜单栏刷新间隔（秒）。查询走独立 DataSource 长驻缓存，开销可忽略。
-const MENUBAR_REFRESH_SECS: u64 = 30;
+/// 菜单栏刷新间隔（秒）。查询复用独立只读连接，SQL 源限定当日范围。
+const MENUBAR_REFRESH_SECS: u64 = 5;
 
 /// 菜单栏显示服务的管理句柄
 pub struct MenubarHandle {
     app: tauri::AppHandle,
     shutdown: Option<Arc<AtomicBool>>,
     running: bool,
+    generation: Arc<AtomicU64>,
     /// 长驻独立数据源缓存：跨启停复用，避免每次刷新重建 DataSource
     source_cache: Arc<Mutex<TodaySourceCache>>,
 }
@@ -30,6 +31,7 @@ impl MenubarHandle {
             app,
             shutdown: None,
             running: false,
+            generation: Arc::new(AtomicU64::new(0)),
             source_cache: Arc::new(Mutex::new(TodaySourceCache::default())),
         }
     }
@@ -44,11 +46,13 @@ impl MenubarHandle {
         let thread_shutdown = shutdown.clone();
         let thread_source_cache = self.source_cache.clone();
         let thread_app = self.app.clone();
+        let generation = self.generation.clone();
+        let expected = generation.fetch_add(1, Ordering::SeqCst) + 1;
 
         std::thread::Builder::new()
             .name("menubar-refresh".into())
             .spawn(move || {
-                run_loop(thread_app, shared, thread_shutdown, thread_source_cache);
+                run_loop(thread_app, shared, thread_shutdown, thread_source_cache, generation, expected);
             })
             .map_err(|e| format!("启动菜单栏刷新线程失败: {}", e))?;
 
@@ -66,7 +70,8 @@ impl MenubarHandle {
         if let Some(shutdown) = &self.shutdown {
             shutdown.store(true, Ordering::SeqCst);
         }
-        apply_title(&self.app, String::new(), String::new());
+        let expected = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        apply_title(&self.app, String::new(), String::new(), self.generation.clone(), expected, None);
         self.running = false;
         log::info!("[Menubar] 菜单栏显示已停止");
     }
@@ -81,22 +86,23 @@ fn run_loop(
     shared: Arc<SharedState>,
     shutdown: Arc<AtomicBool>,
     source_cache: Arc<Mutex<TodaySourceCache>>,
+    generation: Arc<AtomicU64>, expected: u64,
 ) {
     loop {
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
 
-        let tz = (chrono::Local::now().offset().local_minus_utc() / 3600) as i64;
         // 查询失败 / 无数据源时显示占位符 "—"，保留图标存在感
-        let (tokens, cost) = match query_today_data(&shared, tz, &source_cache) {
+        let (tokens, cost) = match query_today_data(&shared, TodayTimezone::Local, &source_cache) {
             Ok(data) => (
-                format_tokens_compact(data.total_tokens),
+                format!("{}{}", format_tokens_compact(data.total_tokens), if data.stale { "*" } else { "" }),
                 format_cost(data.total_cost_value),
             ),
             Err(_) => ("—".to_string(), String::new()),
         };
-        apply_title(&app, tokens, cost);
+        if shutdown.load(Ordering::SeqCst) { return; }
+        apply_title(&app, tokens, cost, generation.clone(), expected, Some(shutdown.clone()));
 
         // 分段睡眠以便及时响应停止请求
         for _ in 0..(MENUBAR_REFRESH_SECS * 2) {
@@ -111,8 +117,9 @@ fn run_loop(
 
 /// 主线程更新菜单栏文字（AppKit 要求；空 token 表示清空）
 #[cfg(target_os = "macos")]
-fn apply_title(app: &tauri::AppHandle, tokens: String, cost: String) {
+fn apply_title(app: &tauri::AppHandle, tokens: String, cost: String, generation: Arc<AtomicU64>, expected: u64, shutdown: Option<Arc<AtomicBool>>) {
     let _ = app.run_on_main_thread(move || {
+        if generation.load(Ordering::SeqCst) != expected || shutdown.is_some_and(|s| s.load(Ordering::SeqCst)) { return; }
         if let Some(mtm) = objc2::MainThreadMarker::new() {
             crate::services::menubar_macos::set_text(mtm, tokens, cost);
         }
@@ -120,7 +127,7 @@ fn apply_title(app: &tauri::AppHandle, tokens: String, cost: String) {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn apply_title(_app: &tauri::AppHandle, _tokens: String, _cost: String) {}
+fn apply_title(_app: &tauri::AppHandle, _tokens: String, _cost: String, _generation: Arc<AtomicU64>, _expected: u64, _shutdown: Option<Arc<AtomicBool>>) {}
 
 /// Token 数量缩写：<1k 原样；>=1k 用 k；>=1M 用 M。
 /// 固定两位小数，使上下两行的数字位数稳定、可右对齐（见 `menubar_macos`）

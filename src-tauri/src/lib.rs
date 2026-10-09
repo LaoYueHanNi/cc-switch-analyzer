@@ -70,6 +70,7 @@ fn toggle_background_mode(app: &tauri::AppHandle) -> bool {
 // 跨线程共享的状态（Tauri 命令 + HTTP 服务共用）
 pub struct SharedState {
     pub data_sources: RwLock<Vec<SourceEntry>>,
+    pub collection_errors: RwLock<Vec<String>>,
     pub pricing_engine: RwLock<PricingEngine>,
     /// CCS 会话日志同步过滤配置，供前台查询与后台常驻查询共用。
     pub ccs_filter_session_apps: RwLock<Option<Vec<String>>>,
@@ -82,6 +83,7 @@ impl SharedState {
     ) -> Self {
         Self {
             data_sources: RwLock::new(Vec::new()),
+            collection_errors: RwLock::new(Vec::new()),
             pricing_engine: RwLock::new(pricing_engine),
             ccs_filter_session_apps: RwLock::new(ccs_filter_session_apps),
         }
@@ -107,9 +109,12 @@ pub(crate) fn load_ccs_filter_session_apps(
 pub struct AppState {
     shared: Arc<SharedState>,
     app_db: Mutex<AppDbService>,
+    collection_db: Mutex<AppDbService>,
     db_latest_timestamp: Mutex<Option<i64>>,
     db_file_mtimes: Mutex<HashMap<String, std::time::SystemTime>>,
     request_cache: Mutex<RequestCache>,
+    sources_initialized: Mutex<bool>,
+    collection_gate: Mutex<Option<std::time::Instant>>,
 }
 
 // 通过 Deref，Tauri 命令中 state.data_sources 仍然直接可用
@@ -131,9 +136,12 @@ pub fn run() {
     let state = AppState {
         shared: shared.clone(),
         app_db: Mutex::new(app_db),
+        collection_db: Mutex::new(AppDbService::new().expect("初始化本地采集连接失败")),
         db_latest_timestamp: Mutex::new(None),
         db_file_mtimes: Mutex::new(HashMap::new()),
         request_cache: Mutex::new(RequestCache::new(5000)),
+        sources_initialized: Mutex::new(false),
+        collection_gate: Mutex::new(None),
     };
 
     // macOS Cmd+Q 先触发 ExitRequested 再触发 CloseRequested
@@ -149,6 +157,9 @@ pub fn run() {
         // 窗口关闭拦截挂在 Builder 上而非具体窗口实例上：后台模式会销毁
         // 窗口，绑定实例的拦截器在重建后的新窗口上会失效
         .on_window_event(move |window, event| {
+            if window.label() == "main" && matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_)) {
+                services::headless::track_normal_geometry(window.app_handle());
+            }
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if should_exit_window.load(Ordering::SeqCst) {
                     // Cmd+Q / 系统关机等，允许关闭
@@ -179,8 +190,13 @@ pub fn run() {
                     .build(),
             )?;
 
+            // Restore cached prices and read-only sources before any WebView IPC or status service.
+            commands::database::initialize_sources(&app.state::<AppState>())?;
+            app.manage(services::background_collection::BackgroundCollector::start(app.handle().clone())?);
+
             // 后台模式状态：先于任何回调注册（菜单回调会读它）
             app.manage(services::headless::HeadlessState::load(app.handle()));
+            services::headless::track_normal_geometry(app.handle());
 
             // 系统托盘（Windows / Linux；macOS 使用原生 NSStatusItem，见下方分支）
             #[cfg(not(target_os = "macos"))]
@@ -192,7 +208,7 @@ pub fn run() {
                 let background_item =
                     tauri::menu::MenuItem::with_id(app, "background-mode", "进入后台模式", true, None::<&str>)?;
                 let background_item_menu = background_item.clone();
-                let background_item_event = background_item.clone();
+                app.manage(services::headless::BackgroundMenuItem(background_item.clone()));
                 let menu = tauri::menu::MenuBuilder::new(app)
                     .item(&tauri::menu::MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?)
                     .separator()
@@ -226,16 +242,7 @@ pub fn run() {
                         } else if event.id() == "show" {
                             services::headless::show_or_rebuild_window(app_handle);
                         } else if event.id() == "background-mode" {
-                            // 动作项：点击立即进入/退出门面，顺带把标题改成反向文案
-                            let in_background = toggle_background_mode(app_handle);
-                            if let Err(e) = background_item_event.set_text(if in_background {
-                                "退出门面（返回界面）"
-                            } else {
-                                "进入后台模式"
-                            }) {
-                                log::warn!("[Headless] 更新托盘菜单标题失败: {e}");
-                            }
-                            log::info!("[Headless] 后台模式切换 → {}", in_background);
+                            toggle_background_mode(app_handle);
                         } else if event.id() == "check-update" {
                             request_check_update(app_handle);
                         }
@@ -446,6 +453,12 @@ pub fn run() {
     // Reopen: 点击 Dock 图标时重新显示窗口
     app.run(move |app_handle, event| {
         match event {
+            RunEvent::WindowEvent { label, event: WindowEvent::Destroyed, .. } if label == "main" => {
+                services::headless::window_destroyed(app_handle);
+            }
+            RunEvent::Exit => {
+                if let Some(h) = app_handle.try_state::<services::background_collection::BackgroundCollector>() { h.stop(); }
+            }
             RunEvent::ExitRequested { api, code, .. } => {
                 // Tauri v2 在「所有窗口被销毁」时会自动退出进程（官方 issue
                 // #13511 至今 open）。后台模式下窗口正是被我们主动销毁的，

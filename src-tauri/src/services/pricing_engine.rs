@@ -80,15 +80,15 @@ impl PricingEngine {
         best
     }
 
-    fn local_minute_of_day(epoch_seconds: i64, tz_offset_hours: i64) -> i64 {
-        let local = epoch_seconds + tz_offset_hours * 3600;
+    fn local_minute_of_day(epoch_seconds: i64, tz_offset_seconds: i64) -> i64 {
+        let local = epoch_seconds + tz_offset_seconds;
         let sod = ((local % 86400) + 86400) % 86400;
         sod / 60
     }
 
     /// 本地 ISO 周几（1=周一..7=周日）；1970-01-01 为周四
-    fn local_iso_weekday(epoch_seconds: i64, tz_offset_hours: i64) -> u8 {
-        let local = epoch_seconds + tz_offset_hours * 3600;
+    fn local_iso_weekday(epoch_seconds: i64, tz_offset_seconds: i64) -> u8 {
+        let local = epoch_seconds + tz_offset_seconds;
         let days = local.div_euclid(86_400);
         ((days + 3).rem_euclid(7) + 1) as u8
     }
@@ -394,6 +394,13 @@ impl PricingEngine {
         context_size: i64,
         tz_offset: i64,
     ) -> Option<MergedPricing> {
+        self.get_pricing_at_with_context_seconds(model_id, epoch_seconds, context_size, tz_offset * 3600)
+    }
+
+    /// Exact offset for local calendar queries, including half-hour zones and DST.
+    pub fn get_pricing_at_with_context_seconds(
+        &self, model_id: &str, epoch_seconds: i64, context_size: i64, tz_offset: i64,
+    ) -> Option<MergedPricing> {
         let resolved = match self.resolve_model_id(model_id) {
             Some(r) => r.to_string(),
             None => return None,
@@ -455,7 +462,7 @@ impl PricingEngine {
             None => return -1,
         };
         let slots = self.collect_node_daily_slots(&resolved, epoch_seconds, context_size);
-        Self::find_matching_daily_slot_index(&slots, epoch_seconds, tz_offset)
+        Self::find_matching_daily_slot_index(&slots, epoch_seconds, tz_offset * 3600)
             .map(|i| i as i64)
             .unwrap_or(-1)
     }
@@ -1050,10 +1057,10 @@ mod tests {
         assert_eq!(PricingEngine::local_iso_weekday(monday_utc0, 0), 1);
         assert_eq!(PricingEngine::local_iso_weekday(monday_utc0 - 86400, 0), 7);
         // tz=8 下同一时刻为本地周一 08:00
-        assert_eq!(PricingEngine::local_iso_weekday(monday_utc0, 8), 1);
+        assert_eq!(PricingEngine::local_iso_weekday(monday_utc0, 8 * 3600), 1);
         // 本地周一 00:00 = UTC 周日 16:00
-        assert_eq!(PricingEngine::local_iso_weekday(monday_utc0 - 8 * 3600, 8), 1);
-        assert_eq!(PricingEngine::local_iso_weekday(monday_utc0 - 8 * 3600 - 1, 8), 7);
+        assert_eq!(PricingEngine::local_iso_weekday(monday_utc0 - 8 * 3600, 8 * 3600), 1);
+        assert_eq!(PricingEngine::local_iso_weekday(monday_utc0 - 8 * 3600 - 1, 8 * 3600), 7);
     }
 
     #[test]
@@ -1115,6 +1122,6 @@ mod tests {
         let mut every_day = peak_slot("每日高峰", 16.0);
         every_day.days_of_week = Some(vec![]);
         let sat_peak = monday_utc0 + 5 * 86400 + 2 * 3600;
-        assert!(PricingEngine::find_matching_daily_slot_index(&[every_day], sat_peak, tz).is_some());
+        assert!(PricingEngine::find_matching_daily_slot_index(&[every_day], sat_peak, tz * 3600).is_some());
     }
 }

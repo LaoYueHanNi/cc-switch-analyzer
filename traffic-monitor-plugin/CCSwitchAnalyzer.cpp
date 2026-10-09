@@ -123,7 +123,7 @@ void CCSwitchAnalyzer::SaveConfig()
 bool CCSwitchAnalyzer::TryConnect(int port)
 {
     HINTERNET hSession = WinHttpOpen(L"CCSwitchAnalyzer/1.0",
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_ACCESS_TYPE_NO_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return false;
@@ -161,14 +161,17 @@ bool CCSwitchAnalyzer::TryConnect(int port)
 
 bool CCSwitchAnalyzer::AutoDiscoverPort()
 {
-    for (int port = TM_PORT_MIN; port <= TM_PORT_MAX; ++port) {
-        if (TryConnect(port)) {
-            m_port = port;
-            SaveConfig();
-            return true;
-        }
-    }
-    return false;
+    // Probe at most one port per host poll. Retry rounds continue after an outage.
+    const ULONGLONG now = GetTickCount64();
+    if (now < m_next_discovery_ms) return false;
+    const int port = m_discovery_port++;
+    const bool wrapped = m_discovery_port > TM_PORT_MAX;
+    if (wrapped) m_discovery_port = TM_PORT_MIN;
+    m_next_discovery_ms = now + (wrapped ? 5000 : 250);
+    if (!TryConnect(port)) return false;
+    m_port = port;
+    SaveConfig();
+    return true;
 }
 
 // ===== WinHTTP 获取今日数据 =====
@@ -203,18 +206,30 @@ static bool ExtractJsonString(const char* json, const char* key, std::string& ou
 
 bool CCSwitchAnalyzer::FetchTodayData()
 {
-    wchar_t path[64];
-    TIME_ZONE_INFORMATION tzi;
-    DWORD tzResult = GetTimeZoneInformation(&tzi);
-    int totalBias = tzi.Bias;
-    if (tzResult == TIME_ZONE_ID_DAYLIGHT) {
-        totalBias += tzi.DaylightBias;
+    if (RequestTodayData()) {
+        m_next_discovery_ms = 0;
+        m_discovery_port = TM_PORT_MIN;
+        return true;
     }
-    swprintf_s(path, L"/api/today?tz=%d", -totalBias / 60);
+    // A responding server with a query error is not a port discovery failure.
+    if (!m_server_reachable && AutoDiscoverPort() && RequestTodayData()) {
+        m_next_discovery_ms = 0;
+        m_discovery_port = TM_PORT_MIN;
+        return true;
+    }
+    return false;
+}
+
+bool CCSwitchAnalyzer::RequestTodayData()
+{
+    m_server_reachable = false;
+    wchar_t path[64];
+    // Server is on the same host: its local calendar handles fractional offsets and DST.
+    swprintf_s(path, L"/api/today?tz=local");
 
     // 1) 尝试已配置端口
     HINTERNET hSession = WinHttpOpen(L"CCSwitchAnalyzer/1.0",
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_ACCESS_TYPE_NO_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) { m_connected = false; return false; }
@@ -226,14 +241,6 @@ bool CCSwitchAnalyzer::FetchTodayData()
     HINTERNET hConnect = WinHttpConnect(hSession, L"127.0.0.1", static_cast<INTERNET_PORT>(m_port), 0);
     if (!hConnect) {
         WinHttpCloseHandle(hSession);
-
-        // 2) 连接失败 → 端口自动发现（每断连周期仅执行一次）
-        if (!m_discovery_attempted) {
-            m_discovery_attempted = true;
-            if (AutoDiscoverPort()) {
-                return FetchTodayData();
-            }
-        }
 
         m_connected = false;
         return false;
@@ -269,7 +276,8 @@ bool CCSwitchAnalyzer::FetchTodayData()
         return false;
     }
 
-    char buffer[1024] = {};
+    m_server_reachable = true;
+    char buffer[4096] = {};
     DWORD bytesRead = 0;
     DWORD totalRead = 0;
     while (WinHttpReadData(hRequest, buffer + totalRead, sizeof(buffer) - totalRead - 1, &bytesRead) && bytesRead > 0) {
@@ -287,7 +295,7 @@ bool CCSwitchAnalyzer::FetchTodayData()
         return false;
     }
 
-    if (strstr(buffer, "\"error\"")) {
+    if (strstr(buffer, "\"error\"") || strstr(buffer, "\"stale\":true")) {
         m_connected = false;
         return false;
     }
