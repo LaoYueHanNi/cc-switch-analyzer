@@ -295,7 +295,9 @@ bool CCSwitchAnalyzer::RequestTodayData()
         return false;
     }
 
-    if (strstr(buffer, "\"error\"") || strstr(buffer, "\"stale\":true")) {
+    // Partial source failures ("stale") still carry today's totals; only a
+    // full outage answers with an error object (HTTP 503).
+    if (strstr(buffer, "\"error\"")) {
         m_connected = false;
         return false;
     }

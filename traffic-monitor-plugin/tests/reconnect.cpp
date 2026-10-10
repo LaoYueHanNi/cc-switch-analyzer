@@ -29,10 +29,12 @@ public:
         return true;
     }
 
-    void start(int tokens) {
+    void start(int tokens) { start(tokens, false); }
+
+    void start(int tokens, bool stale) {
         listen(listener, 8);
         const SOCKET server = listener;
-        worker = std::thread([server, tokens] {
+        worker = std::thread([server, tokens, stale] {
             for (;;) {
                 SOCKET client = accept(server, nullptr, nullptr);
                 if (client == INVALID_SOCKET) break;
@@ -43,7 +45,7 @@ public:
                 if (count > 0) {
                     const bool ping = std::string(buffer).find("/api/ping") != std::string::npos;
                     const std::string body = ping ? "{\"status\":\"ok\"}" :
-                        "{\"totalTokens\":" + std::to_string(tokens) + ",\"totalCost\":\"1.00\",\"stale\":false}";
+                        "{\"totalTokens\":" + std::to_string(tokens) + ",\"totalCost\":\"1.00\",\"stale\":" + (stale ? "true" : "false") + "}";
                     const std::string reply = "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) +
                         "\r\nConnection: close\r\n\r\n" + body;
                     send(client, reply.data(), static_cast<int>(reply.size()), 0);
@@ -73,14 +75,15 @@ static bool wait_for(CCSwitchAnalyzer& plugin, const wchar_t* expected) {
 int main() {
     WSADATA data{};
     if (WSAStartup(MAKEWORD(2, 2), &data) != 0) return 1;
-    FixtureServer first, second, closed;
+    FixtureServer first, second, third, closed;
     for (int port = 19810; port <= 19820; ++port) {
         if (closed.listener == INVALID_SOCKET) { closed.reserve(port); continue; }
         if (first.listener == INVALID_SOCKET) { first.reserve(port); continue; }
-        if (second.reserve(port)) break;
+        if (second.listener == INVALID_SOCKET) { second.reserve(port); continue; }
+        if (third.reserve(port)) break;
     }
-    if (second.listener == INVALID_SOCKET) {
-        std::cerr << "Three free fixture ports required in 19810-19820\n"; return 1;
+    if (third.listener == INVALID_SOCKET) {
+        std::cerr << "Four free fixture ports required in 19810-19820\n"; return 1;
     }
     wchar_t temp[MAX_PATH]{};
     GetTempPathW(MAX_PATH, temp);
@@ -98,9 +101,14 @@ int main() {
     second.start(456);
     if (!wait_for(plugin, L"456")) { std::cerr << "Second outage recovery failed\n"; return 1; }
     second.stop();
+    // Partial source failures report stale=true while totals stay usable:
+    // the plugin must keep displaying numbers instead of falling back to "--".
+    third.start(789, true);
+    if (!wait_for(plugin, L"789")) { std::cerr << "Stale partial result rejected\n"; return 1; }
+    third.stop();
     closed.stop();
     DeleteFileW((config + L"port.ini").c_str());
     RemoveDirectoryW(config.c_str());
     WSACleanup();
-    std::cout << "WinHTTP closed-port discovery and second outage recovery passed\n";
+    std::cout << "WinHTTP closed-port discovery, outage recovery and stale partial display passed\n";
 }

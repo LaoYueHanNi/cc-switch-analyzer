@@ -56,7 +56,7 @@
 
 本地用量采集由 Rust 持续运行：CCS、OpenCode、AI-Proxy 直接只读查询；ZCode、Proma、DSH、MiniMax、Antigravity、Kimi、PI 每轮扫描后等待 5 秒，按已启用的来源导入应用库，销毁界面后继续采集。通常目标为数据可读后约 5–10 秒加扫描 / 查询耗时更新到状态栏，Windows 另受 TrafficMonitor 的轮询周期影响；Antigravity 需要 IDE 的 language server 可用。Cursor 保持已有缓存展示，需要最新用量时手动同步。
 
-数据源或采集失败时，Windows 插件显示 `--`；macOS 全部失败显示 `—`，部分数据加 `*` 提示不完整。时区使用本机自然日，兼容半小时偏移与夏令时。修复与已验证范围见 [轻量模式审计](docs/audits/2026-10-10-lightweight-mode.md)。
+单个数据源或采集失败（如 Antigravity 未打开）时，Windows 插件仍展示其余来源的今日数字；全部来源失败才显示 `--`。macOS 全部失败显示 `—`，部分数据加 `*` 提示不完整。时区使用本机自然日，兼容半小时偏移与夏令时。修复与已验证范围见 [轻量模式审计](docs/audits/2026-10-10-lightweight-mode.md)。
 
 ## 数据来源
 
