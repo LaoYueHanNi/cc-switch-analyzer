@@ -1,8 +1,39 @@
 [
   {
     "version": "Unreleased",
-    "date": "2026-09-30",
+    "date": "2026-10-10",
     "commits": [
+      {
+        "hash": "1636c3e",
+        "subject": "fix(headless): 修复轻量模式后台采集与状态栏同步",
+        "date": "2026-10-10"
+      },
+      {
+        "hash": "2372a5c",
+        "subject": "docs: 同步项目说明并记录轻量模式审计",
+        "date": "2026-10-10"
+      },
+      {
+        "hash": "336a077",
+        "subject": "feat(pricing): 增加用量带入、全模型排序和自适应 Token 输入",
+        "date": "2026-10-09"
+      },
+      {
+        "hash": "f6a3abd",
+        "subject": "fix(traffic-monitor): 同步 CCS 会话过滤口径",
+        "date": "2026-10-07"
+      }
+    ]
+  },
+  {
+    "version": "0.8.8",
+    "date": "2026-10-01",
+    "commits": [
+      {
+        "hash": "33b9e58",
+        "subject": "docs(skill): version 收集提交改用 tag 区间，禁止 git log -N 条数截断",
+        "date": "2026-09-30"
+      },
       {
         "hash": "f70c30e",
         "subject": "feat(headless): 后台常驻模式销毁 WebView 窗口仅保留 Rust 进程",
