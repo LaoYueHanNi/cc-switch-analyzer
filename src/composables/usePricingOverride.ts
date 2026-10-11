@@ -72,7 +72,7 @@ export function usePricingOverride() {
 
   /** 打开编辑弹窗；pricing 为空表示该模型尚无定价（原地新增） */
   function openEditDialog(modelId: string, pricing?: PricingEditTarget | null): void {
-    editModelId.value = modelId
+    editModelId.value = pricing?.modelId ?? modelId
     editModelName.value = modelId
     editCurrentPricing.value = {
       input: pricing?.inputCostPerMillion || 0,
@@ -154,6 +154,7 @@ export function usePricingOverride() {
     editContextTiers,
     editDailySlots,
     loadPricingData,
+    refreshQueries,
     openEditDialog,
     onSavePricing,
     onRestorePricing

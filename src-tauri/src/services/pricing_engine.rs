@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::models::*;
 use crate::services::app_db::AppDbService;
 use crate::services::cloud_pricing;
+use crate::services::model_resolver::ModelResolver;
 use crate::utils::CLOUD_PRICING_URL;
 
 /// 提供时间范围访问的 trait，用于统一匹配用户时间规则和云端时间规则
@@ -33,8 +34,9 @@ pub struct PricingEngine {
     override_tiers: HashMap<String, Vec<ContextTier>>,
     time_rule_tiers: HashMap<i64, Vec<ContextTier>>,
     cloud_time_rule_tiers: HashMap<(String, i64, i64), Vec<ContextTier>>,
-    alias_to_model_id: HashMap<String, String>,
+    resolver: ModelResolver,
     model_aliases: HashMap<String, Vec<String>>,
+    model_alias_patterns: HashMap<String, Vec<String>>,
     no_cache_models: std::collections::HashSet<String>,
     model_families: HashMap<String, String>,
     families: Vec<PricingFamily>,
@@ -60,8 +62,9 @@ impl PricingEngine {
             override_tiers: HashMap::new(),
             time_rule_tiers: HashMap::new(),
             cloud_time_rule_tiers: HashMap::new(),
-            alias_to_model_id: HashMap::new(),
+            resolver: ModelResolver::default(),
             model_aliases: HashMap::new(),
+            model_alias_patterns: HashMap::new(),
             no_cache_models: std::collections::HashSet::new(),
             model_families: HashMap::new(),
             families: Vec::new(),
@@ -178,44 +181,58 @@ impl PricingEngine {
 
     // 刷新全部定价数据
     pub fn refresh(&mut self, app_db: &AppDbService) -> Result<(), String> {
-        // 1. 加载云端定价：优先在线拉取，失败则读缓存
-        let (base, cloud_tiers, cloud_time_rules, cloud_aliases, no_cache_models, model_families, families) = self.load_cloud_base(app_db);
+        // Build atomically: malformed cache/patterns must not destroy the active engine.
+        let mut next = Self::new();
+        next.refresh_from_cache(app_db)?;
+        *self = next;
+        Ok(())
+    }
+
+    fn refresh_from_cache(&mut self, app_db: &AppDbService) -> Result<(), String> {
+        let (base, cloud_tiers, cloud_time_rules, cloud_aliases, no_cache_models, model_families) = app_db.load_cloud_pricing()?;
+        let families = app_db.load_cloud_families()?;
+        self.model_alias_patterns = app_db.load_cloud_alias_patterns()?;
         self.model_families = model_families;
         self.families = families;
 
-        // 2. 先构建云端别名反向映射（统一小写 key），供 merge 和 resolve 使用
-        self.alias_to_model_id.clear();
-        self.model_aliases.clear();
+        // 2. Build separate global ID/alias stages, then compiled regex fallback.
+        for model in &base {
+            self.resolver.add_model(&model.model_id);
+        }
         for (model_id, aliases) in &cloud_aliases {
-            // modelId 本身也加入映射（大小写不敏感）
-            self.alias_to_model_id.insert(model_id.to_lowercase(), model_id.clone());
             self.model_aliases.insert(model_id.clone(), aliases.clone());
             for alias in aliases {
-                self.alias_to_model_id.insert(alias.to_lowercase(), model_id.clone());
+                self.resolver.add_alias(model_id, alias);
             }
         }
-        if let Ok(user_aliases) = app_db.get_user_aliases() {
-            for (model_id, aliases) in user_aliases {
-                let existing = self.model_aliases.get(&model_id).cloned().unwrap_or_default();
-                self.model_aliases.insert(model_id.clone(), [&existing[..], &aliases[..]].concat());
-                for alias in aliases {
-                    self.alias_to_model_id.insert(alias.to_lowercase(), model_id.clone());
-                }
+        for (model_id, patterns) in &self.model_alias_patterns {
+            self.resolver.add_patterns(model_id, patterns)?;
+        }
+        // Resolve owners against the cloud snapshot before adding any user aliases.
+        // Otherwise hash iteration order or a self-alias can hide the regex match.
+        let user_aliases = app_db.get_user_aliases()?;
+        let mut alias_owners = HashMap::new();
+        for model_id in user_aliases.keys() {
+            alias_owners.insert(model_id.clone(), self.resolver.resolve(model_id)?.unwrap_or_else(|| model_id.clone()));
+        }
+        for (old_id, aliases) in user_aliases {
+            let model_id = &alias_owners[&old_id];
+            let existing = self.model_aliases.entry(model_id.clone()).or_default();
+            for alias in aliases {
+                if !existing.contains(&alias) { existing.push(alias.clone()); }
+                self.resolver.add_alias(model_id, &alias);
             }
         }
 
         // 3. 加载用户覆盖
+        app_db.normalize_pricing_model_ids(&self.resolver, &alias_owners)?;
         let overrides = app_db.get_all_overrides()?;
 
-        // 3b. 用户覆盖的 model_id 本身也注册进别名映射。
-        // 云端定价表未收录的模型（自定义 / 中转模型名）只有在映射里存在，
-        // get_pricing_at 的 resolve_model_id 才不会返回 None —— 否则用户
-        // 给它设置的定价会写进 merged 却永远查不到，费用恒为 0。
-        // 已存在的映射优先（云端 model_id / 云端别名 / 用户别名），不抢占别人的别名。
+        // Resolve overrides through cloud patterns before registering genuinely custom IDs.
         for ov in &overrides {
-            self.alias_to_model_id
-                .entry(ov.model_id.to_lowercase())
-                .or_insert_with(|| ov.model_id.clone());
+            if self.resolver.resolve(&ov.model_id)?.is_none() {
+                self.resolver.add_model(&ov.model_id);
+            }
         }
 
         // 4. 合并 + 提取覆盖上下文档位 / 模型根峰谷（override model_id 通过别名映射解析）
@@ -248,7 +265,7 @@ impl PricingEngine {
                 self.time_rule_tiers.insert(rule.id, rule.context_tiers.clone());
             }
             self.time_overrides_by_model
-                .entry(rule.model_id.clone())
+                .entry(self.resolver.resolve(&rule.model_id)?.unwrap_or_else(|| rule.model_id.clone()))
                 .or_default()
                 .push(rule.clone());
         }
@@ -260,28 +277,18 @@ impl PricingEngine {
         Ok(())
     }
 
-    /// 从本地缓存加载云端基础定价（无网络请求）
-    fn load_cloud_base(&self, app_db: &AppDbService) -> (Vec<ModelPricing>, HashMap<String, Vec<ContextTier>>, HashMap<String, Vec<CloudPricingTimeRule>>, HashMap<String, Vec<String>>, Vec<String>, HashMap<String, String>, Vec<PricingFamily>) {
-        match app_db.load_cloud_pricing() {
-            Ok((base, tiers, cloud_time_rules, cloud_aliases, no_cache_models, model_families)) => {
-                let families = app_db.load_cloud_families().unwrap_or_default();
-                let time_rule_count: usize = cloud_time_rules.values().map(|v| v.len()).sum();
-                log::info!("[PRICING] 从缓存加载云端定价: {} 个模型, {} 条时间规则, {} 个无缓存模型", base.len(), time_rule_count, no_cache_models.len());
-                (base, tiers, cloud_time_rules, cloud_aliases, no_cache_models, model_families, families)
-            }
-            Err(e) => {
-                log::error!("[PRICING] 读取云端定价缓存失败: {}", e);
-                (Vec::new(), HashMap::new(), HashMap::new(), HashMap::new(), Vec::new(), HashMap::new(), Vec::new())
-            }
-        }
-    }
-
     /// 从网络拉取云端定价，比较版本后写入缓存
     pub fn fetch_and_cache_cloud_pricing(&self, app_db: &AppDbService) -> Result<(), String> {
         let data = cloud_pricing::fetch_cloud_pricing(CLOUD_PRICING_URL)?;
         log::info!("[PRICING] 云端定价拉取成功: {} 个模型, version={}", data.models.len(), data.version);
+        self.cache_cloud_pricing(app_db, &data)
+    }
+
+    fn cache_cloud_pricing(&self, app_db: &AppDbService, data: &CloudPricingData) -> Result<(), String> {
+        cloud_pricing::validate_cloud_pricing(data)?;
         let cached_version = app_db.get_setting("cloud_pricing_version");
-        if cached_version.as_deref() != Some(&data.version.to_string()) {
+        if cached_version.as_deref() != Some(&data.version.to_string())
+            || app_db.get_setting("cloud_pricing_cache_format").as_deref() != Some("2") {
             log::info!("[PRICING] 版本变化 {} → {}, 更新缓存", cached_version.unwrap_or_default(), data.version);
             app_db.save_cloud_pricing(&data)?;
         } else {
@@ -348,14 +355,24 @@ impl PricingEngine {
         self.merged = result;
     }
 
+    /// 写操作也使用规范键；歧义须报错，未知模型继续使用自定义 ID。
+    pub fn model_id_for_write(&self, model_id: &str) -> Result<String, String> {
+        Ok(self.resolver.resolve(model_id)?.unwrap_or_else(|| model_id.to_string()))
+    }
+
     // 别名/modelId → modelId 解析（大小写不敏感）
     pub fn resolve_model_id(&self, raw_model_id: &str) -> Option<String> {
-        self.alias_to_model_id.get(&raw_model_id.to_lowercase()).cloned()
+        // Ambiguity is logged by the resolver and never produces a guessed price.
+        self.resolver.resolve(raw_model_id).ok().flatten()
     }
 
     // 获取某模型的所有别名（云端 + 用户）
     pub fn get_aliases(&self, model_id: &str) -> Vec<String> {
         self.model_aliases.get(model_id).cloned().unwrap_or_default()
+    }
+
+    pub fn get_alias_patterns(&self, model_id: &str) -> Vec<String> {
+        self.model_alias_patterns.get(model_id).cloned().unwrap_or_default()
     }
 
     pub fn get_no_cache_support(&self, model_id: &str) -> bool {
@@ -660,6 +677,65 @@ mod tests {
     use super::*;
     use crate::services::app_db::AppDbService;
 
+    fn regex_table() -> CloudPricingData {
+        cloud_pricing::parse_cloud_pricing(r#"{
+            "version": 112, "updatedAt": 1, "currency": "RMB", "models": [{
+                "modelId": "canonical", "inputCostPerMillion": 2, "outputCostPerMillion": 6,
+                "cacheReadCostPerMillion": 0.2, "cacheCreationCostPerMillion": 3,
+                "aliasPatterns": ["^example(-(low|high))?$"],
+                "contextTiers": [{ "threshold": 100, "inputCostPerMillion": 4, "outputCostPerMillion": 12,
+                    "cacheReadCostPerMillion": 0.4, "cacheCreationCostPerMillion": 6 }],
+                "timeRules": [{ "label": "discount", "startTime": 100, "endTime": 200, "inputCostPerMillion": 8,
+                    "outputCostPerMillion": 24, "cacheReadCostPerMillion": 0.8, "cacheCreationCostPerMillion": 12,
+                    "dailySlots": [{ "label": "peak", "windows": [{ "startMinute": 0, "endMinute": 60 }],
+                        "inputCostPerMillion": 16, "outputCostPerMillion": 48,
+                        "cacheReadCostPerMillion": 1.6, "cacheCreationCostPerMillion": 24 }] }]
+            }]
+        }"#).unwrap()
+    }
+
+    #[test]
+    fn regex_alias_uses_context_time_peak_and_overrides_after_cache_reload() {
+        let db = AppDbService::new_in_memory().unwrap();
+        db.save_cloud_pricing(&regex_table()).unwrap();
+        let mut engine = PricingEngine::new();
+        engine.refresh(&db).unwrap();
+        assert_eq!(engine.get_pricing_at_with_context("EXAMPLE-HIGH", 0, 100, 0).unwrap().input_cost_per_million, 4.0);
+        assert_eq!(engine.get_pricing_at_with_context("EXAMPLE-HIGH", 150, 100, 0).unwrap().input_cost_per_million, 16.0);
+        assert_eq!(engine.get_pricing_at_with_context("EXAMPLE-HIGH", 150, 100, 2).unwrap().input_cost_per_million, 8.0);
+        db.save_override("EXAMPLE-HIGH", 30.0, 60.0, 3.0, 40.0).unwrap();
+        engine.refresh(&db).unwrap();
+        assert_eq!(engine.size(), 1);
+        assert_eq!(engine.get_pricing_at("example-low", 0, 0).unwrap().input_cost_per_million, 30.0);
+        assert!(engine.get_pricing_at("example-fast", 0, 0).is_none());
+        db.add_time_override("EXAMPLE-HIGH", 300, 400, 50.0, 100.0, 5.0, 60.0, "local").unwrap();
+        engine.refresh(&db).unwrap();
+        assert_eq!(engine.get_pricing_at("example-low", 350, 0).unwrap().input_cost_per_million, 50.0);
+    }
+
+    #[test]
+    fn same_version_old_cache_is_rehydrated_and_bad_table_preserves_valid_data() {
+        let db = AppDbService::new_in_memory().unwrap();
+        let mut old = regex_table();
+        old.models[0].alias_patterns.clear();
+        db.save_cloud_pricing(&old).unwrap();
+        db.set_setting("cloud_pricing_cache_format", "1").unwrap();
+        let mut engine = PricingEngine::new();
+        engine.cache_cloud_pricing(&db, &regex_table()).unwrap();
+        engine.refresh(&db).unwrap();
+        assert_eq!(engine.resolve_model_id("EXAMPLE-HIGH").as_deref(), Some("canonical"));
+        assert_eq!(db.get_setting("cloud_pricing_cache_format").as_deref(), Some("2"));
+        let mut bad = regex_table();
+        bad.version += 1;
+        bad.models[0].alias_patterns = vec!["^.*$".into()];
+        assert!(engine.cache_cloud_pricing(&db, &bad).is_err());
+        engine.refresh(&db).unwrap();
+        assert_eq!(engine.resolve_model_id("EXAMPLE-HIGH").as_deref(), Some("canonical"));
+        db.conn().execute("UPDATE cloud_pricing_cache SET alias_patterns='[\"^.*$\"]'", []).unwrap();
+        assert!(engine.refresh(&db).is_err());
+        assert_eq!(engine.resolve_model_id("EXAMPLE-HIGH").as_deref(), Some("canonical"));
+    }
+
     fn create_test_engine() -> (PricingEngine, AppDbService) {
         let app_db = AppDbService::new_in_memory().unwrap();
         // 插入云端基础定价
@@ -686,6 +762,7 @@ mod tests {
                     }],
                     time_rules: vec![],
                     aliases: vec!["claude-4-sonnet".to_string()],
+                    alias_patterns: vec![],
                     no_cache_support: false,
                     family: "claude".to_string(),
                     daily_slots: vec![],
@@ -699,6 +776,7 @@ mod tests {
                     context_tiers: vec![],
                     time_rules: vec![],
                     aliases: vec![],
+                    alias_patterns: vec![],
                     no_cache_support: false,
                     family: "claude".to_string(),
                     daily_slots: vec![],
@@ -974,6 +1052,7 @@ mod tests {
                     },
                 ],
                 aliases: vec![],
+                    alias_patterns: vec![],
                 no_cache_support: false,
                 family: "gpt".to_string(),
             }],
@@ -1097,6 +1176,7 @@ mod tests {
                 context_tiers: vec![],
                 time_rules: vec![],
                 aliases: vec![],
+                    alias_patterns: vec![],
                 no_cache_support: false,
                 family: "deepseek".to_string(),
             }],

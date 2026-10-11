@@ -31,7 +31,32 @@ pub fn fetch_cloud_pricing(url: &str) -> Result<CloudPricingData, String> {
 
 /// 解析云端定价 JSON
 pub fn parse_cloud_pricing(json_str: &str) -> Result<CloudPricingData, String> {
-    serde_json::from_str(json_str).map_err(|e| format!("解析云端定价 JSON 失败: {}", e))
+    let data = serde_json::from_str(json_str).map_err(|e| format!("解析云端定价 JSON 失败: {}", e))?;
+    validate_cloud_pricing(&data)?;
+    Ok(data)
+}
+
+pub fn validate_cloud_pricing(data: &CloudPricingData) -> Result<(), String> {
+    use crate::services::model_resolver::ModelResolver;
+    let mut resolver = ModelResolver::default();
+    let mut ids = std::collections::HashSet::new();
+    for model in &data.models {
+        if !ids.insert(model.model_id.to_ascii_lowercase()) {
+            return Err(format!("云端模型 ID 重复: {}", model.model_id));
+        }
+        resolver.add_model(&model.model_id);
+        for alias in &model.aliases {
+            resolver.add_alias(&model.model_id, alias);
+        }
+        resolver.add_patterns(&model.model_id, &model.alias_patterns)?;
+    }
+    for model in &data.models {
+        resolver.resolve(&model.model_id)?;
+        for alias in &model.aliases {
+            resolver.resolve(alias)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

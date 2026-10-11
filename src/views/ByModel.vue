@@ -97,18 +97,10 @@ interface ModelCardData {
 const modelCards = computed<ModelCardData[]>(() => {
   const breakdown = queryStore.modelBreakdown
   const pre = queryStore.precomputed
-  const pricingList = pricingStore.pricingData
 
   if (!breakdown.length) return []
 
-  // 构建 pricing 查找 Map（同时用 modelId 和别名做索引）
-  const pricingMap = new Map<string, PricingData>()
-  for (const p of pricingList) {
-    pricingMap.set(p.modelId, p)
-    for (const alias of p.aliases || []) {
-      pricingMap.set(alias, p)
-    }
-  }
+  const pricingMap = pricingStore.modelResolver
 
   const modelTierCosts: Record<string, Array<{ threshold: number; cost: number }>> = pre?.modelContextTierCosts || {}
 

@@ -83,6 +83,7 @@
           :context-tiers="card?.contextTiers || []"
           :sim-tokens="simTokens"
           :aliases="card.aliases || []"
+          :alias-patterns="card.aliasPatterns || []"
           @edit="openEditDialog(card.modelId, card)"
           @add-time-rule="onAddTimeRule(card.modelId)"
           @edit-time-rule="(rule) => onEditTimeRule(rule)"
@@ -146,6 +147,7 @@
             :context-tiers="card?.contextTiers || []"
             :sim-tokens="simTokens"
             :aliases="card.aliases || []"
+            :alias-patterns="card.aliasPatterns || []"
             @edit="openEditDialog(card.modelId, card)"
             @add-time-rule="onAddTimeRule(card.modelId)"
             @edit-time-rule="(rule) => onEditTimeRule(rule)"
@@ -177,6 +179,7 @@
             :context-tiers="card?.contextTiers || []"
             :sim-tokens="simTokens"
             :aliases="card.aliases || []"
+            :alias-patterns="card.aliasPatterns || []"
             @edit="openEditDialog(card.modelId, card)"
             @add-time-rule="onAddTimeRule(card.modelId)"
             @edit-time-rule="(rule) => onEditTimeRule(rule)"
@@ -195,6 +198,7 @@
       :model-name="aliasModelName"
       :current-aliases="aliasCurrentAliases"
       :user-aliases="aliasUserAliases"
+      :alias-patterns="aliasPatterns"
       @changed="onAliasChanged"
     />
 
@@ -238,6 +242,7 @@ import TimePricingDialog from '@/components/pricing/TimePricingDialog.vue'
 import AliasDialog from '@/components/pricing/AliasDialog.vue'
 import { usePricingOverride } from '@/composables/usePricingOverride'
 import { getActiveRate, dailySlotsWindowsOverlap } from '@/utils/pricing'
+import { foldModelName } from '@/utils/modelResolver'
 import {
   DEPRECATED_FAMILY_IDS,
   getEffectiveFamilies,
@@ -296,6 +301,7 @@ const {
   editContextTiers,
   editDailySlots,
   loadPricingData,
+  refreshQueries,
   openEditDialog,
   onSavePricing,
   onRestorePricing
@@ -315,18 +321,21 @@ const aliasModelId = ref('')
 const aliasModelName = ref('')
 const aliasCurrentAliases = ref<string[]>([])
 const aliasUserAliases = ref<string[]>([])
+const aliasPatterns = ref<string[]>([])
 
 function onManageAliases(card: PricingData): void {
   aliasModelId.value = card.modelId
   aliasModelName.value = card.modelId
   aliasCurrentAliases.value = card.aliases || []
   aliasUserAliases.value = card.userAliases || []
+  aliasPatterns.value = card.aliasPatterns || []
   showAliasDialog.value = true
 }
 
 async function onAliasChanged(): Promise<void> {
   await platformAdapter.refreshPricing()
-  loadPricingData()
+  await loadPricingData()
+  await refreshQueries()
 }
 
 const timeDialogData = computed(() => {
@@ -431,8 +440,11 @@ function getFamilyLabel(p: PricingData): string {
 
 function matchesModelFilter(p: PricingData): boolean {
   if (!searchModel.value) return true
-  return p.modelId.includes(searchModel.value)
-    || (p.aliases?.some(a => a.includes(searchModel.value)) ?? false)
+  const search = foldModelName(searchModel.value)
+  return foldModelName(p.modelId).includes(search)
+    || (p.aliases || []).some(a => foldModelName(a).includes(search))
+    || (p.userAliases?.some(a => foldModelName(a).includes(search)) ?? false)
+    || pricingStore.modelResolver.get(searchModel.value)?.modelId === p.modelId
 }
 
 function isUnusedExpanded(familyId: string): boolean {

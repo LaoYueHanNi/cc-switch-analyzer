@@ -1,15 +1,22 @@
 <template>
-  <CompactDialog :show="show" :title="'别名管理 - ' + modelName" width="360px" @update:show="emit('update:show', $event)">
+  <CompactDialog :show="show" :title="'别名管理 - ' + modelName" width="520px" @update:show="emit('update:show', $event)">
     <div class="alias-form">
+      <template v-if="aliasPatterns.length">
+        <div class="section-label">云端正则规则 · 忽略大小写，匹配完整名称</div>
+        <div class="pattern-list">
+          <code v-for="pattern in aliasPatterns" :key="pattern" class="pattern-text">{{ pattern }}</code>
+        </div>
+      </template>
+      <div class="section-label">精确别名 · 云端历史名称只读，可添加本地名称</div>
       <div class="form-row">
         <CompactInput v-model:model-value="newAlias" placeholder="输入别名" :maxlength="50" @enter="onAdd" width="180px" />
         <button class="cd-btn primary" :disabled="!newAlias.trim()" @click="onAdd">添加</button>
       </div>
       <div v-if="aliases.length === 0" class="empty-hint">暂无别名</div>
       <div v-else class="alias-list">
-        <div v-for="alias in aliases" :key="alias" class="alias-tag" :class="{ 'cloud-alias': !props.userAliases.includes(alias) }">
+        <div v-for="alias in aliases" :key="alias" class="alias-tag" :class="{ 'cloud-alias': !editableAliases.includes(alias) }">
           <span class="alias-text">{{ alias }}</span>
-          <button v-if="props.userAliases.includes(alias)" class="delete-btn" @click="onRemove(alias)">✕</button>
+          <button v-if="editableAliases.includes(alias)" class="delete-btn" @click="onRemove(alias)">✕</button>
         </div>
       </div>
     </div>
@@ -21,14 +28,16 @@ import { ref, watch } from 'vue'
 import CompactDialog from '@/components/common/CompactDialog.vue'
 import CompactInput from '@/components/common/CompactInput.vue'
 import { platformAdapter } from '@/platform'
+import { foldModelName } from '@/utils/modelResolver'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   show: boolean
   modelId: string
   modelName: string
   currentAliases: string[]
   userAliases: string[]
-}>()
+  aliasPatterns?: string[]
+}>(), { aliasPatterns: () => [] })
 
 const emit = defineEmits<{
   'update:show': [value: boolean]
@@ -36,20 +45,23 @@ const emit = defineEmits<{
 }>()
 
 const aliases = ref<string[]>([])
+const editableAliases = ref<string[]>([])
 const newAlias = ref('')
 
 watch(() => props.show, (val) => {
   if (val) {
     aliases.value = [...props.currentAliases]
+    editableAliases.value = [...props.userAliases]
     newAlias.value = ''
   }
 })
 
 async function onAdd(): Promise<void> {
   const name = newAlias.value.trim()
-  if (!name || aliases.value.includes(name)) return
+  if (!name || aliases.value.some(alias => foldModelName(alias) === foldModelName(name))) return
   await platformAdapter.addUserAlias(props.modelId, name)
   aliases.value.push(name)
+  editableAliases.value.push(name)
   newAlias.value = ''
   emit('changed')
 }
@@ -57,12 +69,16 @@ async function onAdd(): Promise<void> {
 async function onRemove(alias: string): Promise<void> {
   await platformAdapter.removeUserAlias(props.modelId, alias)
   aliases.value = aliases.value.filter(a => a !== alias)
+  editableAliases.value = editableAliases.value.filter(a => a !== alias)
   emit('changed')
 }
 </script>
 
 <style scoped>
 .alias-form { display: flex; flex-direction: column; gap: 8px; }
+.section-label { font-size: 11px; color: var(--text-muted); }
+.pattern-list { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
+.pattern-text { font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; white-space: pre-wrap; }
 .form-row { display: flex; align-items: center; gap: 6px; }
 .cd-btn {
   font-size: 11px; padding: 2px 10px; border: 1px solid var(--border-main);

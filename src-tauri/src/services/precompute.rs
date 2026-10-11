@@ -388,6 +388,7 @@ mod tests {
                 context_tiers: vec![],
                 time_rules: vec![],
                 aliases: vec![],
+                alias_patterns: vec![],
                 no_cache_support: false,
                 family: "claude".to_string(),
                 daily_slots: vec![],

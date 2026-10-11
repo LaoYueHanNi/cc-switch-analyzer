@@ -40,6 +40,7 @@ export interface ModelPricing {
   cacheReadCostPerMillion: number
   cacheCreationCostPerMillion: number
   aliases: string[]
+  aliasPatterns?: string[]
 }
 
 export interface MergedPricing {
@@ -101,6 +102,7 @@ export interface PricingData {
   isUsed: boolean
   contextTiers: ContextTier[]
   aliases: string[]
+  aliasPatterns?: string[]
   userAliases: string[]
   noCacheSupport?: boolean
   family?: string

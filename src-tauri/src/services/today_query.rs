@@ -340,6 +340,7 @@ pub(crate) mod tests {
             }],
             time_rules: vec![],
             aliases: vec!["test-alias".into()],
+            alias_patterns: vec!["^test-model(-(low|high))?$".into()],
             no_cache_support: false,
             family: "test".into(),
             daily_slots: vec![],
@@ -354,7 +355,7 @@ pub(crate) mod tests {
         insert(&db, "PI", "narrow", now, 10);
         db.conn()
             .execute(
-                "UPDATE session_request_logs SET model='test-alias' WHERE request_id='wide'",
+                "UPDATE session_request_logs SET model='TEST-MODEL-HIGH' WHERE request_id='wide'",
                 [],
             )
             .unwrap();
@@ -368,6 +369,8 @@ pub(crate) mod tests {
         db.save_cloud_pricing(&pricing).unwrap();
         shared.pricing_engine.write().unwrap().refresh(&db).unwrap();
         let today = query_today_data(&shared, TodayTimezone::OffsetMinutes(0), &cache).unwrap();
+        // Wide request uses tier 4/12/.4/6, narrow uses base 2/6/.2/3.
+        assert!((today.total_cost_value - 0.004482).abs() < 1e-10);
         let bounds = calendar_bounds(&chrono::Utc, now).unwrap();
         let params = FilterParams {
             from_epoch: Some(bounds.0),

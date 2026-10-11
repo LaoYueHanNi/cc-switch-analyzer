@@ -159,6 +159,8 @@ CCS 会话日志同步记录可按 OpenCode、Claude Code、Codex、Grok Build�
 
 ### 定价页与 Token 输入
 
+云端 `aliasPatterns` 经校验后以 JSON 数组保存到应用库；`cloud_pricing_cache_format=2` 标记字段已完整下载，旧格式即使云端版本相同也须补写。Rust `ModelResolver` 与前端 `createModelResolver` 共用模型 ID、历史／用户精确别名、正则兜底三阶段，忽略 ASCII 大小写并要求完整名称匹配；歧义不选候选，禁止剥离模型身份。新增模型识别消费者须复用统一解析器。
+
 模型卡片仅在 hover 时显示“带入定价”，经 Pinia 一次性交接输入、输出、缓存读、缓存写四项原始 Token，并切换到定价页。交接请求消费后清空。
 
 定价工具栏支持家族分组、全部模型卡片、紧凑排行榜三种展示，按费用或模型名排序，并用箭头切换升降序。筛选与四项模拟用量共用。

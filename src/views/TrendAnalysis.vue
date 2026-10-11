@@ -107,7 +107,6 @@ import { usePricingStore } from '@/stores/pricing'
 import { platformAdapter } from '@/platform'
 import TrendChart from '@/components/charts/TrendChart.vue'
 import type { DailyTrendRow } from '@/types/database'
-import type { PricingData } from '@/types/pricing'
 import type { PrecomputedResult } from '@/types/common'
 import { formatNum, formatPercent } from '@/utils/format'
 import {
@@ -251,12 +250,7 @@ onDeactivated(() => {
 
 // ===== 定价查找表 =====
 const pricingMap = computed(() => {
-  const map = new Map<string, PricingData>()
-  for (const p of pricingStore.pricingData) {
-    map.set(p.modelId, p)
-    for (const alias of p.aliases || []) map.set(alias, p)
-  }
-  return map
+  return pricingStore.modelResolver
 })
 
 // 从预计算结果推算每个模型的加权费率（基于 tier-aware 分解）

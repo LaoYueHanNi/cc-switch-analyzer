@@ -34,6 +34,7 @@ pub mod opencode_db;
 pub mod pipeline;
 pub mod precompute;
 pub mod pricing_engine;
+pub mod model_resolver;
 pub mod proma_db;
 pub mod proma_dir;
 pub mod proma_scanner;

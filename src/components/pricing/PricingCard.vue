@@ -5,7 +5,7 @@
         <span class="pricing-name">{{ modelName }}</span>
         <span class="header-actions">
           <button class="text-btn" @click.stop="$emit('manageAliases')">
-            别名<span v-if="aliases.length">({{ aliases.length }})</span>
+            别名<span v-if="aliases.length + aliasPatterns.length">({{ aliases.length + aliasPatterns.length }})</span>
           </button>
           <button class="text-btn" @click.stop="$emit('edit')">编辑</button>
         </span>
@@ -117,9 +117,11 @@ const props = withDefaults(defineProps<{
   contextTiers: ContextTier[]
   simTokens: { input: number; output: number; cacheRead: number; cacheCreation: number }
   aliases: string[]
+  aliasPatterns?: string[]
 }>(), {
   cloudTimeRules: () => [],
-  aliases: () => []
+  aliases: () => [],
+  aliasPatterns: () => []
 })
 
 const open = ref(false)

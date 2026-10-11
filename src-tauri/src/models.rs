@@ -352,6 +352,8 @@ pub struct PricingData {
     #[serde(default)]
     pub aliases: Vec<String>,
     #[serde(default)]
+    pub alias_patterns: Vec<String>,
+    #[serde(default)]
     pub user_aliases: Vec<String>,
     #[serde(default)]
     pub no_cache_support: bool,
@@ -510,6 +512,8 @@ pub struct CloudPricingModel {
     pub time_rules: Vec<CloudPricingTimeRule>,
     #[serde(default)]
     pub aliases: Vec<String>,
+    #[serde(default)]
+    pub alias_patterns: Vec<String>,
     #[serde(default)]
     pub no_cache_support: bool,
     #[serde(default)]

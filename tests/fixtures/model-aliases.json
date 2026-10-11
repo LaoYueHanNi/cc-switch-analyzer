@@ -1,0 +1,37 @@
+{
+  "models": [
+    { "modelId": "Claude-Opus-5.5", "aliases": ["claude-opus-5-5"], "aliasPatterns": ["^claude-opus-5-5(-(thinking-)?(low|medium|high|extra-high|xhigh|max))?$"] },
+    { "modelId": "grok-4.7", "aliases": [], "aliasPatterns": ["^grok-4\\.7(-(low|medium|high|xhigh))?$", "^cursor-grok-4\\.7(-(low|medium|high|xhigh))?$"] },
+    { "modelId": "grok-4.7-fast", "aliases": [], "aliasPatterns": ["^grok-4\\.7-fast(-(low|medium|high|xhigh))?$", "^grok-4\\.7(-(low|medium|high|xhigh))?-fast$", "^cursor-grok-4\\.7(-(low|medium|high|xhigh))?-fast$"] },
+    { "modelId": "gpt-5.1-codex-max", "aliases": [], "aliasPatterns": ["^gpt-5\\.1-codex-max(-(high|xhigh))?$"] },
+    { "modelId": "gemini-3.8-flash", "aliases": [], "aliasPatterns": ["^gemini-3\\.8-flash(-(low|medium|high|n))?$"] },
+    { "modelId": "custom", "userAliases": ["my-model"], "aliasPatterns": [] }
+  ],
+  "cases": [
+    ["Claude-Opus-5.5", "Claude-Opus-5.5"],
+    ["CLAUDE-OPUS-5-5", "Claude-Opus-5.5"],
+    ["Claude-Opus-5-5-Thinking-High", "Claude-Opus-5.5"],
+    ["CLAUDE-OPUS-5-5-XHIGH", "Claude-Opus-5.5"],
+    ["GROK-4.7-HIGH", "grok-4.7"],
+    ["Cursor-Grok-4.7-High-Fast", "grok-4.7-fast"],
+    ["GROK-4.7-FAST-HIGH", "grok-4.7-fast"],
+    ["GPT-5.1-CODEX-MAX-HIGH", "gpt-5.1-codex-max"],
+    ["MY-MODEL", "custom"],
+    ["GEMINI-3.8-FLASH-N", "gemini-3.8-flash"],
+    ["gemini-3.8-flash-n-high", null],
+    ["gemini-3.8-flash-n-fast", null],
+    ["gemini-3.8-flash-nx", null],
+    ["claude-opus-5-5-high\n", null],
+    ["claude-opus-5-5-high\r\n", null],
+    ["claude-opus-5-50-high", null],
+    ["claude-opus-5-5-fast", null],
+    ["claude-opus-5-5-high-fast", null],
+    ["claude-opus-5-5-mini", null],
+    ["claude-opus-5-5-pro", null],
+    ["provider/grok-4.7-high", null],
+    ["grok-4x7-high", null],
+    ["grok-4.7-fast-ultra", null],
+    ["gpt-5.1-codex-high", null],
+    ["unknown-model", null]
+  ]
+}

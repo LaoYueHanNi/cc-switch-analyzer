@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::models::*;
+use crate::services::model_resolver::ModelResolver;
 use crate::utils::*;
 
 fn serialize_daily_slots(slots: &[DailySlot]) -> String {
@@ -108,6 +109,9 @@ impl AppDbService {
         }
         if version < 16 {
             self.migrate_v16()?;
+        }
+        if version < 17 {
+            self.migrate_v17()?;
         }
 
         Ok(())
@@ -533,6 +537,16 @@ impl AppDbService {
     }
 
 
+    fn migrate_v17(&mut self) -> Result<(), String> {
+        if self.db.prepare("SELECT alias_patterns FROM cloud_pricing_cache LIMIT 0").is_err() {
+            self.db.execute_batch(
+                "ALTER TABLE cloud_pricing_cache ADD COLUMN alias_patterns TEXT NOT NULL DEFAULT '[]';"
+            ).map_err(|e| format!("迁移 v17 (模型别名正则) 失败: {}", e))?;
+        }
+        // Do not mark the cache complete until a full table has been downloaded.
+        self.set_schema_version(17)
+    }
+
     // ========== 任务 CRUD ==========
 
     pub fn list_tasks(&self) -> Result<Vec<Task>, String> {
@@ -879,6 +893,75 @@ impl AppDbService {
     }
 
     // ========== 定价覆盖 CRUD ==========
+
+    /// 将历史名称迁移到规范 ID。只改应用自有库，所有解析先完成再事务写入。
+    pub fn normalize_pricing_model_ids(
+        &self,
+        resolver: &ModelResolver,
+        alias_owners: &HashMap<String, String>,
+    ) -> Result<(), String> {
+        let mut stmt = self.db.prepare(
+            "SELECT model_id FROM pricing_overrides UNION SELECT model_id FROM time_pricing_overrides ORDER BY model_id",
+        ).map_err(|e| e.to_string())?;
+        let ids = stmt.query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        let mut moves = Vec::new();
+        for old in ids {
+            if let Some(canonical) = resolver.resolve(&old)? {
+                if old != canonical {
+                    // Unknown user owners may themselves be another alias. Never move
+                    // stored rows through a chain/cycle: that can overwrite custom models.
+                    if resolver.resolve(&canonical)?.is_some_and(|target| target != canonical) {
+                        return Err(format!("模型别名归属存在链式或循环引用: {} → {}", old, canonical));
+                    }
+                    moves.push((old, canonical));
+                }
+            }
+        }
+        let mut alias_moves: Vec<_> = alias_owners.iter().filter(|(old, canonical)| old != canonical).collect();
+        alias_moves.sort_by(|a, b| a.0.cmp(b.0));
+        if moves.is_empty() && alias_moves.is_empty() { return Ok(()); }
+        let tx = self.db.unchecked_transaction().map_err(|e| e.to_string())?;
+        for (old, canonical) in &moves {
+            // 每个档位保留较新的价格及峰谷；同秒优先现有规范键，其余按旧键字典序。
+            tx.execute(
+                "INSERT INTO pricing_overrides
+                    (model_id, threshold, input_cost_per_million, output_cost_per_million,
+                     cache_read_cost_per_million, cache_creation_cost_per_million, updated_at, daily_slots)
+                 SELECT ?, threshold, input_cost_per_million, output_cost_per_million,
+                        cache_read_cost_per_million, cache_creation_cost_per_million, updated_at, daily_slots
+                 FROM pricing_overrides WHERE model_id = ?
+                 ON CONFLICT(model_id, threshold) DO UPDATE SET
+                    input_cost_per_million = excluded.input_cost_per_million,
+                    output_cost_per_million = excluded.output_cost_per_million,
+                    cache_read_cost_per_million = excluded.cache_read_cost_per_million,
+                    cache_creation_cost_per_million = excluded.cache_creation_cost_per_million,
+                    updated_at = excluded.updated_at, daily_slots = excluded.daily_slots
+                 WHERE COALESCE(excluded.updated_at, 0) > COALESCE(pricing_overrides.updated_at, 0)",
+                params![canonical, old],
+            ).map_err(|e| e.to_string())?;
+            tx.execute("DELETE FROM pricing_overrides WHERE model_id = ?", params![old])
+                .map_err(|e| e.to_string())?;
+            tx.execute("UPDATE time_pricing_overrides SET model_id = ? WHERE model_id = ?", params![canonical, old])
+                .map_err(|e| e.to_string())?;
+            // 相同时间范围和档位保留最新 id；其他范围/档位及其 id 保留。
+            tx.execute(
+                "DELETE FROM time_pricing_overrides WHERE model_id = ? AND id NOT IN
+                 (SELECT MAX(id) FROM time_pricing_overrides WHERE model_id = ? GROUP BY start_time, end_time, threshold)",
+                params![canonical, canonical],
+            ).map_err(|e| e.to_string())?;
+        }
+        for (old, canonical) in alias_moves {
+            tx.execute(
+                "INSERT OR IGNORE INTO model_aliases (model_id, alias) SELECT ?, alias FROM model_aliases WHERE model_id = ?",
+                params![canonical, old],
+            ).map_err(|e| e.to_string())?;
+            tx.execute("DELETE FROM model_aliases WHERE model_id = ?", params![old])
+                .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
 
     pub fn get_all_overrides(&self) -> Result<Vec<PricingOverride>, String> {
         let mut stmt = self
@@ -1487,6 +1570,7 @@ impl AppDbService {
 
     /// 将云端定价数据写入缓存（事务替换）
     pub fn save_cloud_pricing(&self, data: &crate::models::CloudPricingData) -> Result<(), String> {
+        crate::services::cloud_pricing::validate_cloud_pricing(data)?;
         let tx = self.db.unchecked_transaction().map_err(|e| format!("开启事务失败: {}", e))?;
 
         tx.execute_batch("DELETE FROM cloud_pricing_cache")
@@ -1496,12 +1580,13 @@ impl AppDbService {
 
         for model in &data.models {
             let aliases_str = model.aliases.join(",");
+            let patterns_json = serde_json::to_string(&model.alias_patterns).map_err(|e| e.to_string())?;
             let root_slots = serialize_daily_slots(&model.daily_slots);
             tx.execute(
                 "INSERT INTO cloud_pricing_cache
                     (model_id, display_name, input_cost_per_million, output_cost_per_million,
-                     cache_read_cost_per_million, cache_creation_cost_per_million, threshold, aliases, no_cache_support, family, daily_slots)
-                 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
+                     cache_read_cost_per_million, cache_creation_cost_per_million, threshold, aliases, alias_patterns, no_cache_support, family, daily_slots)
+                 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)",
                 params![
                     model.model_id,
                     model.model_id,
@@ -1510,6 +1595,7 @@ impl AppDbService {
                     model.cache_read_cost_per_million,
                     model.cache_creation_cost_per_million,
                     aliases_str,
+                    patterns_json,
                     model.no_cache_support,
                     model.family,
                     root_slots,
@@ -1601,8 +1687,27 @@ impl AppDbService {
             params![families_json],
         ).map_err(|e| format!("写入云端定价 families 失败: {}", e))?;
 
+        tx.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('cloud_pricing_cache_format', '2')", []
+        ).map_err(|e| format!("写入定价缓存格式失败: {}", e))?;
         tx.commit().map_err(|e| format!("提交云端定价缓存失败: {}", e))?;
         Ok(())
+    }
+
+    pub fn load_cloud_alias_patterns(&self) -> Result<HashMap<String, Vec<String>>, String> {
+        let mut stmt = self.db.prepare(
+            "SELECT model_id, alias_patterns FROM cloud_pricing_cache WHERE threshold = 0"
+        ).map_err(|e| format!("查询云端别名正则失败: {}", e))?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?;
+        let mut result = HashMap::new();
+        for row in rows {
+            let (model_id, json) = row.map_err(|e| e.to_string())?;
+            let patterns = serde_json::from_str(&json)
+                .map_err(|e| format!("模型 {} 的缓存别名正则损坏: {}", model_id, e))?;
+            result.insert(model_id, patterns);
+        }
+        Ok(result)
     }
 
     /// 从缓存读取云端定价（返回基础行 + 按模型分组的上下文档位 + 按 model_id 分组的云端时间规则 + 云端别名 + 模型家族）
@@ -1884,6 +1989,7 @@ impl AppDbService {
                 cache_creation_cost_per_million REAL NOT NULL,
                 threshold INTEGER NOT NULL DEFAULT 0,
                 aliases TEXT NOT NULL DEFAULT '',
+                alias_patterns TEXT NOT NULL DEFAULT '[]',
                 no_cache_support INTEGER NOT NULL DEFAULT 0,
                 family TEXT NOT NULL DEFAULT '',
                 daily_slots TEXT NOT NULL DEFAULT '[]',
@@ -1967,6 +2073,42 @@ impl AppDbService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cyclic_custom_alias_owners_cannot_overwrite_persisted_prices() {
+        let db = create_db();
+        db.save_override("custom-a", 1.0, 2.0, 0.1, 3.0).unwrap();
+        db.save_override("custom-b", 4.0, 5.0, 0.4, 6.0).unwrap();
+        let mut resolver = ModelResolver::default();
+        resolver.add_alias("custom-a", "custom-b");
+        resolver.add_alias("custom-b", "custom-a");
+        assert!(db.normalize_pricing_model_ids(&resolver, &HashMap::new()).is_err());
+        let prices = db.get_all_overrides().unwrap();
+        assert_eq!(prices.len(), 2);
+        assert_eq!(prices[0].model_id, "custom-a");
+        assert_eq!(prices[0].input_cost_per_million, 1.0);
+        assert_eq!(prices[1].model_id, "custom-b");
+        assert_eq!(prices[1].input_cost_per_million, 4.0);
+    }
+
+    #[test]
+    fn v17_preserves_old_prices_and_aliases_and_is_idempotent() {
+        let mut db = create_db();
+        db.conn().execute_batch(
+            "ALTER TABLE cloud_pricing_cache DROP COLUMN alias_patterns;
+             INSERT INTO cloud_pricing_cache (model_id, display_name, input_cost_per_million,
+                output_cost_per_million, cache_read_cost_per_million, cache_creation_cost_per_million, aliases)
+             VALUES ('old', 'old', 1, 2, 0.1, 3, 'old-alias');"
+        ).unwrap();
+        db.migrate_v17().unwrap();
+        db.migrate_v17().unwrap();
+        let (prices, _, _, aliases, _, _) = db.load_cloud_pricing().unwrap();
+        assert_eq!(prices[0].input_cost_per_million, 1.0);
+        assert_eq!(aliases["old"], vec!["old-alias"]);
+        assert!(db.load_cloud_alias_patterns().unwrap()["old"].is_empty());
+        assert_eq!(db.get_schema_version(), 17);
+        assert!(db.get_setting("cloud_pricing_cache_format").is_none());
+    }
 
     fn create_db() -> AppDbService {
         AppDbService::new_in_memory().unwrap()
@@ -2221,6 +2363,7 @@ mod tests {
                         daily_slots: vec![],
                     }],
                     aliases: vec!["model-a-alias".to_string()],
+                    alias_patterns: vec![],
                     no_cache_support: false,
                     family: "gpt".to_string(),
                     daily_slots: vec![],

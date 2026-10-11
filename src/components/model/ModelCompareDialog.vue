@@ -83,6 +83,7 @@ import { ref, computed, watch } from 'vue'
 import { NModal, NCard, NSelect, NButton } from 'naive-ui'
 import { formatCost, formatRate } from '@/utils/format'
 import { getActiveRate } from '@/utils/pricing'
+import { createModelResolver } from '@/utils/modelResolver'
 import type { ModelBreakdown } from '@/types/database'
 import type { PricingData } from '@/types/pricing'
 import type { CompareBucket } from '@/types/common'
@@ -102,6 +103,7 @@ defineEmits<{
 }>()
 
 const targetModel = ref<string | null>(null)
+const modelResolver = computed(() => createModelResolver(props.allModels))
 
 const modelOptions = computed(() =>
   props.allModels
@@ -117,7 +119,7 @@ const fuzzyFilter = (pattern: string, option: { label: string }) =>
 const comparisonResult = computed(() => {
   if (!targetModel.value || !props.modelData) return null
 
-  const sourcePricing = props.allModels.find(m => m.modelId === props.modelData!.model || m.aliases?.includes(props.modelData!.model))
+  const sourcePricing = modelResolver.value.get(props.modelData.model)
   const targetPricing = props.allModels.find(m => m.modelId === targetModel.value)
   if (!targetPricing) return null
 

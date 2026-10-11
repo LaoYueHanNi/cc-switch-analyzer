@@ -1,10 +1,12 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { createModelResolver } from '@/utils/modelResolver'
 import type { PricingData, PricingFamily, TokenDimensions } from '@/types/pricing'
 
 // 定价状态管理
 export const usePricingStore = defineStore('pricing', () => {
   const pricingData = ref<PricingData[]>([])
+  const modelResolver = computed(() => createModelResolver(pricingData.value))
   const families = ref<PricingFamily[]>([])
   // 模型页到定价页的一次性 token 交接请求。
   const pendingTokenImport = ref<TokenDimensions | null>(null)
@@ -21,6 +23,7 @@ export const usePricingStore = defineStore('pricing', () => {
 
   return {
     pricingData,
+    modelResolver,
     families,
     pendingTokenImport,
     requestTokenImport,

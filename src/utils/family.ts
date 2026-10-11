@@ -1,4 +1,5 @@
 import type { PricingData, PricingFamily } from '@/types/pricing'
+import { createModelResolver } from '@/utils/modelResolver'
 
 export const OTHER_FAMILY: PricingFamily = { id: 'other', label: '其他' }
 
@@ -38,20 +39,19 @@ export function familyLabel(id: string, families: PricingFamily[]): string {
 export function buildModelFamilyMap(
   pricingList: PricingData[],
   effectiveFamilies: PricingFamily[]
-): Map<string, string> {
-  const map = new Map<string, string>()
-  for (const p of pricingList) {
-    const fid = resolveFamilyId(p.family, effectiveFamilies)
-    map.set(p.modelId, fid)
-    for (const alias of p.aliases || []) map.set(alias, fid)
-    for (const alias of p.userAliases || []) map.set(alias, fid)
+): { get: (name: string) => string | undefined } {
+  const resolver = createModelResolver(pricingList)
+  return {
+    get(name) {
+      const pricing = resolver.get(name)
+      return pricing ? resolveFamilyId(pricing.family, effectiveFamilies) : undefined
+    }
   }
-  return map
 }
 
 export function lookupModelFamily(
   modelId: string,
-  modelFamilyMap: Map<string, string>
+  modelFamilyMap: { get: (name: string) => string | undefined }
 ): string {
   return modelFamilyMap.get(modelId) || 'other'
 }

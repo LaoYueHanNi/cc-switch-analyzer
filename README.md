@@ -176,6 +176,8 @@ changelog-site/            # 变更日志生成与展示
 
 模型定价来自 [model-price-table](https://gitee.com/oyw125/model-price-table)（Gitee 公开仓库），应用启动时拉取最新数据。可在应用内编辑模型定价并保存本地覆盖。
 
+模型识别依次匹配模型 ID、历史／本地精确别名、云端正则别名，均忽略 ASCII 字母大小写。正则要求完整名称匹配，保留 `fast`、`mini` 等模型身份；未知或存在歧义的名称不会推测价格。别名管理可查看云端正则规则，并添加本地精确别名；下载失败时继续使用已缓存的定价。
+
 ## 许可证
 
 [MIT License](LICENSE)
