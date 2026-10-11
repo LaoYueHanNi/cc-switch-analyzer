@@ -1,6 +1,22 @@
 [
   {
-    "version": "Unreleased",
+    "version": "0.8.10",
+    "date": "2026-10-11",
+    "commits": [
+      {
+        "hash": "40a3b9c",
+        "subject": "feat(pricing): 支持云端正则别名并统一历史定价归属",
+        "date": "2026-10-11"
+      },
+      {
+        "hash": "6f6473a",
+        "subject": "fix(traffic-monitor): 插件部分源失败时仍展示今日数字",
+        "date": "2026-10-10"
+      }
+    ]
+  },
+  {
+    "version": "0.8.9",
     "date": "2026-10-10",
     "commits": [
       {
