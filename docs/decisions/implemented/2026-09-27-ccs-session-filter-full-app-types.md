@@ -2,6 +2,8 @@
 
 Status: implemented
 
+本记录关于 `claude-desktop` 全局排除的部分已由 [CCS 桌面端保留实时数据、排除会话统计](2026-10-15-ccs-desktop-realtime.md) 取代；其余会话日志同步终端过滤决定仍然有效。
+
 ## Problem
 
 CCS 数据源的「过滤会话日志同步写入记录」只在 `CCS_SESSION_APPS`（`src/components/layout/settings/SettingsDataSources.vue`）列出 4 种终端：opencode / claude / codex / grokbuild，与本应用 `multi_terminal` 支持的启动终端一一对应。但 cc-switch 上游同步写入会话用量的终端不止这 4 种：实测本机 `~/.cc-switch/cc-switch.db` 的 `proxy_request_logs` 中，`app_type='mcode'`（`data_source='mcode_session'`）已有 475 条会话同步记录，UI 无选项、无法排除；`providers` 表还出现 `gemini`、`hermes`，将来同样会产生会话同步记录。开启过滤的用户若同时使用 MCode，统计仍被会话日志重复计入。

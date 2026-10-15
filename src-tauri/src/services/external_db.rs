@@ -578,6 +578,7 @@ impl ExternalDbService {
                              ELSE input_tokens + cache_read_tokens END) AS max_ctx
              FROM proxy_request_logs
              WHERE session_id IN ({})
+               AND app_type != 'claude-desktop'
                AND input_tokens + cache_read_tokens > 0
              GROUP BY session_id",
             placeholders.join(",")
@@ -613,10 +614,12 @@ impl ExternalDbService {
              FROM proxy_request_logs l
              {}
                AND l.session_id IS NOT NULL AND l.session_id != ''
+               AND l.app_type != 'claude-desktop'
                AND l.session_id IN (
                    SELECT s.session_id FROM proxy_request_logs s
                    {}
                      AND s.session_id IS NOT NULL AND s.session_id != ''
+                     AND s.app_type != 'claude-desktop'
                    GROUP BY s.session_id ORDER BY COUNT(*) DESC LIMIT {}
                )
              GROUP BY l.session_id, l.model",
@@ -660,10 +663,12 @@ impl ExternalDbService {
              FROM proxy_request_logs l
              {}
                AND l.session_id IS NOT NULL AND l.session_id != ''
+               AND l.app_type != 'claude-desktop'
                AND l.session_id IN (
                    SELECT s.session_id FROM proxy_request_logs s
                    {}
                      AND s.session_id IS NOT NULL AND s.session_id != ''
+                     AND s.app_type != 'claude-desktop'
                    GROUP BY s.session_id ORDER BY COUNT(*) DESC LIMIT {}
                )
              ORDER BY l.session_id, l.created_at",
@@ -716,6 +721,7 @@ impl ExternalDbService {
                 l.app_type
              FROM proxy_request_logs l
              {}
+               AND l.app_type != 'claude-desktop'
                AND l.session_id IN ({})
              ORDER BY l.session_id, l.created_at",
             where_sql, placeholders.join(",")
@@ -767,6 +773,7 @@ impl ExternalDbService {
                 l.app_type
              FROM proxy_request_logs l
              {}
+               AND l.app_type != 'claude-desktop'
                AND l.session_id IN ({})
              GROUP BY l.session_id, l.model, l.app_type",
             where_sql, placeholders.join(",")
@@ -860,6 +867,7 @@ impl ExternalDbService {
         let sql = format!(
             "SELECT session_id, created_at FROM proxy_request_logs
              WHERE session_id IN ({})
+               AND app_type != 'claude-desktop'
              ORDER BY session_id, created_at",
             placeholders.join(",")
         );
@@ -893,7 +901,6 @@ impl ExternalDbService {
             FROM proxy_request_logs
             WHERE created_at >= ?
               AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
-              AND app_type != 'claude-desktop'
             GROUP BY bucket
             ORDER BY bucket";
 
@@ -948,7 +955,7 @@ impl ExternalDbService {
                 FROM proxy_request_logs
                 WHERE created_at >= ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
-                  AND app_type != 'claude-desktop'{ccs_sql}
+                  {ccs_sql}
                 ORDER BY created_at DESC"), vec![Box::new(s)]),
             None => (format!("
                 SELECT session_id, model, provider_id, created_at,
@@ -958,7 +965,7 @@ impl ExternalDbService {
                        {first_token_expr}
                 FROM proxy_request_logs
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
-                  AND app_type != 'claude-desktop'{ccs_sql}
+                  {ccs_sql}
                 ORDER BY created_at DESC
                 LIMIT 500"), vec![]),
         };
@@ -1015,7 +1022,7 @@ impl ExternalDbService {
                 FROM proxy_request_logs
                 WHERE created_at >= ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
-                  AND app_type != 'claude-desktop'{ccs_sql}
+                  {ccs_sql}
                 ORDER BY created_at DESC"), vec![Box::new(s)]),
             None => (format!("
                 SELECT session_id, model, provider_id, created_at,
@@ -1025,7 +1032,7 @@ impl ExternalDbService {
                        {first_token_expr}
                 FROM proxy_request_logs
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
-                  AND app_type != 'claude-desktop'{ccs_sql}
+                  {ccs_sql}
                 ORDER BY created_at DESC
                 LIMIT 500"), vec![]),
         };
@@ -1169,7 +1176,7 @@ mod tests {
         assert!(!is_cache_inclusive_app("claude"));
     }
 
-    /// 建一张带 data_source 和可选 first_token_ms 列的临时 CCS 库，插入代理 + 三类会话同步记录
+    /// 建临时测试库，插入 CLI / Desktop 代理与三类会话同步记录；不接触真实 CCS 库。
     fn temp_ccs_db(with_data_source: bool, with_first_token: bool) -> (std::path::PathBuf, String) {
         let path = std::env::temp_dir().join(format!(
             "ccsa_extdb_test_{}_{}.db",
@@ -1223,6 +1230,7 @@ mod tests {
             (200, "claude", "session_log", "claude-3", "p2"),
             (300, "opencode", "opencode_session", "gpt-5", "p3"),
             (400, "codex", "codex_session", "gpt-5.4-codex", "p4"),
+            (500, "claude-desktop", "proxy", "claude-desktop-model", "p5"),
         ];
         for (ts, app, ds, model, pid) in rows {
             let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
@@ -1260,7 +1268,7 @@ mod tests {
         let mut svc = ExternalDbService::new();
         svc.open(&path_str).unwrap();
 
-        // 不过滤：4 条全部返回
+        // 通用统计保留桌面端用量，但不将其逐请求 session_id 用于会话聚合
         let all = svc
             .get_filtered_raw_records(&FilterParams {
                 from_epoch: None,
@@ -1271,9 +1279,33 @@ mod tests {
                 ccs_filter_session_apps: None,
             })
             .unwrap();
-        assert_eq!(all.len(), 4);
+        assert_eq!(all.len(), 5);
+        assert!(all.iter().find(|r| r.model == "claude-desktop-model").unwrap().session_id.is_empty());
+        assert_eq!(crate::services::pipeline::aggregate_session_breakdown(&all).len(), 4);
+        for trend in [
+            crate::services::pipeline::aggregate_daily_trend(&all, 8),
+            crate::services::pipeline::aggregate_hourly_trend(&all, 8),
+        ] {
+            let desktop = trend.iter().find(|r| r.model == "claude-desktop-model").unwrap();
+            assert_eq!(desktop.requests, 1);
+            assert_eq!(desktop.input_tokens, 500);
+        }
 
-        // 过滤 claude + opencode 会话同步：仅剩 proxy 与 codex_session
+        // 会话统计仍排除 claude-desktop，避免其逐请求 session_id 产生碎片会话
+        let sessions = svc
+            .get_session_breakdown(&FilterParams {
+                from_epoch: None,
+                to_epoch: None,
+                tz_offset: None,
+                provider_id: None,
+                model_id: None,
+                ccs_filter_session_apps: None,
+            })
+            .unwrap();
+        assert_eq!(sessions.len(), 4);
+        assert!(sessions.iter().all(|s| s.session_id != "s-claude-desktop-500"));
+
+        // 过滤 claude + opencode 会话同步：保留 proxy、claude-desktop proxy 与 codex_session
         let filtered = svc
             .get_filtered_raw_records(&FilterParams {
                 from_epoch: None,
@@ -1284,10 +1316,11 @@ mod tests {
                 ccs_filter_session_apps: Some(vec!["claude".into(), "opencode".into()]),
             })
             .unwrap();
-        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered.len(), 3);
         let apps: Vec<&str> = filtered.iter().map(|r| r.model.as_str()).collect();
-        // 两条分别为 proxy(claude-3) 与 codex_session(gpt-5.4-codex)
+        // 两类代理请求与 codex_session 均保留
         assert!(apps.contains(&"claude-3"));
+        assert!(apps.contains(&"claude-desktop-model"));
         assert!(apps.contains(&"gpt-5.4-codex"));
 
         // 空列表等价于不过滤
@@ -1301,9 +1334,50 @@ mod tests {
                 ccs_filter_session_apps: Some(Vec::new()),
             })
             .unwrap();
-        assert_eq!(empty.len(), 4);
+        assert_eq!(empty.len(), 5);
 
-        std::fs::remove_file(&path).ok();
+        svc.close();
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn session_details_exclude_claude_desktop() {
+        let (path, path_str) = temp_ccs_db(true, true);
+        let mut svc = ExternalDbService::new();
+        svc.open(&path_str).unwrap();
+        let params = FilterParams {
+            from_epoch: None,
+            to_epoch: None,
+            tz_offset: None,
+            provider_id: None,
+            model_id: None,
+            ccs_filter_session_apps: None,
+        };
+        let ids = vec!["s-claude-100".to_string(), "s-claude-desktop-500".to_string()];
+
+        let models = svc.get_session_model_tokens(&params).unwrap();
+        assert_eq!(models.len(), 4);
+        assert!(models.iter().all(|r| r.session_id != ids[1]));
+        let requests = svc.get_session_request_tokens(&params).unwrap();
+        assert_eq!(requests.len(), 4);
+        assert!(requests.iter().all(|r| r.session_id != ids[1]));
+
+        // 即使显式传入桌面端 session ID，各详情入口也不返回桌面端数据
+        let models_for_ids = svc.get_session_model_tokens_for_ids(&params, &ids).unwrap();
+        assert_eq!(models_for_ids.len(), 1);
+        assert_eq!(models_for_ids[0].session_id, ids[0]);
+        let requests_for_ids = svc.get_session_request_tokens_for_ids(&params, &ids).unwrap();
+        assert_eq!(requests_for_ids.len(), 1);
+        assert_eq!(requests_for_ids[0].session_id, ids[0]);
+        let contexts = svc.get_session_max_context_widths(&ids).unwrap();
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts.get(&ids[0]), Some(&100));
+        let timestamps = svc.get_session_timestamps(&ids).unwrap();
+        assert_eq!(timestamps.len(), 1);
+        assert_eq!(timestamps.get(&ids[0]), Some(&vec![100]));
+
+        svc.close();
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
@@ -1320,25 +1394,39 @@ mod tests {
             out
         };
 
-        // 未设置过滤：4 条全部流出
+        // 未设置过滤：5 条全部流出，包含 claude-desktop
         let all = collect(&svc);
-        assert_eq!(all.len(), 4);
+        assert_eq!(all.len(), 5);
 
-        // 过滤 claude + opencode 会话同步：仅剩 proxy(claude) 与 codex_session
+        // 过滤 claude + opencode 会话同步：保留 proxy(claude)、proxy(claude-desktop) 与 codex_session
         svc.set_ccs_filter_apps(Some(&["claude".to_string(), "opencode".to_string()]));
         let filtered = collect(&svc);
-        assert_eq!(filtered.len(), 2);
-        // 按 created_at DESC：codex_session(400) 在前，proxy(100) 在后
-        assert_eq!(filtered[0].1, "gpt-5.4-codex");
-        assert_eq!(filtered[0].9, 200); // 400 / 2 = 200 首字提取正确！
-        assert_eq!(filtered[1].1, "claude-3");
-        assert_eq!(filtered[1].9, 50);  // 100 / 2 = 50 首字提取正确！
+        assert_eq!(filtered.len(), 3);
+        // 按 created_at DESC：claude-desktop(500)、codex_session(400)、proxy(100)
+        assert_eq!(filtered[0].1, "claude-desktop-model");
+        assert_eq!(filtered[0].9, 250); // 500 / 2 = 250 首字提取正确！
+        assert_eq!(filtered[1].1, "gpt-5.4-codex");
+        assert_eq!(filtered[1].9, 200); // 400 / 2 = 200 首字提取正确！
+        assert_eq!(filtered[2].1, "claude-3");
+        assert_eq!(filtered[2].9, 50);  // 100 / 2 = 50 首字提取正确！
+
+        // 首屏和 >= 秒级游标的增量入口都保留桌面端请求及原始 session ID
+        assert_eq!(svc.get_recent_request_logs_raw(None).unwrap().len(), 3);
+        let recent = svc.get_recent_request_logs_raw(Some(500)).unwrap();
+        let mut incremental = Vec::new();
+        svc.stream_records(Some(500), &mut |r| incremental.push(r)).unwrap();
+        assert_eq!(incremental, recent);
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].0, "s-claude-desktop-500");
+        assert_eq!(recent[0].4, 500);
+        assert_eq!(recent[0].9, 250);
 
         // 清除过滤（None）恢复全量
         svc.set_ccs_filter_apps(None);
-        assert_eq!(collect(&svc).len(), 4);
+        assert_eq!(collect(&svc).len(), 5);
 
-        std::fs::remove_file(&path).ok();
+        svc.close();
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
@@ -1352,7 +1440,7 @@ mod tests {
 
         let mut stream_records = Vec::new();
         svc.stream_records(None, &mut |r| stream_records.push(r)).unwrap();
-        assert_eq!(stream_records.len(), 4);
+        assert_eq!(stream_records.len(), 5);
         assert_eq!(stream_records[0].9, 0); // 缺列时降级首字为 0
 
         let records = svc
@@ -1365,8 +1453,31 @@ mod tests {
                 ccs_filter_session_apps: Some(vec!["claude".into(), "opencode".into()]),
             })
             .unwrap();
-        assert_eq!(records.len(), 4);
+        assert_eq!(records.len(), 5);
 
-        std::fs::remove_file(&path).ok();
+        svc.close();
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn realtime_minute_trend_includes_claude_desktop() {
+        let (path, path_str) = temp_ccs_db(true, true);
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "UPDATE proxy_request_logs SET created_at = CAST(strftime('%s', 'now') AS INTEGER)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let mut svc = ExternalDbService::new();
+        svc.open(&path_str).unwrap();
+        let trend = svc.get_minute_level_token_trend().unwrap();
+        assert_eq!(trend.iter().map(|bucket| bucket.requests).sum::<i64>(), 5);
+        assert_eq!(trend.iter().map(|bucket| bucket.input_tokens).sum::<i64>(), 1500);
+
+        svc.close();
+        std::fs::remove_file(&path).unwrap();
     }
 }
