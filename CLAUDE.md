@@ -149,7 +149,7 @@ Cursor CSV 行是聚合用量，不能用 `input + cache_read` 推断单次请�
 
 CCS 会话日志同步记录可按 OpenCode、Claude Code、Codex、Grok Build、MCode、Gemini CLI、Hermes 过滤，代理转发记录保留；`claude-desktop` 继续排除在会话统计及会话详情之外，但保留在实时请求列表和实时分钟趋势中。设置写入应用库，并同步 `SharedState.ccs_filter_session_apps`，主页面、TrafficMonitor 和 macOS 菜单栏共用该口径。
 
-`DataSource::stream_records` 的秒级游标采用闭式语义：返回 `created_at >= since`，前端 `useRealtimePolling` 用指纹去重，避免漏掉同秒后到的记录实时页按数据源展示，分别显示首字、耗时与输出/总速度；缺失指标不伪造。
+`DataSource::stream_records` 的秒级游标采用闭式语义：返回 `created_at >= since`，前端 `useRealtimePolling` 用指纹去重，避免漏掉同秒后到的记录。实时响应保留重映射前的 `sourceSessionId` 参与指纹，`sessionId` 的 Codex 会话归属映射变化不得导致重复追加。实时页按数据源展示，分别显示首字、耗时与输出/总速度；缺失指标不伪造。
 
 ### 会话与终端启动
 

@@ -91,6 +91,65 @@ describe('useRealtimePolling 增量合并去重', () => {
     stopPolling()
   })
 
+  it.each([
+    ['原始 ID 补全为真实会话', '0a9c789d-9ae3-4532-8a6c-a3ed77306382', 'codex-session'],
+    ['缓存重建后暂时失去映射', 'codex-session', '0a9c789d-9ae3-4532-8a6c-a3ed77306382'],
+  ])('Codex %s时不重复追加请求或累计用量', async (_, firstSessionId, nextSessionId) => {
+    const request = makeLog({
+      createdAt: 1792056248,
+      dbType: 'CCS',
+      providerId: 'openai',
+      sourceSessionId: '0a9c789d-9ae3-4532-8a6c-a3ed77306382',
+      inputTokens: 7029,
+      outputTokens: 6692,
+      cacheReadTokens: 71808,
+      latencyMs: 78455,
+      totalCost: 0.42,
+    })
+    vi.mocked(platformAdapter.queryRealtimeLogs)
+      .mockResolvedValueOnce([{ ...request, sessionId: firstSessionId }])
+      .mockResolvedValueOnce([{ ...request, sessionId: nextSessionId }])
+
+    const { logs, startPolling, stopPolling } = useRealtimePolling()
+    startPolling()
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(platformAdapter.queryRealtimeLogs).toHaveBeenLastCalledWith(request.createdAt)
+      expect(logs.value).toHaveLength(1)
+      expect(logs.value.reduce((sum, row) => sum + row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreationTokens, 0)).toBe(85529)
+      expect(logs.value.reduce((sum, row) => sum + row.totalCost, 0)).toBe(0.42)
+    } finally {
+      stopPolling()
+    }
+  })
+
+  it('原始 ID 不同的同秒同用量请求映射到同一 Codex 会话时仍分别保留', async () => {
+    const request = makeLog({
+      createdAt: 2000,
+      dbType: 'CCS',
+      providerId: 'openai',
+      sessionId: 'codex-session',
+      sourceSessionId: 'source-request-a',
+    })
+    vi.mocked(platformAdapter.queryRealtimeLogs)
+      .mockResolvedValueOnce([request])
+      .mockResolvedValueOnce([
+        { ...request, sourceSessionId: 'source-request-b' },
+        request,
+      ])
+
+    const { logs, startPolling, stopPolling } = useRealtimePolling()
+    startPolling()
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(logs.value.map(row => row.sourceSessionId)).toEqual(['source-request-b', 'source-request-a'])
+    } finally {
+      stopPolling()
+    }
+  })
+
   it('新秒记录追加且游标推进', async () => {
     vi.mocked(platformAdapter.queryRealtimeLogs).mockResolvedValueOnce([
       makeLog({ createdAt: 2000 })

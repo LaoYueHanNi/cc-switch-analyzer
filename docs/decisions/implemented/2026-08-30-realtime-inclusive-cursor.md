@@ -11,7 +11,7 @@ Status: implemented
 全源统一增量游标语义为「返回 created_at >= since，且过滤精度与返回 created_at 的精度一致」：
 
 - 各数据源 `stream_records` / `get_recent_request_logs_raw` 的 since 过滤由 `>` 改为 `>=`；毫秒存库的源（ZCode）在 SQL 内同样截断到秒：`(started_at / 1000) >= ?`。
-- `>=` 会重复返回游标秒内已见记录，由前端 `useRealtimePolling` 的持久指纹集（`dbType|providerId|sessionId|createdAt|model|tokens|latencyMs`）去重兜底；`refreshNow` 同步重置指纹集。
+- `>=` 会重复返回游标秒内已见记录，由前端 `useRealtimePolling` 的持久指纹集（`dbType|providerId|sourceSessionId|createdAt|model|tokens|latencyMs`）去重兜底；旧响应缺少 `sourceSessionId` 时回退 `sessionId`，`refreshNow` 同步重置指纹集。原始身份与会话归属的边界见[实时请求去重使用稳定的源会话 ID](2026-10-15-realtime-stable-source-identity.md)。
 - 契约文档化在 `DataSource::stream_records` trait 注释（`src-tauri/src/services/data_source.rs`），未来新数据源接入按此实现。
 
 ## Alternatives considered

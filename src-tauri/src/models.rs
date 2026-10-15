@@ -186,6 +186,8 @@ pub struct RealtimeBucket {
 #[serde(rename_all = "camelCase")]
 pub struct RealtimeRequestLog {
     pub session_id: String,
+    /// 数据源原始会话 ID：不随 Codex 会话归属映射变化，供前端稳定去重。
+    pub source_session_id: String,
     pub model: String,
     pub provider_id: String,
     /// 记录所属数据源 canonical 名(如 "CCS")，用于实时 Tab 行首数据源标记；

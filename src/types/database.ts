@@ -72,6 +72,8 @@ export interface RealtimeBucket {
 
 export interface RealtimeRequestLog {
   sessionId: string
+  /** 数据源原始会话 ID，用于稳定去重，不随 Codex 会话归属映射变化 */
+  sourceSessionId?: string
   model: string
   providerId: string
   /** 所属数据源 canonical 名（如 "CCS"），用于实时 Tab 行首数据源标记 */

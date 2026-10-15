@@ -5,11 +5,12 @@ import type { RealtimeRequestLog } from '@/types/database'
 const MAX_LOGS = 500
 
 // 增量合并去重指纹。后端游标是 >= 语义（保证同秒后到的记录不被漏掉），会重复
-// 返回游标秒内已见记录，靠此指纹集兜底不重复追加。dbType/providerId/sessionId
-// 防跨源、跨会话误判；latencyMs 区分同秒同 token 的真实不同请求。
+// 返回游标秒内已见记录，靠此指纹集兜底不重复追加。dbType/providerId/sourceSessionId
+// 防跨源、跨会话误判；原始 ID 不随 Codex 会话归属映射变化，旧响应回退 sessionId。
+// latencyMs 区分同秒同 token 的真实不同请求。
 function logKey(r: RealtimeRequestLog): string {
   return [
-    r.dbType, r.providerId, r.sessionId, r.createdAt, r.model,
+    r.dbType, r.providerId, r.sourceSessionId ?? r.sessionId, r.createdAt, r.model,
     r.inputTokens, r.outputTokens, r.cacheReadTokens, r.cacheCreationTokens, r.latencyMs,
   ].join('|')
 }

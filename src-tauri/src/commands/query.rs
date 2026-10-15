@@ -347,6 +347,8 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     let tz_offset = (chrono::Local::now().offset().local_minus_utc() / 3600) as i64;
 
     let mut result: Vec<RealtimeRequestLog> = all_raw.into_iter().map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms, first_token_latency, is_codex)| {
+        // 映射结果会随本地会话日志与 TTL 缓存变化，不能作为请求的稳定身份。
+        let source_session_id = session_id.clone();
         let session_id = if is_codex {
             codex_ts_mapping.get(&created_at).cloned().unwrap_or(session_id)
         } else {
@@ -367,7 +369,7 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
             };
         let context_tier_threshold = pricing.get_matched_tier_threshold(&model, created_at, context_size);
         RealtimeRequestLog {
-            session_id, model, provider_id, db_type, created_at,
+            session_id, source_session_id, model, provider_id, db_type, created_at,
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             latency_ms,
             time_to_first_token: if first_token_latency > 0 { Some(first_token_latency) } else { None },
