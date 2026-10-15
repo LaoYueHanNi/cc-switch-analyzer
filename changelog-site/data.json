@@ -1,5 +1,21 @@
 [
   {
+    "version": "0.8.11",
+    "date": "2026-10-15",
+    "commits": [
+      {
+        "hash": "5e3a4cf",
+        "subject": "fix(realtime): 去重改用稳定的源会话 ID",
+        "date": "2026-10-15"
+      },
+      {
+        "hash": "009dfc8",
+        "subject": "fix(ccs): 桌面端请求保留在实时数据",
+        "date": "2026-10-15"
+      }
+    ]
+  },
+  {
     "version": "0.8.10",
     "date": "2026-10-11",
     "commits": [
