@@ -262,6 +262,22 @@ fn restore_sources(state: &AppState) -> Result<Vec<SourceInfo>, String> {
             });
         }
     }
+    // Magpie:magpie 配置目录存在则注册(读取路径为应用库 pricing.db,采集由 Rust 后台循环执行)
+    {
+        let magpie_available = state
+            .app_db
+            .lock()
+            .map(|db| crate::services::magpie_scanner::magpie_source_available(&db))
+            .unwrap_or(false);
+        if magpie_available {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                defaults.push(PersistedSource {
+                    path: p.to_string_lossy().to_string(),
+                    db_type: "Magpie".to_string(),
+                });
+            }
+        }
+    }
     if !defaults.is_empty() {
         return auto_load_paths(&state, defaults);
     }
@@ -509,6 +525,33 @@ fn auto_load_paths(state: &AppState, mut entries: Vec<PersistedSource>) -> Resul
                         sources.push(entry);
                     }
                     Err(e) => log::error!("[DB] PI 源加载失败: {}", e),
+                }
+            }
+        }
+    }
+
+    // Magpie:若 magpie 配置目录存在,补注册数据源(读取路径为应用库 pricing.db;数据由后台采集入库)
+    {
+        let magpie_available = state
+            .app_db
+            .lock()
+            .map(|db| crate::services::magpie_scanner::magpie_source_available(&db))
+            .unwrap_or(false);
+        let already = sources
+            .iter()
+            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Magpie));
+        if magpie_available && !already {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                let path_str = p.to_string_lossy().to_string();
+                match crate::services::data_source::create_source_entry_with_type(
+                    &path_str,
+                    Some(&crate::services::data_source::DbType::Magpie),
+                ) {
+                    Ok(entry) => {
+                        log::info!("[DB] 自动加载 Magpie 源: {}", path_str);
+                        sources.push(entry);
+                    }
+                    Err(e) => log::error!("[DB] Magpie 源加载失败: {}", e),
                 }
             }
         }
@@ -897,6 +940,48 @@ pub fn scan_pi_now(state: State<AppState>) -> Result<crate::services::dsh_scanne
     Ok(result)
 }
 
+/// 扫描 Magpie 网关账本(usage.jsonl)入库。
+///
+/// 只读取 magpie 网关自己的请求记录,不读取其从 agent 会话日志扫描的用量;
+/// 扫描幂等,重复调用靠内容哈希主键去重。
+#[tauri::command]
+pub fn scan_magpie_now(
+    state: State<AppState>,
+) -> Result<crate::services::dsh_scanner::DshScanResult, String> {
+    // 1. 扫描 usage.jsonl 增量入库
+    let (result, magpie_available) = {
+        let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+        let available = crate::services::magpie_scanner::magpie_source_available(&app_db);
+        let result = crate::services::magpie_scanner::scan_magpie(&app_db)?;
+        (result, available)
+    };
+    // 2. 确保 Magpie 源已注册,否则扫描了也无数据源可读
+    if magpie_available {
+        let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+        let already = sources
+            .iter()
+            .any(|s| matches!(s.db_type, crate::services::data_source::DbType::Magpie));
+        if !already {
+            if let Ok(p) = crate::utils::get_app_db_path() {
+                let path_str = p.to_string_lossy().to_string();
+                match crate::services::data_source::create_source_entry_with_type(
+                    &path_str,
+                    Some(&crate::services::data_source::DbType::Magpie),
+                ) {
+                    Ok(entry) => {
+                        log::info!("[DB] 注册 Magpie 源: {}", path_str);
+                        sources.push(entry);
+                        let info: Vec<SourceInfo> = sources.iter().map(|s| s.to_info()).collect();
+                        save_paths(&state, &info);
+                    }
+                    Err(e) => log::error!("[DB] Magpie 源注册失败: {}", e),
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
 /// 扫描 Antigravity 用量。
 ///
 /// 与其他扫描型源不同：Antigravity 的 token 用量不写磁盘，只能向运行中的
@@ -1182,6 +1267,7 @@ pub struct DefaultPaths {
     pub antigravity: Option<String>,
     pub kimi: Option<String>,
     pub pi: Vec<String>,
+    pub magpie: Option<String>,
 }
 
 #[tauri::command]
@@ -1213,7 +1299,11 @@ pub fn get_default_paths() -> Result<DefaultPaths, String> {
         .into_iter()
         .map(|p| p.to_string_lossy().to_string())
         .collect::<Vec<_>>();
-    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code, proma, dsh, minimax, antigravity, kimi, pi })
+    // Magpie:仅默认解析结果(自定义目录由 magpie_settings 返回,设置页优先展示实际生效目录)
+    let magpie = crate::services::magpie_scanner::default_magpie_dir()
+        .filter(|p| p.is_dir())
+        .map(|p| p.to_string_lossy().to_string());
+    Ok(DefaultPaths { cc_switch, opencode, ai_proxy, cursor, z_code, proma, dsh, minimax, antigravity, kimi, pi, magpie })
 }
 
 fn cursor_should_auto_load() -> bool {
@@ -1455,6 +1545,37 @@ fn canonicalize_dir(dir: &str) -> Result<std::path::PathBuf, String> {
 #[tauri::command]
 pub fn open_plugin_repo() -> Result<(), String> {
     crate::utils::open_url_in_browser(DSH_PLUGIN_REPO_URL)
+}
+
+// ========== Magpie 数据源设置 ==========
+
+/// Magpie 数据源状态(实际生效目录、自定义目录、usage.jsonl 与已入库记录数)。
+#[tauri::command]
+pub fn magpie_settings(
+    state: State<AppState>,
+) -> Result<crate::services::magpie_scanner::MagpieSettings, String> {
+    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+    Ok(crate::services::magpie_scanner::collect_magpie_settings(&app_db))
+}
+
+/// 设置 magpie 配置目录(usage.jsonl 所在目录)。
+///
+/// - `Some(dir)`:目录必须存在,规范化后写入 settings
+/// - `None` / 空串:清空设置,恢复默认解析(`$XDG_CONFIG_HOME/magpie` 或 `~/.config/magpie`)
+///
+/// 只写设置不触发扫描,由前端决定是否立即扫描(与 DSH 自定义目录风格一致)。
+#[tauri::command]
+pub fn set_magpie_data_dir(
+    dir: Option<String>,
+    state: State<AppState>,
+) -> Result<crate::services::magpie_scanner::MagpieSettings, String> {
+    let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
+    let normalized = match dir.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(d) => canonicalize_dir(d)?.to_string_lossy().to_string(),
+        None => String::new(),
+    };
+    crate::services::magpie_scanner::set_magpie_data_dir(&app_db, &normalized)?;
+    Ok(crate::services::magpie_scanner::collect_magpie_settings(&app_db))
 }
 
 #[cfg(test)]

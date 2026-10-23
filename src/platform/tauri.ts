@@ -3,7 +3,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import { check } from '@tauri-apps/plugin-updater'
-import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, CcsSessionFilter, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, CursorCsvPreviewPage, CursorOverrideAction, HookBackupResult, HookMergeResult, DefaultPaths, DshScanResult, DshSettings, TmServiceStatus, MenubarStatus, BackgroundModeStatus } from './types'
+import type { PlatformAdapter, DbResult, SourceInfo, RefreshResult, FilterParams, CcsSessionFilter, PricingOverrideData, TimePricingRuleData, UpdateTimePricingRuleData, ProjectGroupStats, ProjectSessionDetail, UpdateInfo, OpenTaskSessionsResult, CursorSyncResult, CursorStatusInfo, CursorCsvPreviewPage, CursorOverrideAction, HookBackupResult, HookMergeResult, DefaultPaths, DshScanResult, DshSettings, MagpieSettings, TmServiceStatus, MenubarStatus, BackgroundModeStatus } from './types'
 import type { SummaryData, ModelBreakdown, ProviderBreakdown, RealtimeBucket, RealtimeRequestLog, DailyTrendRow } from '@/types/database'
 import type { PrecomputeQueryResult, SessionWithCost } from '@/types/common'
 import type { PricingData, PricingFamily } from '@/types/pricing'
@@ -90,6 +90,9 @@ export const platformAdapter: PlatformAdapter = {
   async scanPiNow(): Promise<DshScanResult> {
     return invoke<DshScanResult>('scan_pi_now')
   },
+  async scanMagpieNow(): Promise<DshScanResult> {
+    return invoke<DshScanResult>('scan_magpie_now')
+  },
   async scanAntigravityNow(): Promise<DshScanResult> {
     return invoke<DshScanResult>('scan_antigravity_now')
   },
@@ -104,6 +107,12 @@ export const platformAdapter: PlatformAdapter = {
   },
   async setDshPluginDataDir(dir: string | null): Promise<DshSettings> {
     return invoke<DshSettings>('set_dsh_plugin_data_dir', { dir })
+  },
+  async getMagpieSettings(): Promise<MagpieSettings> {
+    return invoke<MagpieSettings>('magpie_settings')
+  },
+  async setMagpieDataDir(dir: string | null): Promise<MagpieSettings> {
+    return invoke<MagpieSettings>('set_magpie_data_dir', { dir })
   },
   async openPluginRepo(): Promise<void> {
     return invoke<void>('open_plugin_repo')

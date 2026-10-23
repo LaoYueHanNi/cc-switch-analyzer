@@ -1,6 +1,6 @@
 # CC-Switch Analyzer
 
-多数据源 AI 用量桌面分析工具，基于 Tauri v2、Rust 和 Vue 3 构建。支持 CC-Switch、OpenCode、AI-Proxy、Cursor、ZCode、Proma、DSH、MiniMax Code、Antigravity、Kimi 与 PI（pi / oh-my-pi），提供 Token、费用、模型分布、会话与实时请求分析。
+多数据源 AI 用量桌面分析工具，基于 Tauri v2、Rust 和 Vue 3 构建。支持 CC-Switch、OpenCode、AI-Proxy、Cursor、ZCode、Proma、DSH、MiniMax Code、Antigravity、Kimi、PI（pi / oh-my-pi）与 Magpie，提供 Token、费用、模型分布、会话与实时请求分析。
 
 **当前代码版本：0.8.11**。多数据源可同时接入，合并查询并按请求去重。
 
@@ -54,7 +54,7 @@
 
 后台模式重建界面时恢复窗口位置与大小，页面与筛选回到默认状态。退出应用会停止常驻服务。
 
-本地用量采集由 Rust 持续运行：CCS、OpenCode、AI-Proxy 直接只读查询；ZCode、Proma、DSH、MiniMax、Antigravity、Kimi、PI 每轮扫描后等待 5 秒，按已启用的来源导入应用库，销毁界面后继续采集。通常目标为数据可读后约 5–10 秒加扫描 / 查询耗时更新到状态栏，Windows 另受 TrafficMonitor 的轮询周期影响；Antigravity 需要 IDE 的 language server 可用。Cursor 保持已有缓存展示，需要最新用量时手动同步。
+本地用量采集由 Rust 持续运行：CCS、OpenCode、AI-Proxy 直接只读查询；ZCode、Proma、DSH、MiniMax、Antigravity、Kimi、PI、Magpie 每轮扫描后等待 5 秒，按已启用的来源导入应用库，销毁界面后继续采集。Magpie 数据源在 magpie 配置目录存在时自动注册；portable 模式或自定义目录在设置页指定。通常目标为数据可读后约 5–10 秒加扫描 / 查询耗时更新到状态栏，Windows 另受 TrafficMonitor 的轮询周期影响；Antigravity 需要 IDE 的 language server 可用。Cursor 保持已有缓存展示，需要最新用量时手动同步。
 
 单个数据源或采集失败（如 Antigravity 未打开）时，Windows 插件仍展示其余来源的今日数字；全部来源失败才显示 `--`。macOS 全部失败显示 `—`，部分数据加 `*` 提示不完整。时区使用本机自然日，兼容半小时偏移与夏令时。修复与已验证范围见 [轻量模式审计](docs/audits/2026-10-10-lightweight-mode.md)。
 
@@ -75,8 +75,11 @@
 | **Antigravity** | 从 `~/.gemini/antigravity*` 发现会话，向运行中的 language server 读取用量并缓存 |
 | **Kimi** | Kimi CLI 的 `~/.kimi/sessions/`、Kimi Code 的 `~/.kimi-code/sessions/`，以及 Kimi Work 桌面缓存目录 |
 | **PI（pi / oh-my-pi）** | `~/.pi/agent/sessions/`、`~/.omp/agent/sessions/`、`~/.omp/profiles/<profile>/agent/sessions/` |
+| **Magpie** | 只读 magpie 网关请求账本 `~/.config/magpie/usage.jsonl`（`$XDG_CONFIG_HOME/magpie` 优先），不含 magpie 从 agent 会话日志扫描的用量 |
 
 DSH 插件目录可在设置中选择，默认按 `$DSH_HOME/token-usage` 或 `~/.dsh/token-usage` 解析。PI 支持 `PI_CODING_AGENT_DIR` 与 `PI_CONFIG_DIR`，Kimi Code 支持 `KIMI_CODE_HOME` 覆盖默认目录；设置页列出实际发现的目录。
+
+Magpie 只读取网关请求账本 `usage.jsonl`：`$XDG_CONFIG_HOME` 为绝对路径时使用 `$XDG_CONFIG_HOME/magpie/usage.jsonl`，否则使用 `~/.config/magpie/usage.jsonl`（Windows 同样在 `%USERPROFILE%\.config\magpie`，不是 `%APPDATA%`）。portable 模式的账本无法自动定位，可在设置页指定自定义目录覆盖；只接入经过网关的调用记录，不含 magpie 从 agent 会话日志扫描出的用量。
 
 Kimi Work 默认会话位于 macOS 的 `~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/` 或 Windows 的 `%APPDATA%/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/`，并支持桌面配置中的 `shareDir`。
 

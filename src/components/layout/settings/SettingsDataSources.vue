@@ -60,6 +60,43 @@
         Antigravity 自身不保存用量，需在其运行时扫描；读取的数据存入本地库，离线可查
       </div>
 
+      <!-- Magpie：只读网关账本 usage.jsonl（不含会话扫描）；portable/自定义 XDG 可改配置目录 -->
+      <div v-if="slot.key === 'magpie'" class="magpie-dir-section">
+        <div class="magpie-dir-row">
+          <span class="path-label">目录来源</span>
+          <span class="source-path">
+            {{ magpieSettings.customDataDir ? '自定义' : '默认（$XDG_CONFIG_HOME 或 ~/.config/magpie）' }}
+            <template v-if="magpieSettings.usageFile">
+              · {{ magpieSettings.usageFileExists ? '已找到 usage.jsonl' : '暂无 usage.jsonl' }}
+            </template>
+          </span>
+          <div class="path-actions">
+            <button
+              type="button"
+              class="icon-btn"
+              title="选择 magpie 配置目录（usage.jsonl 所在目录）"
+              :disabled="magpieDirBusy"
+              @click="onPickMagpieDir"
+            >
+              <n-icon size="14"><folder-open-outline /></n-icon>
+            </button>
+            <button
+              v-if="magpieSettings.customDataDir"
+              type="button"
+              class="icon-btn"
+              title="恢复默认目录"
+              :disabled="magpieDirBusy"
+              @click="onResetMagpieDir"
+            >
+              <n-icon size="14"><refresh-outline /></n-icon>
+            </button>
+          </div>
+        </div>
+        <p class="source-hint">
+          只读 magpie 网关账本 usage.jsonl（一次网关调用一行，含 Token、耗时与首字），不含 magpie 扫描的 agent 会话用量、routing 路由轨迹与客户端上报记录；portable 版可在此选择其 data 目录。
+        </p>
+      </div>
+
       <!-- CCS：过滤会话日志同步写入的记录（CC-Switch 从各终端会话日志解析写入的用量） -->
       <div v-if="slot.key === 'cc-switch'" class="ccs-session-filter-section">
         <div class="ccs-session-filter-title">过滤会话日志同步写入记录</div>
@@ -415,7 +452,7 @@ import { useFilterStore } from '@/stores/filter'
 import { useDatabase } from '@/composables/useDatabase'
 import { platformAdapter } from '@/platform'
 import { formatNum } from '@/utils/format'
-import type { CursorAccountInfo, CursorStatusInfo, CcsSessionFilter, DefaultPaths, DshSettings, TokenQuad } from '@/platform/types'
+import type { CursorAccountInfo, CursorStatusInfo, CcsSessionFilter, DefaultPaths, DshSettings, MagpieSettings, TokenQuad } from '@/platform/types'
 
 const props = defineProps<{ active: boolean }>()
 
@@ -430,7 +467,7 @@ const emptyQuad = (): TokenQuad => ({ input: 0, output: 0, cacheRead: 0, cacheCr
 const dbStore = useDatabaseStore()
 const { addDatabase, removeDatabase, refreshAfterToggle, autoLoadDatabase } = useDatabase()
 
-const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null, cursor: null, zCode: null, proma: null, dsh: null, minimax: null, antigravity: null, kimi: null, pi: [] })
+const defaultPaths = ref<DefaultPaths>({ ccSwitch: null, opencode: null, aiProxy: null, cursor: null, zCode: null, proma: null, dsh: null, minimax: null, antigravity: null, kimi: null, pi: [], magpie: null })
 
 // ===== CCS 自动发现（默认关闭，作为 CCS 数据源的独立子项配置）=====
 const ccsAutoDiscover = ref(false)
@@ -619,6 +656,81 @@ async function onResetDshPluginDir(): Promise<void> {
     await loadDshSettings()
   } finally {
     dshDirBusy.value = false
+  }
+}
+
+// ========== Magpie 数据源（只读网关账本 usage.jsonl） ==========
+
+const magpieSettings = ref<MagpieSettings>({
+  dataDir: null,
+  customDataDir: null,
+  usageFile: null,
+  usageFileExists: false,
+  totalRecords: 0,
+})
+const magpieDirBusy = ref(false)
+
+async function loadMagpieSettings(): Promise<void> {
+  try {
+    magpieSettings.value = await platformAdapter.getMagpieSettings()
+  } catch { /* ignore */ }
+}
+
+/// 目录变化后：重新扫描一次并刷新数据源列表（与 DSH 行为一致）
+async function applyMagpieSourceChange(): Promise<void> {
+  try {
+    const result = await platformAdapter.scanMagpieNow()
+    const sources = await platformAdapter.listDatabases()
+    dbStore.setSources(sources)
+    await refreshAfterToggle()
+    if (result.imported > 0) {
+      message.success(`Magpie 新增 ${result.imported} 条用量记录`)
+    } else {
+      message.info('Magpie 用量已是最新')
+    }
+  } catch (e) {
+    console.error('[Magpie] 扫描失败', e)
+    message.error(typeof e === 'string' ? e : String((e as any)?.message || e || '扫描失败'))
+  }
+}
+
+async function onPickMagpieDir(): Promise<void> {
+  const dir = await platformAdapter.pickDirectory('选择 magpie 配置目录（usage.jsonl 所在目录）')
+  if (!dir) return
+  magpieDirBusy.value = true
+  try {
+    const settings = await platformAdapter.setMagpieDataDir(dir)
+    magpieSettings.value = settings
+    if (!settings.usageFileExists) {
+      message.warning('该目录下未发现 usage.jsonl，请确认选择的是 magpie 配置目录（如 ~/.config/magpie）')
+    } else {
+      message.success(`Magpie 配置目录已切换：${settings.dataDir}`)
+    }
+    await applyMagpieSourceChange()
+    await loadMagpieSettings()
+  } catch (e) {
+    console.error('[Magpie] 设置配置目录失败', e)
+    message.error(typeof e === 'string' ? e : String((e as any)?.message || e || '设置失败'))
+    await loadMagpieSettings()
+  } finally {
+    magpieDirBusy.value = false
+  }
+}
+
+async function onResetMagpieDir(): Promise<void> {
+  magpieDirBusy.value = true
+  try {
+    const settings = await platformAdapter.setMagpieDataDir(null)
+    magpieSettings.value = settings
+    message.success(`Magpie 配置目录已恢复默认：${settings.dataDir || '未检测到'}`)
+    await applyMagpieSourceChange()
+    await loadMagpieSettings()
+  } catch (e) {
+    console.error('[Magpie] 恢复默认配置目录失败', e)
+    message.error(typeof e === 'string' ? e : String((e as any)?.message || e || '恢复失败'))
+    await loadMagpieSettings()
+  } finally {
+    magpieDirBusy.value = false
   }
 }
 
@@ -942,6 +1054,7 @@ watch(
       loadCursorStatus()
       loadDshSettings()
       loadCcsFilter()
+      loadMagpieSettings()
     }
   },
   { immediate: true },
@@ -1090,6 +1203,21 @@ const slots = computed(() => [
     sourceId: dbStore.sources.find(s => s.dbType === 'PI')?.id || '',
     enabled: dbStore.sources.find(s => s.dbType === 'PI')?.enabled ?? true,
   },
+  {
+    key: 'magpie',
+    label: 'Magpie',
+    path: (() => {
+      // 实际生效目录（自定义优先）来自 magpieSettings；默认路径兜底
+      const base = magpieSettings.value.dataDir || defaultPaths.value.magpie || ''
+      const src = dbStore.sources.find(s => s.dbType === 'Magpie')
+      return src && src.recordCount > 0
+        ? base + `  (已导入 ${src.recordCount} 条)`
+        : base
+    })(),
+    defaultPath: defaultPaths.value.magpie || '',
+    sourceId: dbStore.sources.find(s => s.dbType === 'Magpie')?.id || '',
+    enabled: dbStore.sources.find(s => s.dbType === 'Magpie')?.enabled ?? true,
+  },
 ])
 
 // slot key → 后端 dbType 字面量映射（canonical 名见 DbType::label）
@@ -1104,10 +1232,11 @@ const DB_TYPE_MAP: Record<string, string> = {
   'antigravity': 'Antigravity',
   'kimi': 'Kimi',
   'pi': 'PI',
+  'magpie': 'Magpie',
 }
 
 // 扫描入库型数据源：路径固定，操作是「立即扫描」而非选库，也不提供移除
-const SCAN_SOURCE_KEYS = ['dsh', 'minimax', 'kimi', 'pi', 'proma', 'antigravity']
+const SCAN_SOURCE_KEYS = ['dsh', 'minimax', 'kimi', 'pi', 'magpie', 'proma', 'antigravity']
 function isScanSource(key: string): boolean {
   return SCAN_SOURCE_KEYS.includes(key)
 }
@@ -1172,6 +1301,13 @@ async function onSelect(key: string): Promise<void> {
       console.error('[PI] 扫描失败', e)
       message.error(typeof e === 'string' ? e : String((e as any)?.message || e || '扫描失败'))
     }
+    return
+  }
+  // Magpie 固定扫描 magpie 配置目录下的 usage.jsonl（网关账本），不走目录选择；
+  // 目录可用设置区的「选择目录」覆盖（portable 版）
+  if (key === 'magpie') {
+    await applyMagpieSourceChange()
+    await loadMagpieSettings()
     return
   }
   // Antigravity 用量只存在于运行中的 language server（不落盘），扫描即 RPC 拉取。
@@ -1346,6 +1482,10 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 
 .source-dot.pi {
   background: #f0a020;
+}
+
+.source-dot.magpie {
+  background: #0ea5a4;
 }
 
 .source-hint {
@@ -1859,6 +1999,19 @@ async function onToggleAllCursor(enabled: boolean): Promise<void> {
 }
 
 .dsh-plugin-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+}
+
+.magpie-dir-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.magpie-dir-row {
   display: flex;
   align-items: center;
   gap: 6px;

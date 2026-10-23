@@ -270,6 +270,7 @@ export interface DefaultPaths {
   antigravity: string | null
   kimi: string | null
   pi: string[]
+  magpie: string | null
 }
 
 export interface DshScanResult {
@@ -294,6 +295,20 @@ export interface DshSettings {
   /** 插件 usage-*.jsonl 文件数 */
   usageFiles: number
   /** 已入库的 DSH 记录总数 */
+  totalRecords: number
+}
+
+/** Magpie 数据源状态（只读 magpie 网关账本 usage.jsonl） */
+export interface MagpieSettings {
+  /** 实际生效的配置目录 */
+  dataDir: string | null
+  /** 用户自定义目录（未设置为 null） */
+  customDataDir: string | null
+  /** 实际生效的 usage.jsonl 路径（可能尚不存在） */
+  usageFile: string | null
+  /** usage.jsonl 是否存在 */
+  usageFileExists: boolean
+  /** 已入库的 Magpie 记录数 */
   totalRecords: number
 }
 
@@ -335,11 +350,14 @@ export interface PlatformAdapter {
   scanMinimaxNow(): Promise<DshScanResult>
   scanKimiNow(): Promise<DshScanResult>
   scanPiNow(): Promise<DshScanResult>
+  scanMagpieNow(): Promise<DshScanResult>
   scanAntigravityNow(): Promise<DshScanResult>
   scanPromaNow(): Promise<DshScanResult>
   getDshSettings(): Promise<DshSettings>
   setDshPluginMode(usePlugin: boolean): Promise<DshSettings>
   setDshPluginDataDir(dir: string | null): Promise<DshSettings>
+  getMagpieSettings(): Promise<MagpieSettings>
+  setMagpieDataDir(dir: string | null): Promise<MagpieSettings>
   openPluginRepo(): Promise<void>
   getFilterOptions(): Promise<{ providers: { id: string; name: string }[]; models: string[]; dateRange: { min: number; max: number } }>
   // 查询

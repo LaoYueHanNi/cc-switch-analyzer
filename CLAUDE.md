@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-**CC-Switch Analyzer** — 多数据源 AI 用量桌面分析工具，支持 CC-Switch、OpenCode、AI-Proxy、Cursor、ZCode、Proma、DSH、MiniMax Code、Antigravity、Kimi 与 PI（pi / oh-my-pi）。
+**CC-Switch Analyzer** — 多数据源 AI 用量桌面分析工具，支持 CC-Switch、OpenCode、AI-Proxy、Cursor、ZCode、Proma、DSH、MiniMax Code、Antigravity、Kimi、PI（pi / oh-my-pi）与 Magpie。
 
 - **当前代码版本**: 0.8.11（以 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 为准）
 - **架构**: Tauri v2（Rust 后端 + Vue 3 前端）
@@ -98,7 +98,7 @@ Git Bash 中可通过 `powershell.exe -Command` 调用上述脚本。产出自�
 ### 平台适配器与数据源契约
 
 - 前端通过 `src/platform/index.ts` 导出的 `platformAdapter` 调用后端，不在视图里直接调用 Tauri API。
-- 数据源类型与规范名由 `services/data_source.rs::DbType` 定义：`CCS`、`OpenCode`、`AIProxy`、`Cursor`、`ZCode`、`Proma`、`DSH`、`MiniMax`、`Antigravity`、`Kimi`、`PI`。
+- 数据源类型与规范名由 `services/data_source.rs::DbType` 定义：`CCS`、`OpenCode`、`AIProxy`、`Cursor`、`ZCode`、`Proma`、`DSH`、`MiniMax`、`Antigravity`、`Kimi`、`PI`、`Magpie`。
 - `SourceCapabilities` 声明会话管理、项目归属和增量扫描能力；用量统计可用不代表该源支持会话管理或终端恢复。
 - 持久化数据源时同时保存路径和类型。扫描源可能共用 `pricing.db`，mtime 缓存键必须包含 `db_type` 与路径。
 
@@ -112,7 +112,7 @@ Git Bash 中可通过 `powershell.exe -Command` 调用上述脚本。产出自�
 
 - **外部 SQLite**：使用 `rusqlite::SQLITE_OPEN_READ_ONLY` 打开；包括 ZCode 和 MiniMax 的扫描输入库。
 - **应用自有库**：`~/.cc-switch-analyzer/pricing.db` 可读写，保存定价、设置、任务、会话元数据以及扫描型源的派生用量。
-- **扫描型源**：ZCode、Proma、DSH、MiniMax、Antigravity、Kimi、PI 的用量写入 `session_request_logs`，增量状态保存在 `session_log_sync`；读取侧通过对应 `*_db.rs` 查询应用库。
+- **扫描型源**：ZCode、Proma、DSH、MiniMax、Antigravity、Kimi、PI、Magpie 的用量写入 `session_request_logs`，增量状态保存在 `session_log_sync`；读取侧通过对应 `*_db.rs` 查询应用库。
 - **Cursor**：CSV 与归因缓存按账号放在 `~/.cc-switch-analyzer/cursor-cache/<userId>/`，不改 Cursor 原始用量数据。
 
 ### 新增本地用量源
@@ -125,8 +125,11 @@ Git Bash 中可通过 `powershell.exe -Command` 调用上述脚本。产出自�
 | Antigravity | 从 `~/.gemini/antigravity*` 会话目录发现 ID，通过正在运行的 language server RPC 读取用量；IDE 关闭时仍可查询已导入历史 |
 | Kimi | 扫描 Kimi CLI / Kimi Code / Kimi Work 的 `wire.jsonl` 用量事件，并导入会话标题、项目路径 |
 | PI | 合并 pi、oh-my-pi CLI 与 OMP 桌面版 profiles 的会话 JSONL，按请求去重；设置页展示全部实际扫描根 |
+| Magpie | 只读 magpie 网关请求账本 `usage.jsonl`（`$XDG_CONFIG_HOME/magpie` 优先，否则 `~/.config/magpie`），按整行内容哈希 + 字节偏移增量导入；不接 `routing/`、`usage-others/` 与客户端上报（`source=reported`）记录 |
 
 PI 默认扫描 `~/.pi/agent/sessions/`、`~/.omp/agent/sessions/` 与 `~/.omp/profiles/<profile>/agent/sessions/`。`PI_CODING_AGENT_DIR` 覆盖 pi agent 目录，`PI_CONFIG_DIR` 覆盖 OMP 配置根。Kimi 的实际候选目录见 `kimi_scanner::get_all_kimi_session_roots`。
+
+Magpie 的配置目录按 `$XDG_CONFIG_HOME`（仅绝对路径生效）解析为 `$XDG_CONFIG_HOME/magpie`，否则回退 `~/.config/magpie`（Windows 为 `%USERPROFILE%\.config\magpie`，不是 `%APPDATA%`）；portable 模式的数据目录无法自动定位，由设置页 `magpie_data_dir` 覆盖。
 
 ### DSH 用量数据（双数据源模式）
 
@@ -169,9 +172,9 @@ CCS 会话日志同步记录可按 OpenCode、Claude Code、Codex、Grok Build�
 
 ### 常驻服务与后台模式
 
-- **后端初始化与采集**：启动时由 Rust 恢复数据源、禁用状态和缓存定价；`auto_load_database` 在界面重建时复用已有状态。`background_collection.rs` 启动独立线程，每轮结束后等待 5 秒，扫描已启用的 ZCode、Proma、DSH、MiniMax、Antigravity、Kimi、PI；前端刷新共用采集闸门，Cursor 不进入 API 同步。采集持独立应用库连接，避免长扫描占用界面设置的 Rust Mutex；SQLite 写事务仍由 WAL / busy timeout 协调。
+- **后端初始化与采集**：启动时由 Rust 恢复数据源、禁用状态和缓存定价；`auto_load_database` 在界面重建时复用已有状态。`background_collection.rs` 启动独立线程，每轮结束后等待 5 秒，扫描已启用的 ZCode、Proma、DSH、MiniMax、Antigravity、Kimi、PI、Magpie；前端刷新共用采集闸门，Cursor 不进入 API 同步。采集持独立应用库连接，避免长扫描占用界面设置的 Rust Mutex；SQLite 写事务仍由 WAL / busy timeout 协调。
 - **启停与变更检测**：禁用状态以路径 + 类型存入 `disabled_sources`，兼容旧 `disabled_source_paths`。ZCode / MiniMax 源库变更戳覆盖主库与 WAL 的 mtime、长度及创建/删除；前端刷新不再仅凭最新秒级时间戳相等跳过变化。
-- **共享今日查询**：`today_query.rs` 只做当日记录去重、Token 汇总及逐请求定价，复用前台定价引擎（含上下文档位、别名、时间规则与峰谷价），避免完整图表预计算。HTTP 与菜单栏各持独立只读 `TodaySourceCache`；SQL 源实时读库，Cursor CSV 变更时重开。七类扫描源的日期条件在 SQL 执行，应用库建立 `(source, created_at)` 索引；禁止给外部库加索引。
+- **共享今日查询**：`today_query.rs` 只做当日记录去重、Token 汇总及逐请求定价，复用前台定价引擎（含上下文档位、别名、时间规则与峰谷价），避免完整图表预计算。HTTP 与菜单栏各持独立只读 `TodaySourceCache`；SQL 源实时读库，Cursor CSV 变更时重开。八类扫描源的日期条件在 SQL 执行，应用库建立 `(source, created_at)` 索引；禁止给外部库加索引。
 - **Windows TrafficMonitor**：`http_server.rs` 在 `127.0.0.1:19810–19820` 提供 `/api/today`，按请求计算，不缓存 30 秒结果；停服等待监听线程释放端口。费用由后端计算，`totalCost` 返回 `"172.57¥"` 等格式化字符串。插件在实际请求失败后每次最多探测一个端口，失败轮次有退避，成功后重置；改 C++ 后需重编 x86 / x64 DLL。`traffic-monitor-plugin/test.bat` 验证真实 WinHTTP 断线及二次恢复。
 - **状态与日期**：今日响应附带 `stale`、`errors`、`updatedAt`；全部源失败返回 HTTP 503，部分失败显式标记并重试失败连接。Windows 插件展示 `stale` 部分结果中的可用数字（Antigravity 未运行等单源常态不拖垮展示），仅全部源失败（HTTP 503 / error）显示 `--`；macOS 部分结果以 `*` 标记、全部失败显示 `—`。新版插件与菜单栏按本机日历独立计算两次午夜，支持半小时时区与 23/25 小时日；HTTP 保留整小时 `tz`，新增 `tz_minutes`、`tz=local`。
 - **macOS 菜单栏**：`menubar.rs` 每轮查询后等待 5 秒，`menubar_macos.rs` 用原生 `NSStatusItem` 展示两行 Token / 费用；停止及重新启动通过 generation 校验丢弃旧查询/排队回调。AppKit UI 操作在主线程执行，原生回调用 `try_state` 处理尚未注册的状态。

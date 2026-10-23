@@ -205,6 +205,7 @@ function dotClass(dbType: string): string {
     'DSH': 'dsh', 'MiniMax': 'minimax', 'Antigravity': 'antigravity',
     'Kimi': 'kimi',
     'PI': 'pi',
+    'Magpie': 'magpie',
   }
   return map[dbType] ?? dbType.toLowerCase()
 }
@@ -416,6 +417,7 @@ watch(() => dbStore.hasDatabase, (val) => {
 .source-dot.minimax { background: var(--text-muted); }
 .source-dot.antigravity { background: var(--color-purple, var(--color-indigo)); }
 .source-dot.cursor { background: var(--color-indigo); }
+.source-dot.magpie { background: #0ea5a4; }
 
 /* 列宽 - 基础 */
 .col-time { width: 80px; flex-shrink: 0; color: var(--text-primary); font-weight: 500; }

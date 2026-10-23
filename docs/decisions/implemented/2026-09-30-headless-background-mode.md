@@ -59,7 +59,7 @@ Status: implemented
 
 ### 数据新鲜度边界（2026-10-10 核对）
 
-Rust 启动阶段恢复数据源与缓存定价，`background_collection.rs` 独立线程扫描已启用的七类本地源，每轮结束后等待 5 秒；前端刷新复用同一采集闸门。CCS、OpenCode、AI-Proxy 的只读连接读取源库新提交。今日查询改为当日专用汇总，Windows HTTP 按请求计算，macOS 每轮查询后等待 5 秒；失败显式标记并重试。实现取舍及回归验证见 [Rust 后台采集与状态栏及时更新](2026-10-10-background-local-collection.md)，修复前证据保留在 [轻量模式审计](../../audits/2026-10-10-lightweight-mode.md)。
+Rust 启动阶段恢复数据源与缓存定价，`background_collection.rs` 独立线程扫描已启用的 ZCode、Proma、DSH、MiniMax、Antigravity、Kimi、PI、Magpie 八类本地源，每轮结束后等待 5 秒；前端刷新复用同一采集闸门。CCS、OpenCode、AI-Proxy 的只读连接读取源库新提交。今日查询改为当日专用汇总，Windows HTTP 按请求计算，macOS 每轮查询后等待 5 秒；失败显式标记并重试。实现取舍及回归验证见 [Rust 后台采集与状态栏及时更新](2026-10-10-background-local-collection.md)，修复前证据保留在 [轻量模式审计](../../audits/2026-10-10-lightweight-mode.md)。
 
 Cursor 后台只展示已经下载的 CSV，不自动请求云端。按用户降低请求频率的约束，本地后台采集不新增 Cursor API 自动请求，不缩短现有前台 24 小时有效期；用户需要最新用量时手动同步，Cursor 不属于后台实时更新验收范围。
 

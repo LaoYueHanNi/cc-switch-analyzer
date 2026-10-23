@@ -105,6 +105,7 @@ fn scan_source(db: &AppDbService, db_type: &DbType) -> Result<(), String> {
         DbType::Minimax => minimax_scanner::scan_minimax(db)?,
         DbType::Kimi => kimi_scanner::scan_kimi(db)?,
         DbType::Pi => pi_scanner::scan_pi(db)?,
+        DbType::Magpie => magpie_scanner::scan_magpie(db)?,
         DbType::Proma => proma_scanner::scan_proma(db)?,
         DbType::ZCode => zcode_scanner::scan_zcode(db)?,
         DbType::Antigravity => antigravity_scanner::scan_antigravity(db)?,

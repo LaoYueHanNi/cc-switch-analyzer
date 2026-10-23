@@ -15,6 +15,8 @@ pub mod dsh_plugin_scanner;
 pub mod dsh_scanner;
 pub mod kimi_db;
 pub mod kimi_scanner;
+pub mod magpie_db;
+pub mod magpie_scanner;
 pub mod pi_db;
 pub mod pi_scanner;
 pub mod minimax_db;
