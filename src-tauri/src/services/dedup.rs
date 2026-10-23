@@ -1,6 +1,7 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::models::RawRecord;
+use crate::services::data_source::StreamingRecord;
 
 /// 对 RawRecord 做 RequestFingerprint 去重，先到先保留。
 /// codex 记录使用归一化指纹（不含 model，input 在 DB 读取时已减去 cache_read）。
@@ -122,6 +123,138 @@ pub fn dedup_request_tokens(items: Vec<crate::models::SessionRequestToken>) -> V
             seen.insert(fp)
         })
         .collect()
+}
+
+// ========== 跨源优先级去重 ==========
+
+/// 第一优先级：端侧直录源（harness 会话日志 / 客户端本地库）。
+pub const CROSS_SOURCE_TIER1: &[&str] = &[
+    "DSH", "Cursor", "OpenCode", "ZCode", "MiniMax", "Proma", "Antigravity", "Kimi", "PI",
+];
+
+/// 第二优先级：统一网关转发账本（同一请求已被端侧记录时仅作备份口径）。
+pub const CROSS_SOURCE_TIER2: &[&str] = &["AIProxy", "Magpie", "CCS"];
+
+/// 匹配窗口（秒）：网关记录带耗时（latency>0）时用 请求开始+耗时 对齐端侧完成时刻；
+/// 无耗时字段时退化为创建时刻直比，窗口放宽。
+const CROSS_SOURCE_WINDOW_ACTIVE_SECS: i64 = 10;
+const CROSS_SOURCE_WINDOW_FALLBACK_SECS: i64 = 30;
+
+/// 数据源跨源去重层级：1 = 端侧直录（优先保留），2 = 统一网关（可被覆盖），0 = 不参与。
+pub fn cross_source_tier(source_label: &str) -> u8 {
+    if CROSS_SOURCE_TIER1.contains(&source_label) {
+        1
+    } else if CROSS_SOURCE_TIER2.contains(&source_label) {
+        2
+    } else {
+        0
+    }
+}
+
+/// 跨源优先级去重核心。
+///
+/// 同一真实请求被端侧源（tier 1）与网关源（tier 2）同时记录时（如 DSH 请求经
+/// magpie / AIProxy / cc-switch 转发），保留 tier 1 记录、丢弃能与其配对的 tier 2
+/// 记录；未能配对的 tier 2 记录（端侧未覆盖的流量）照常保留。
+///
+/// 配对规则（宁可漏去重、不误杀）：
+/// - 四类 Token 完全一致（跨源模型名命名体系不同，model 不参与匹配）；
+/// - tier 2 带耗时（latency>0）时以「创建时刻 + 耗时」对齐 tier 1 完成时刻，窗口 ±10s；
+///   无耗时时以创建时刻直比，窗口 ±30s；
+/// - 一对一占用：一条 tier 1 记录至多吸收一条 tier 2 记录，防止 1 对多双杀。
+/// tier 1 内部、tier 2 内部及未知层级（0）互不匹配。
+pub fn cross_source_priority_dedup<T>(
+    items: Vec<T>,
+    tier_of: impl Fn(&T) -> u8,
+    created_at_of: impl Fn(&T) -> i64,
+    latency_ms_of: impl Fn(&T) -> i64,
+    tokens_of: impl Fn(&T) -> (i64, i64, i64, i64),
+) -> Vec<T> {
+    // 快速路径：没有网关层记录时无需任何配对
+    if !items.iter().any(|x| tier_of(x) == 2) {
+        return items;
+    }
+
+    // tier 1 索引按 created_at 排序，供窗口二分
+    let mut tier1: Vec<(i64, usize)> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, x)| tier_of(x) == 1)
+        .map(|(i, x)| (created_at_of(x), i))
+        .collect();
+    tier1.sort_unstable();
+    let tier1_times: Vec<i64> = tier1.iter().map(|(t, _)| *t).collect();
+    let mut tier1_used = vec![false; tier1.len()];
+
+    let mut removed = vec![false; items.len()];
+    for (i, x) in items.iter().enumerate() {
+        if tier_of(x) != 2 {
+            continue;
+        }
+        let tokens = tokens_of(x);
+        let created = created_at_of(x);
+        let latency = latency_ms_of(x);
+        let (anchor, window) = if latency > 0 {
+            (created + latency / 1000, CROSS_SOURCE_WINDOW_ACTIVE_SECS)
+        } else {
+            (created, CROSS_SOURCE_WINDOW_FALLBACK_SECS)
+        };
+        let lo = tier1_times.partition_point(|&t| t < anchor - window);
+        let hi = tier1_times.partition_point(|&t| t <= anchor + window);
+        for k in lo..hi {
+            if tier1_used[k] {
+                continue;
+            }
+            let (_, idx) = tier1[k];
+            if tokens_of(&items[idx]) == tokens {
+                tier1_used[k] = true;
+                removed[i] = true;
+                break;
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for (i, x) in items.into_iter().enumerate() {
+        if !removed[i] {
+            out.push(x);
+        }
+    }
+    out
+}
+
+/// RawRecord 版跨源优先级去重（db_type 为空时按 provider_id 兜底判定层级）。
+pub fn cross_source_priority_dedup_records(records: Vec<RawRecord>) -> Vec<RawRecord> {
+    cross_source_priority_dedup(
+        records,
+        |r| {
+            let label = if r.db_type.is_empty() { r.provider_id.as_str() } else { r.db_type.as_str() };
+            cross_source_tier(label)
+        },
+        |r| r.created_at,
+        |r| r.latency,
+        |r| (r.input_tokens, r.output_tokens, r.cache_read, r.cache_creation),
+    )
+}
+
+/// StreamingRecord 版跨源优先级去重（实时流无 db_type，经 provider→数据源映射判定层级）。
+pub fn cross_source_priority_dedup_streaming(
+    records: Vec<StreamingRecord>,
+    provider_to_db: &HashMap<String, String>,
+) -> Vec<StreamingRecord> {
+    cross_source_priority_dedup(
+        records,
+        |r| {
+            let label = provider_to_db
+                .get(&r.2)
+                .map(|s| s.as_str())
+                .unwrap_or(r.2.as_str());
+            cross_source_tier(label)
+        },
+        |r| r.3,
+        |r| r.8,
+        |r| (r.4, r.5, r.6, r.7),
+    )
 }
 
 #[cfg(test)]
@@ -417,5 +550,136 @@ mod tests {
             RequestFingerprint::new_codex(&r.session_id, r.input_tokens, r.output_tokens, r.cache_creation)
         };
         assert_eq!(fp_ccs, fp_aiproxy);
+    }
+
+    // ========== 跨源优先级去重 ==========
+
+    fn tier_rec(db_type: &str, provider: &str, created_at: i64, latency: i64, input: i64, output: i64, cache_read: i64, cache_write: i64) -> RawRecord {
+        RawRecord {
+            session_id: "s".to_string(),
+            model: "m".to_string(),
+            provider_id: provider.to_string(),
+            db_type: db_type.to_string(),
+            created_at,
+            input_tokens: input,
+            output_tokens: output,
+            cache_read,
+            cache_creation: cache_write,
+            latency,
+            is_codex: false,
+        }
+    }
+
+    fn labels(records: &[RawRecord]) -> Vec<String> {
+        records.iter().map(|r| r.db_type.clone()).collect()
+    }
+
+    #[test]
+    fn cross_source_drops_gateway_record_aligned_by_start_plus_latency() {
+        // 网关 t=90 请求开始，耗时 10s → anchor=100，对齐端侧完成时刻 t=100
+        let dsh = tier_rec("DSH", "DSH", 100, 8000, 100, 50, 4096, 0);
+        let magpie = tier_rec("Magpie", "Magpie", 90, 10_000, 100, 50, 4096, 0);
+        let out = cross_source_priority_dedup_records(vec![dsh, magpie]);
+        assert_eq!(labels(&out), vec!["DSH".to_string()]);
+    }
+
+    #[test]
+    fn cross_source_fallback_window_when_gateway_has_no_latency() {
+        // 无耗时时退化为创建时刻直比，窗口放宽到 ±30s
+        let dsh = tier_rec("DSH", "DSH", 200, 0, 10, 2, 0, 0);
+        let ccs = tier_rec("CCS", "uuid-1", 225, 0, 10, 2, 0, 0);
+        let out = cross_source_priority_dedup_records(vec![dsh, ccs]);
+        assert_eq!(labels(&out), vec!["DSH".to_string()]);
+
+        // 超出 ±30s：保留两侧
+        let dsh = tier_rec("DSH", "DSH", 200, 0, 10, 2, 0, 0);
+        let ccs = tier_rec("CCS", "uuid-1", 231, 0, 10, 2, 0, 0);
+        let out = cross_source_priority_dedup_records(vec![dsh, ccs]);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn cross_source_keeps_records_when_tokens_differ() {
+        // token 不一致（宁可漏去重不误杀）
+        let dsh = tier_rec("DSH", "DSH", 100, 0, 100, 50, 4096, 0);
+        let magpie = tier_rec("Magpie", "Magpie", 100, 0, 100, 51, 4096, 0);
+        let out = cross_source_priority_dedup_records(vec![dsh, magpie]);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn cross_source_keeps_gateway_when_no_tier1_match() {
+        // 端侧未覆盖的网关流量照常保留
+        let magpie = tier_rec("Magpie", "Magpie", 100, 5000, 10, 2, 0, 0);
+        let dsh = tier_rec("DSH", "DSH", 500, 0, 99, 99, 0, 0);
+        let out = cross_source_priority_dedup_records(vec![dsh, magpie]);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn cross_source_pairs_one_to_one() {
+        // 两条网关记录、一条端侧记录：只吸收一条，另一条保留（防 1 对多双杀）
+        let dsh = tier_rec("DSH", "DSH", 100, 0, 10, 2, 0, 0);
+        let g1 = tier_rec("Magpie", "Magpie", 95, 5000, 10, 2, 0, 0);
+        let g2 = tier_rec("Magpie", "Magpie", 96, 5000, 10, 2, 0, 0);
+        let out = cross_source_priority_dedup_records(vec![dsh, g1, g2]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(labels(&out), vec!["DSH".to_string(), "Magpie".to_string()]);
+
+        // 两条端侧、两条网关：全部配对
+        let d1 = tier_rec("DSH", "DSH", 100, 0, 10, 2, 0, 0);
+        let d2 = tier_rec("DSH", "DSH", 200, 0, 10, 2, 0, 0);
+        let g1 = tier_rec("Magpie", "Magpie", 95, 5000, 10, 2, 0, 0);
+        let g2 = tier_rec("Magpie", "Magpie", 195, 5000, 10, 2, 0, 0);
+        let out = cross_source_priority_dedup_records(vec![d1, d2, g1, g2]);
+        assert_eq!(labels(&out), vec!["DSH".to_string(), "DSH".to_string()]);
+    }
+
+    #[test]
+    fn cross_source_same_tier_never_matches() {
+        // 网关层内部（Magpie vs AIProxy）互不去重，交给既有指纹逻辑
+        let magpie = tier_rec("Magpie", "Magpie", 100, 0, 10, 2, 0, 0);
+        let aiproxy = tier_rec("AIProxy", "AIProxy", 100, 0, 10, 2, 0, 0);
+        let out = cross_source_priority_dedup_records(vec![aiproxy, magpie]);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn cross_source_unknown_source_not_involved() {
+        // 未知层级（db_type 与 provider_id 都不在两级清单）不参与配对
+        let unknown = tier_rec("Foo", "Foo", 100, 0, 10, 2, 0, 0);
+        let magpie = tier_rec("Magpie", "Magpie", 100, 0, 10, 2, 0, 0);
+        let out = cross_source_priority_dedup_records(vec![unknown, magpie]);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn cross_source_db_type_falls_back_to_provider_id() {
+        // 旧路径 db_type 为空时按 provider_id 判定层级
+        let dsh = tier_rec("", "DSH", 100, 0, 10, 2, 0, 0);
+        let magpie = tier_rec("", "Magpie", 100, 0, 10, 2, 0, 0);
+        let out = cross_source_priority_dedup_records(vec![dsh, magpie]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].provider_id, "DSH");
+    }
+
+    #[test]
+    fn cross_source_fast_path_when_no_gateway_records() {
+        let d1 = tier_rec("DSH", "DSH", 100, 0, 10, 2, 0, 0);
+        let d2 = tier_rec("OpenCode", "opencode", 200, 0, 30, 5, 0, 0);
+        let out = cross_source_priority_dedup_records(vec![d1, d2]);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn cross_source_streaming_uses_provider_to_db_map() {
+        // 实时流无 db_type：CCS 的动态 provider id 经映射归并到 "CCS"（tier 2）
+        let mut map = HashMap::new();
+        map.insert("uuid-ccs".to_string(), "CCS".to_string());
+        let dsh: StreamingRecord = ("s1".into(), "m".into(), "DSH".into(), 100, 10, 2, 0, 0, 8000, 500, false);
+        let ccs: StreamingRecord = ("s2".into(), "m2".into(), "uuid-ccs".into(), 92, 10, 2, 0, 0, 8000, 500, false);
+        let out = cross_source_priority_dedup_streaming(vec![dsh, ccs], &map);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].2, "DSH");
     }
 }

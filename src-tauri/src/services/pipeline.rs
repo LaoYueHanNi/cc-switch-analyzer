@@ -94,7 +94,10 @@ pub fn run_streaming_dedup(
             result.push(record);
         }
     }
-    result
+    // 跨源优先级去重：实时请求列表与统计查询口径一致，
+    // 网关转发记录（Magpie/AIProxy/CCS）与端侧直录同一请求时保留端侧
+    let provider_to_db = build_provider_to_db_map(sources);
+    super::dedup::cross_source_priority_dedup_streaming(result, &provider_to_db)
 }
 
 // ========== 中心去重管道 ==========
@@ -136,6 +139,9 @@ pub fn fetch_deduped_records_report(
         }
     }
     if succeeded == 0 { return Err(errors.join("; ")); }
+    // 跨源优先级去重：端侧直录（DSH/OpenCode 等）优先；统一网关（Magpie/AIProxy/CCS）
+    // 与端侧记录同一请求时丢弃网关侧记录，避免同一用量在展示与算费中双计
+    let mut flat = super::dedup::cross_source_priority_dedup_records(flat);
     flat.sort_by(|a, b| (b.provider_id == "AIProxy").cmp(&(a.provider_id == "AIProxy")));
     Ok((super::dedup::dedup_records(flat), errors))
 }

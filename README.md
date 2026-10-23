@@ -85,6 +85,8 @@ Kimi Work 默认会话位于 macOS 的 `~/Library/Application Support/kimi-deskt
 
 Grok 会话标题和项目路径从 `$GROK_HOME` 或 `~/.grok/{sessions,archived_sessions}/` 的元数据补充。Antigravity 采集新用量时需要其 IDE / language server 正在运行，已导入历史在关闭 IDE 后仍可查询。
 
+**跨源去重口径**：同一个请求可能同时被端侧工具（DSH、OpenCode、ZCode 等会话记录）与统一网关（Magpie、AI-Proxy、CC-Switch）各记一次。统计与算费按「端侧直录优先」合并：网关记录若与端侧记录为同一请求（四类 Token 一致且时间对齐）则不再重复计入，未被端侧覆盖的网关流量照常统计。各数据源仍保留完整的原始账本，去重只发生在展示与算费环节。
+
 **数据保护**：绝不修改 CC-Switch、OpenCode、AI-Proxy、ZCode、MiniMax 等外部数据库。应用自有库 `~/.cc-switch-analyzer/pricing.db` 保存定价、设置、任务与扫描型源的派生数据；Cursor 缓存按账号隔离。
 
 ## 安装与构建

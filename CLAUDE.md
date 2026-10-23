@@ -101,6 +101,7 @@ Git Bash 中可通过 `powershell.exe -Command` 调用上述脚本。产出自�
 - 数据源类型与规范名由 `services/data_source.rs::DbType` 定义：`CCS`、`OpenCode`、`AIProxy`、`Cursor`、`ZCode`、`Proma`、`DSH`、`MiniMax`、`Antigravity`、`Kimi`、`PI`、`Magpie`。
 - `SourceCapabilities` 声明会话管理、项目归属和增量扫描能力；用量统计可用不代表该源支持会话管理或终端恢复。
 - 持久化数据源时同时保存路径和类型。扫描源可能共用 `pricing.db`，mtime 缓存键必须包含 `db_type` 与路径。
+- 跨源优先级去重在查询侧进行（`services/dedup.rs`，见[决策记录](docs/decisions/implemented/2026-10-24-cross-source-priority-dedup.md)）：端侧直录源（DSH、Cursor、OpenCode、ZCode、MiniMax、Proma、Antigravity、Kimi、PI）优先保留；统一网关源（AIProxy、Magpie、CCS）中与端侧同一请求（四类 Token 一致 + 「创建时刻+耗时」对齐窗口 + 一对一占用）的记录被丢弃，未配对的网关记录保留。落库不动，各源保留完整原始账本；新增数据源须同步 `CROSS_SOURCE_TIER1/TIER2`。
 
 ### 版本与项目文档
 
