@@ -2,7 +2,7 @@
 
 多数据源 AI 用量桌面分析工具，基于 Tauri v2、Rust 和 Vue 3 构建。支持 CC-Switch、OpenCode、AI-Proxy、Cursor、ZCode、Proma、DSH、MiniMax Code、Antigravity、Kimi、PI（pi / oh-my-pi）与 Magpie，提供 Token、费用、模型分布、会话与实时请求分析。
 
-**当前代码版本：0.8.11**。多数据源可同时接入，合并查询并按请求去重。
+**当前代码版本：0.8.12**。多数据源可同时接入，合并查询并按请求去重。
 
 ## 功能特性
 

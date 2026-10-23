@@ -4,7 +4,7 @@
 
 **CC-Switch Analyzer** — 多数据源 AI 用量桌面分析工具，支持 CC-Switch、OpenCode、AI-Proxy、Cursor、ZCode、Proma、DSH、MiniMax Code、Antigravity、Kimi、PI（pi / oh-my-pi）与 Magpie。
 
-- **当前代码版本**: 0.8.11（以 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 为准）
+- **当前代码版本**: 0.8.12（以 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 为准）
 - **架构**: Tauri v2（Rust 后端 + Vue 3 前端）
 - **仓库**: https://github.com/LaoYueHanNi/cc-switch-analyzer
 - **用户功能与数据路径**: [README.md](README.md)
