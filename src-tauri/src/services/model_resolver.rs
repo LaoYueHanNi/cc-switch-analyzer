@@ -15,10 +15,32 @@ pub struct ModelResolver {
     cache: RwLock<HashMap<String, Resolution>>,
 }
 
+/// `provider/model` 形式路由名取最后一段；仅当多于一段且每段非空时有效。
+/// 口径与 dsh-token-usage 插件的 `providerSuffix` 一致：网关（magpie 等）
+/// 场景下 DSH 会话日志记录的是路由名（如 `auto/GLM-5.3`），真实模型在
+/// 后缀里；`meta/muse-glimmer-30b` 这类本身就是别名的名字不受影响——
+/// 调用方必须先按完整名解析，仅未命中时才用本函数兜底。
+pub fn provider_suffix(name: &str) -> Option<&str> {
+    let mut segments = name.split('/');
+    let first = segments.next()?;
+    if first.is_empty() {
+        return None;
+    }
+    let mut last = first;
+    let mut count = 1usize;
+    for segment in segments {
+        if segment.is_empty() {
+            return None;
+        }
+        last = segment;
+        count += 1;
+    }
+    if count > 1 { Some(last) } else { None }
+}
+
 /// The upstream portable subset: literals, escaped punctuation, groups, | and ?.
 /// Reject engine-specific syntax rather than accepting different JS/Rust meanings.
-pub fn compile_alias_pattern(pattern: &str) -> Result<Regex, String> {
-    let invalid = || format!("非法模型别名正则: {}", pattern);
+pub fn compile_alias_pattern(pattern: &str) -> Result<Regex, String> {    let invalid = || format!("非法模型别名正则: {}", pattern);
     if !pattern.starts_with('^') || !pattern.ends_with('$') || pattern.len() < 3 {
         return Err(invalid());
     }
@@ -117,6 +139,19 @@ impl ModelResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_suffix_takes_last_non_empty_segment() {
+        assert_eq!(provider_suffix("auto/GLM-5.3"), Some("GLM-5.3"));
+        assert_eq!(provider_suffix("group/glm-5.3-flashx"), Some("glm-5.3-flashx"));
+        assert_eq!(provider_suffix("a/b/c"), Some("c"));
+        // 单段、空段、空名都无效
+        assert_eq!(provider_suffix("glm-5.3"), None);
+        assert_eq!(provider_suffix("openrouter/free"), Some("free"));
+        assert_eq!(provider_suffix("/glm-5.3"), None);
+        assert_eq!(provider_suffix("auto/"), None);
+        assert_eq!(provider_suffix(""), None);
+    }
 
     #[test]
     fn shared_cases_match_frontend_and_preserve_model_identity() {

@@ -127,7 +127,8 @@ pub fn query_by_model(params: FilterParams, state: State<AppState>) -> Result<Ve
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
     let records = fetch_deduped_records(&sources, &params)?;
-    Ok(aggregate_model_breakdown(&records))
+    let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
+    Ok(fold_model_breakdown(aggregate_model_breakdown(&records), &pricing))
 }
 
 #[tauri::command]
@@ -156,7 +157,8 @@ pub fn query_daily_trend(params: FilterParams, state: State<AppState>) -> Result
     require_sources!(sources);
     let records = fetch_deduped_records(&sources, &params)?;
     let tz_offset = params.tz_offset.unwrap_or(0);
-    Ok(aggregate_daily_trend(&records, tz_offset))
+    let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
+    Ok(fold_trend_rows(aggregate_daily_trend(&records, tz_offset), &pricing))
 }
 
 #[tauri::command]
@@ -167,13 +169,7 @@ pub fn query_hourly_trend(params: FilterParams, state: State<AppState>) -> Resul
     let records = fetch_deduped_records(&sources, &params)?;
     let tz_offset = params.tz_offset.unwrap_or(0);
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
-    let mut rows = aggregate_hourly_trend(&records, tz_offset);
-    for row in &mut rows {
-        if let Some(canonical) = pricing.resolve_model_id(&row.model) {
-            row.model = canonical;
-        }
-    }
-    Ok(rows)
+    Ok(fold_trend_rows(aggregate_hourly_trend(&records, tz_offset), &pricing))
 }
 
 #[tauri::command]
@@ -386,6 +382,80 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     result.truncate(SESSION_TOP_N as usize);
 
     Ok(result)
+}
+
+/// 展示层模型归并（口径参考 dsh-token-usage 的 attachCosts byModel fold）：
+/// 模型名先按定价表规范化为 canonical id（含 `provider/` 路由前缀兜底），
+/// 同名的行合并求和；解析不出的行保留原始名。仅作用于模型维度的展示聚合
+/// ——落库、会话明细与实时列表保持原始名，与跨源去重「落库不动」的约定一致。
+fn fold_model_breakdown(
+    mut rows: Vec<ModelBreakdown>,
+    pricing: &crate::services::pricing_engine::PricingEngine,
+) -> Vec<ModelBreakdown> {
+    let mut folded: Vec<ModelBreakdown> = Vec::with_capacity(rows.len());
+    let mut index: HashMap<String, usize> = HashMap::new();
+    for mut row in rows.drain(..) {
+        if let Some(canonical) = pricing.resolve_model_id(&row.model) {
+            row.model = canonical;
+        }
+        let slot = match index.get(&row.model) {
+            Some(&i) => &mut folded[i],
+            None => {
+                index.insert(row.model.clone(), folded.len());
+                folded.push(row);
+                continue;
+            }
+        };
+        slot.requests += row.requests;
+        slot.input_tokens += row.input_tokens;
+        slot.output_tokens += row.output_tokens;
+        slot.cache_read += row.cache_read;
+        slot.cache_creation += row.cache_creation;
+    }
+    folded.sort_by(|a, b| {
+        let total_a = a.input_tokens + a.output_tokens + a.cache_read + a.cache_creation;
+        let total_b = b.input_tokens + b.output_tokens + b.cache_read + b.cache_creation;
+        total_b.cmp(&total_a).then(a.model.cmp(&b.model))
+    });
+    folded
+}
+
+/// 趋势行（按天/按小时）的模型归并：规范化后按 (day, model) 折叠，
+/// 平均耗时按请求数加权合并。
+fn fold_trend_rows(
+    mut rows: Vec<DailyTrendRow>,
+    pricing: &crate::services::pricing_engine::PricingEngine,
+) -> Vec<DailyTrendRow> {
+    let mut folded: Vec<DailyTrendRow> = Vec::with_capacity(rows.len());
+    let mut index: HashMap<(String, String), usize> = HashMap::new();
+    for mut row in rows.drain(..) {
+        if let Some(canonical) = pricing.resolve_model_id(&row.model) {
+            row.model = canonical;
+        }
+        let key = (row.day.clone(), row.model.clone());
+        let slot = match index.get(&key) {
+            Some(&i) => &mut folded[i],
+            None => {
+                index.insert(key, folded.len());
+                folded.push(row);
+                continue;
+            }
+        };
+        let total_requests = slot.requests + row.requests;
+        slot.avg_latency = if total_requests > 0 {
+            (slot.avg_latency * slot.requests as f64 + row.avg_latency * row.requests as f64)
+                / total_requests as f64
+        } else {
+            0.0
+        };
+        slot.requests = total_requests;
+        slot.input_tokens += row.input_tokens;
+        slot.output_tokens += row.output_tokens;
+        slot.cache_read += row.cache_read;
+        slot.cache_creation += row.cache_creation;
+    }
+    folded.sort_by(|a, b| a.day.cmp(&b.day).then(a.model.cmp(&b.model)));
+    folded
 }
 
 /// 共享的预计算查询核心逻辑，不依赖 Tauri State，可被 HTTP 服务复用。
@@ -1171,4 +1241,92 @@ fn build_session_details(
         });
     }
     result
+}
+
+#[cfg(test)]
+mod fold_tests {
+    use super::*;
+    use crate::services::app_db::AppDbService;
+    use crate::services::cloud_pricing;
+    use crate::services::pricing_engine::PricingEngine;
+
+    /// 定价表：modelId `glm-5.3` 带正则别名；`glm-5.3-flash` 独立定价
+    fn test_engine() -> PricingEngine {
+        let table = cloud_pricing::parse_cloud_pricing(r#"{
+            "version": 1, "updatedAt": 1, "currency": "RMB", "models": [
+                { "modelId": "glm-5.3", "inputCostPerMillion": 1, "outputCostPerMillion": 1,
+                  "cacheReadCostPerMillion": 0, "cacheCreationCostPerMillion": 0,
+                  "aliasPatterns": ["^glm-5\\.3-(low|high)$"] },
+                { "modelId": "glm-5.3-flash", "inputCostPerMillion": 2, "outputCostPerMillion": 2,
+                  "cacheReadCostPerMillion": 0, "cacheCreationCostPerMillion": 0 }
+            ]
+        }"#).unwrap();
+        let db = AppDbService::new_in_memory().unwrap();
+        db.save_cloud_pricing(&table).unwrap();
+        let mut engine = PricingEngine::new();
+        engine.refresh(&db).unwrap();
+        engine
+    }
+
+    fn breakdown(model: &str, requests: i64, input: i64) -> ModelBreakdown {
+        ModelBreakdown {
+            model: model.into(),
+            requests,
+            input_tokens: input,
+            output_tokens: 0,
+            cache_read: 0,
+            cache_creation: 0,
+        }
+    }
+
+    #[test]
+    fn by_model_rows_fold_onto_canonical_names() {
+        let pricing = test_engine();
+        let rows = vec![
+            breakdown("auto/GLM-5.3", 10, 1000),
+            breakdown("glm-5.3", 5, 500),
+            breakdown("glm-5.3-flash", 3, 300),
+            breakdown("zcode/GLM-5.3-Flash", 2, 200),
+            breakdown("GLM-5.3-Flash-Trial", 1, 100),
+        ];
+        let folded = fold_model_breakdown(rows, &pricing);
+        // 别名行折叠进 canonical；未定价的 Trial 保留原名单列
+        assert_eq!(folded.len(), 3);
+        assert_eq!(folded[0].model, "glm-5.3");
+        assert_eq!(folded[0].requests, 15);
+        assert_eq!(folded[0].input_tokens, 1500);
+        assert_eq!(folded[1].model, "glm-5.3-flash");
+        assert_eq!(folded[1].requests, 5);
+        assert_eq!(folded[2].model, "GLM-5.3-Flash-Trial");
+        assert_eq!(folded[2].requests, 1);
+    }
+
+    #[test]
+    fn trend_rows_fold_by_day_and_model_with_weighted_latency() {
+        let pricing = test_engine();
+        let row = |day: &str, model: &str, requests: i64, latency: f64| DailyTrendRow {
+            day: day.into(),
+            model: model.into(),
+            requests,
+            input_tokens: requests * 10,
+            output_tokens: 0,
+            cache_read: 0,
+            cache_creation: 0,
+            avg_latency: latency,
+        };
+        let rows = vec![
+            row("2026-10-24", "auto/glm-5.3", 3, 10.0),
+            row("2026-10-24", "glm-5.3", 1, 20.0),
+            row("2026-10-23", "glm-5.3", 2, 5.0),
+        ];
+        let folded = fold_trend_rows(rows, &pricing);
+        assert_eq!(folded.len(), 2);
+        // 同日同 canonical 折叠，耗时按请求数加权：(10×3 + 20×1) / 4
+        assert_eq!(folded[0].day, "2026-10-23");
+        assert_eq!(folded[0].requests, 2);
+        assert_eq!(folded[1].day, "2026-10-24");
+        assert_eq!(folded[1].model, "glm-5.3");
+        assert_eq!(folded[1].requests, 4);
+        assert!((folded[1].avg_latency - 12.5).abs() < 1e-9);
+    }
 }

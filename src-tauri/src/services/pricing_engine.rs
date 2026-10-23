@@ -360,10 +360,20 @@ impl PricingEngine {
         Ok(self.resolver.resolve(model_id)?.unwrap_or_else(|| model_id.to_string()))
     }
 
-    // 别名/modelId → modelId 解析（大小写不敏感）
+    // 别名/modelId → modelId 解析（大小写不敏感）。完整名未命中时按
+    // dsh-token-usage 插件口径剥离 `provider/` 路由前缀再试一次：DSH 走
+    // magpie 网关时记录的是路由名（auto/GLM-5.3 等），真实模型 id 在后缀；
+    // 本身就是斜杠别名的名字（meta/muse-glimmer-30b）在完整名阶段已命中，
+    // 不会走到剥离。歧义仍然不猜（返回 None）。
     pub fn resolve_model_id(&self, raw_model_id: &str) -> Option<String> {
-        // Ambiguity is logged by the resolver and never produces a guessed price.
-        self.resolver.resolve(raw_model_id).ok().flatten()
+        match self.resolver.resolve(raw_model_id) {
+            Ok(hit) => hit.or_else(|| {
+                let suffix = crate::services::model_resolver::provider_suffix(raw_model_id)?;
+                self.resolver.resolve(suffix).ok().flatten()
+            }),
+            // Ambiguity is logged by the resolver and never produces a guessed price.
+            Err(_) => None,
+        }
     }
 
     // 获取某模型的所有别名（云端 + 用户）
@@ -734,6 +744,35 @@ mod tests {
         db.conn().execute("UPDATE cloud_pricing_cache SET alias_patterns='[\"^.*$\"]'", []).unwrap();
         assert!(engine.refresh(&db).is_err());
         assert_eq!(engine.resolve_model_id("EXAMPLE-HIGH").as_deref(), Some("canonical"));
+    }
+
+    #[test]
+    fn suffix_fallback_resolves_route_prefix_and_keeps_alias_priority() {
+        // 模型 a 有完整名斜杠别名 x/y；模型 b 是普通 id
+        let table = cloud_pricing::parse_cloud_pricing(r#"{
+            "version": 1, "updatedAt": 1, "currency": "RMB", "models": [
+                { "modelId": "a", "inputCostPerMillion": 1, "outputCostPerMillion": 1,
+                  "cacheReadCostPerMillion": 0, "cacheCreationCostPerMillion": 0,
+                  "aliases": ["x/y"] },
+                { "modelId": "b", "inputCostPerMillion": 2, "outputCostPerMillion": 2,
+                  "cacheReadCostPerMillion": 0, "cacheCreationCostPerMillion": 0 }
+            ]
+        }"#).unwrap();
+        let db = AppDbService::new_in_memory().unwrap();
+        db.save_cloud_pricing(&table).unwrap();
+        let mut engine = PricingEngine::new();
+        engine.refresh(&db).unwrap();
+        // 完整名别名优先：x/y 命中 a，不剥前缀成 y 再命中 b
+        assert_eq!(engine.resolve_model_id("x/y").as_deref(), Some("a"));
+        assert_eq!(engine.resolve_model_id("X/Y").as_deref(), Some("a"));
+        // 路由前缀名完整名未命中 → 剥最后一段后缀兜底
+        assert_eq!(engine.resolve_model_id("auto/b").as_deref(), Some("b"));
+        assert_eq!(engine.resolve_model_id("auto/B").as_deref(), Some("b"));
+        assert_eq!(engine.resolve_model_id("a1/a2/b").as_deref(), Some("b"));
+        // 后缀也无定价命中、空段与无前缀名不兜底
+        assert_eq!(engine.resolve_model_id("auto/unknown"), None);
+        assert_eq!(engine.resolve_model_id("auto/"), None);
+        assert_eq!(engine.resolve_model_id("unknown"), None);
     }
 
     fn create_test_engine() -> (PricingEngine, AppDbService) {
