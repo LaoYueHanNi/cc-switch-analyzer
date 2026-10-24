@@ -2,6 +2,9 @@
 
 Status: implemented
 
+> [!NOTE]
+> 本文的「四类 Token + 时间窗」配对规则后来被收编为弱键；判重依据已泛化为去重键抽象（强键 `RequestId` 优先、弱键兜底），并贯通应用库 `request_id` 主键，见[去重键抽象](2026-10-24-dedup-key-abstraction.md)。层级清单与「宁可漏去重、不误杀」原则不变。
+
 ## Problem
 
 同一真实请求会被两类数据源同时落库：端侧直录源（如 DSH 会话扫描）与统一网关转发账本（如 Magpie `usage.jsonl`、AIProxy、CCS）。DSH 的请求经 magpie 网关转发后，`source='DSH'` 与 `source='Magpie'` 各入一条库，主页面汇总、图表、实时请求列表与今日查询（TrafficMonitor/菜单栏）全部双计。

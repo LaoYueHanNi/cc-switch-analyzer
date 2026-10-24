@@ -879,7 +879,8 @@ impl AiProxyDbService {
                        cached_read_tokens,
                        cached_write_tokens,
                        duration_ms,
-                       request_type
+                       request_type,
+                       request_id
                 FROM token_stats
                 WHERE {ts_expr} >= ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cached_read_tokens > 0 OR cached_write_tokens > 0)
@@ -894,7 +895,8 @@ impl AiProxyDbService {
                        cached_read_tokens,
                        cached_write_tokens,
                        duration_ms,
-                       request_type
+                       request_type,
+                       request_id
                 FROM token_stats
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cached_read_tokens > 0 OR cached_write_tokens > 0)
                 ORDER BY request_ts DESC
@@ -921,6 +923,7 @@ impl AiProxyDbService {
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
                 0,
                 is_codex,
+                row.get::<_, Option<String>>(10)?.unwrap_or_default(),
             ))
         }).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
 
@@ -945,7 +948,8 @@ impl AiProxyDbService {
                        cached_read_tokens,
                        cached_write_tokens,
                        duration_ms,
-                       request_type
+                       request_type,
+                       request_id
                 FROM token_stats
                 WHERE {ts_expr} >= ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cached_read_tokens > 0 OR cached_write_tokens > 0)
@@ -960,7 +964,8 @@ impl AiProxyDbService {
                        cached_read_tokens,
                        cached_write_tokens,
                        duration_ms,
-                       request_type
+                       request_type,
+                       request_id
                 FROM token_stats
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cached_read_tokens > 0 OR cached_write_tokens > 0)
                 ORDER BY request_ts DESC
@@ -987,6 +992,7 @@ impl AiProxyDbService {
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
                 0,
                 is_codex,
+                row.get::<_, Option<String>>(10)?.unwrap_or_default(),
             ))
         }).map_err(|e| format!("stream_records 查询失败: {}", e))?;
 
@@ -1011,7 +1017,8 @@ impl AiProxyDbService {
                     cached_read_tokens,
                     cached_write_tokens,
                     duration_ms,
-                    request_type
+                    request_type,
+                    request_id
              FROM token_stats {}
              ORDER BY request_ts",
             where_sql
@@ -1029,6 +1036,7 @@ impl AiProxyDbService {
                 session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                request_id: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
                 db_type: "AIProxy".to_string(),
                 created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                 input_tokens,

@@ -483,6 +483,8 @@ pub fn parse_cursor_csv_file(path: &Path, user_id: &str) -> Result<Vec<RawRecord
             session_id: format!("cursor-{}-{}", uid, day_key),
             model: model.to_string(),
             provider_id: PROVIDER_ID.to_string(),
+            // CSV 行是按日聚合用量，无稳定单请求键，request_id 留空走弱键去重
+            request_id: String::new(),
             db_type: "Cursor".to_string(),
             created_at,
             input_tokens: input_without_cache_write.max(0),
@@ -801,6 +803,8 @@ impl DataSource for CursorCsvService {
                     r.latency,
                     0,
                     false,
+                    // CSV 行无稳定单请求键，request_id 占位空串，去重走弱键
+                    String::new(),
                 )
             })
             .collect();

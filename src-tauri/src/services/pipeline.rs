@@ -75,12 +75,16 @@ pub fn stream_dedup_overlap_since(since: Option<i64>) -> Option<i64> {
 /// 消费端边收边去重，真正流式处理（不在内存中积累全量数据再过滤）。
 ///
 /// 数据流：Producer(源1) ──┐
-///         Producer(源2) ──┼→ channel → Deduplicator(逐条) → Vec<Record>
+///         Producer(源2) ──┼→ channel → Deduplicator(逐条) → (Vec<Record>, absorbed)
 ///         Producer(源N) ──┘
+///
+/// 返回 `(去重后记录, 被吸收的网关行 request_id)`：跨源配对成功时 tier 2 行被
+/// 丢弃，其 request_id 随响应下发前端，移除早前轮次已显示的残留行（两源扫描
+/// 轮错峰跨过轮询边界时，网关行会先于端侧行被单独放出一轮）。
 pub fn run_streaming_dedup(
     sources: &[SourceEntry],
     since: Option<i64>,
-) -> Vec<crate::services::data_source::StreamingRecord> {
+) -> (Vec<crate::services::data_source::StreamingRecord>, Vec<String>) {
     let since = stream_dedup_overlap_since(since);
     let (tx, rx) = mpsc::channel();
 
@@ -111,7 +115,16 @@ pub fn run_streaming_dedup(
     // 跨源优先级去重：实时请求列表与统计查询口径一致，
     // 网关转发记录（Magpie/AIProxy/CCS）与端侧直录同一请求时保留端侧
     let provider_to_db = build_provider_to_db_map(sources);
-    super::dedup::cross_source_priority_dedup_streaming(result, &provider_to_db)
+    let (kept, dropped) = super::dedup::dedup_by_keys_with_removed(result, |r| {
+        super::dedup::streaming_evidence(r, &provider_to_db)
+    });
+    // 被吸收的网关行：request_id 非空才可被前端定位移除
+    let absorbed: Vec<String> = dropped
+        .iter()
+        .map(|r| r.11.clone())
+        .filter(|id| !id.is_empty())
+        .collect();
+    (kept, absorbed)
 }
 
 // ========== 中心去重管道 ==========
@@ -586,6 +599,7 @@ mod tests {
             session_id: session_id.to_string(),
             model: model.to_string(),
             provider_id: provider_id.to_string(),
+            request_id: String::new(),
             db_type: String::new(),
             created_at,
             input_tokens: input,
@@ -956,6 +970,87 @@ mod tests {
         let (scoped, scoped_params) = scope_to_provider_source(&sources, &params_with_provider(None));
         assert_eq!(scoped.len(), 2);
         assert!(scoped_params.provider_id.is_none());
+    }
+
+    // ===== run_streaming_dedup 吸收清单 =====
+
+    struct StreamingFake(Vec<crate::services::data_source::StreamingRecord>);
+
+    impl DataSource for StreamingFake {
+        fn open(&mut self, _path: &str) -> Result<(), String> { Ok(()) }
+        fn close(&mut self) {}
+        fn is_open(&self) -> bool { true }
+        fn get_record_count(&self) -> Result<i64, String> { Ok(0) }
+        fn get_latest_timestamp(&self) -> Option<i64> { None }
+        fn get_providers(&self) -> Result<Vec<Provider>, String> { Ok(Vec::new()) }
+        fn get_models(&self) -> Result<Vec<String>, String> { Ok(Vec::new()) }
+        fn get_date_range(&self) -> Result<DateRange, String> { Ok(DateRange { min: 0, max: 0 }) }
+        fn get_summary(&self, _params: &FilterParams) -> Result<SummaryData, String> {
+            Ok(SummaryData { total_requests: 0, success_count: 0, total_input: 0, total_output: 0, total_cache_read: 0, total_cache_creation: 0, avg_latency: 0.0 })
+        }
+        fn get_model_breakdown(&self, _params: &FilterParams) -> Result<Vec<ModelBreakdown>, String> { Ok(Vec::new()) }
+        fn get_provider_breakdown(&self, _params: &FilterParams) -> Result<Vec<ProviderBreakdown>, String> { Ok(Vec::new()) }
+        fn get_combined_breakdown(&self, _params: &FilterParams) -> Result<Vec<CombinedBreakdownRow>, String> { Ok(Vec::new()) }
+        fn get_provider_model_tokens(&self, _params: &FilterParams) -> Result<Vec<ProviderModelToken>, String> { Ok(Vec::new()) }
+        fn get_daily_trend(&self, _params: &FilterParams) -> Result<Vec<DailyTrendRow>, String> { Ok(Vec::new()) }
+        fn get_hourly_trend(&self, _params: &FilterParams) -> Result<Vec<DailyTrendRow>, String> { Ok(Vec::new()) }
+        fn get_session_breakdown(&self, _params: &FilterParams) -> Result<Vec<SessionBreakdown>, String> { Ok(Vec::new()) }
+        fn get_session_max_context_widths(&self, _ids: &[String]) -> Result<HashMap<String, i64>, String> { Ok(HashMap::new()) }
+        fn get_session_model_tokens(&self, _params: &FilterParams) -> Result<Vec<SessionModelToken>, String> { Ok(Vec::new()) }
+        fn get_session_request_tokens(&self, _params: &FilterParams) -> Result<Vec<SessionRequestToken>, String> { Ok(Vec::new()) }
+        fn get_session_request_tokens_for_ids(&self, _params: &FilterParams, _session_ids: &[String]) -> Result<Vec<SessionRequestToken>, String> { Ok(Vec::new()) }
+        fn get_session_model_tokens_for_ids(&self, _params: &FilterParams, _session_ids: &[String]) -> Result<Vec<SessionModelToken>, String> { Ok(Vec::new()) }
+        fn get_session_timestamps(&self, _ids: &[String]) -> Result<HashMap<String, Vec<i64>>, String> { Ok(HashMap::new()) }
+        fn get_model_context_tier_buckets(&self, _params: &FilterParams, _thresholds: &[i64]) -> Result<Vec<ModelContextTierBucket>, String> { Ok(Vec::new()) }
+        fn get_minute_level_token_trend(&self) -> Result<Vec<RealtimeBucket>, String> { Ok(Vec::new()) }
+        fn get_recent_request_logs_raw(&self, _since: Option<i64>) -> Result<Vec<crate::services::data_source::StreamingRecord>, String> {
+            Ok(self.0.clone())
+        }
+        fn get_filtered_records(&self, _params: &FilterParams) -> Result<Vec<RawRecord>, String> { Ok(Vec::new()) }
+    }
+
+    fn streaming_src(db_type: DbType, records: Vec<crate::services::data_source::StreamingRecord>) -> SourceEntry {
+        SourceEntry {
+            id: db_type.label().to_string(),
+            path: String::new(),
+            db_type,
+            source: Box::new(StreamingFake(records)),
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn run_streaming_dedup_reports_absorbed_gateway_ids() {
+        // 网关行（t=90 开始，耗时 10s → 锚点 100）与端侧行（完成于 100）配对：
+        // 端侧保留，网关行被吸收且其 request_id 进入 absorbed 清单供前端移除残留行
+        let dsh: crate::services::data_source::StreamingRecord =
+            ("s1".into(), "m".into(), "DSH".into(), 100, 10, 2, 0, 0, 0, 0, false, "dsh-1".into());
+        let magpie: crate::services::data_source::StreamingRecord =
+            ("s2".into(), "m2".into(), "Magpie".into(), 90, 10, 2, 0, 0, 10_000, 0, false, "mag-1".into());
+        let sources = vec![
+            streaming_src(DbType::Dsh, vec![dsh]),
+            streaming_src(DbType::Magpie, vec![magpie]),
+        ];
+        let (kept, absorbed) = run_streaming_dedup(&sources, None);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].2, "DSH");
+        assert_eq!(absorbed, vec!["mag-1".to_string()]);
+    }
+
+    #[test]
+    fn run_streaming_dedup_absorbed_skips_empty_request_ids() {
+        // 无 request_id 的被吸收行无法被前端定位，不进入 absorbed 清单
+        let dsh: crate::services::data_source::StreamingRecord =
+            ("s1".into(), "m".into(), "DSH".into(), 100, 10, 2, 0, 0, 0, 0, false, "dsh-1".into());
+        let gateway: crate::services::data_source::StreamingRecord =
+            ("s2".into(), "m2".into(), "Magpie".into(), 100, 10, 2, 0, 0, 0, 0, false, String::new());
+        let sources = vec![
+            streaming_src(DbType::Dsh, vec![dsh]),
+            streaming_src(DbType::Magpie, vec![gateway]),
+        ];
+        let (kept, absorbed) = run_streaming_dedup(&sources, None);
+        assert_eq!(kept.len(), 1);
+        assert!(absorbed.is_empty());
     }
 
     #[test]

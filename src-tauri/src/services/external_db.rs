@@ -951,7 +951,7 @@ impl ExternalDbService {
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
                        latency_ms, app_type,
-                       {first_token_expr}
+                       {first_token_expr}, request_id
                 FROM proxy_request_logs
                 WHERE created_at >= ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
@@ -962,7 +962,7 @@ impl ExternalDbService {
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
                        latency_ms, app_type,
-                       {first_token_expr}
+                       {first_token_expr}, request_id
                 FROM proxy_request_logs
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
                   {ccs_sql}
@@ -994,6 +994,7 @@ impl ExternalDbService {
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
                 first_token,
                 is_codex,
+                row.get::<_, Option<String>>(11)?.unwrap_or_default(),
             ))
         }).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
 
@@ -1018,7 +1019,7 @@ impl ExternalDbService {
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
                        latency_ms, app_type,
-                       {first_token_expr}
+                       {first_token_expr}, request_id
                 FROM proxy_request_logs
                 WHERE created_at >= ?
                   AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
@@ -1029,7 +1030,7 @@ impl ExternalDbService {
                        input_tokens, output_tokens,
                        cache_read_tokens, cache_creation_tokens,
                        latency_ms, app_type,
-                       {first_token_expr}
+                       {first_token_expr}, request_id
                 FROM proxy_request_logs
                 WHERE (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_creation_tokens > 0)
                   {ccs_sql}
@@ -1061,6 +1062,7 @@ impl ExternalDbService {
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
                 first_token,
                 is_codex,
+                row.get::<_, Option<String>>(11)?.unwrap_or_default(),
             ))
         }).map_err(|e| format!("stream_records 查询失败: {}", e))?;
 
@@ -1078,7 +1080,7 @@ impl ExternalDbService {
             "SELECT session_id, model, provider_id, created_at,
                     input_tokens, output_tokens,
                     cache_read_tokens, cache_creation_tokens,
-                    latency_ms, app_type
+                    latency_ms, app_type, request_id
              FROM proxy_request_logs {}
              ORDER BY created_at",
             where_sql
@@ -1104,6 +1106,7 @@ impl ExternalDbService {
                 session_id,
                 model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 provider_id: provider_id.clone(),
+                request_id: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
                 db_type: "CCS".to_string(),
                 created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                 input_tokens,
@@ -1409,6 +1412,10 @@ mod tests {
         assert_eq!(filtered[1].9, 200); // 400 / 2 = 200 首字提取正确！
         assert_eq!(filtered[2].1, "claude-3");
         assert_eq!(filtered[2].9, 50);  // 100 / 2 = 50 首字提取正确！
+        // 尾列 request_id 来自源库真实主键，供跨源去重强键匹配
+        assert_eq!(filtered[0].11, "req-proxy-500");
+        assert_eq!(filtered[1].11, "req-codex_session-400");
+        assert_eq!(filtered[2].11, "req-proxy-100");
 
         // 首屏和 >= 秒级游标的增量入口都保留桌面端请求及原始 session ID
         assert_eq!(svc.get_recent_request_logs_raw(None).unwrap().len(), 3);
@@ -1420,6 +1427,7 @@ mod tests {
         assert_eq!(recent[0].0, "s-claude-desktop-500");
         assert_eq!(recent[0].4, 500);
         assert_eq!(recent[0].9, 250);
+        assert_eq!(recent[0].11, "req-proxy-500");
 
         // 清除过滤（None）恢复全量
         svc.set_ccs_filter_apps(None);
@@ -1442,6 +1450,8 @@ mod tests {
         svc.stream_records(None, &mut |r| stream_records.push(r)).unwrap();
         assert_eq!(stream_records.len(), 5);
         assert_eq!(stream_records[0].9, 0); // 缺列时降级首字为 0
+        // request_id 列与 data_source/first_token 无关，旧库同样带出真实主键
+        assert_eq!(stream_records[0].11, "req-proxy-500");
 
         let records = svc
             .get_filtered_raw_records(&FilterParams {

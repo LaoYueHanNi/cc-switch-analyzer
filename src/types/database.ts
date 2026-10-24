@@ -74,6 +74,8 @@ export interface RealtimeRequestLog {
   sessionId: string
   /** 数据源原始会话 ID，用于稳定去重，不随 Codex 会话归属映射变化 */
   sourceSessionId?: string
+  /** 应用库 session_request_logs 主键；实时指纹优先用它判重，为空退回七元组 */
+  requestId?: string
   model: string
   providerId: string
   /** 所属数据源 canonical 名（如 "CCS"），用于实时 Tab 行首数据源标记 */
@@ -93,4 +95,10 @@ export interface RealtimeRequestLog {
   contextTierThreshold?: number
   /** 标记是否为增量轮询新增的记录（前端本地属性，不来自后端） */
   isNew?: boolean
+}
+
+export interface RealtimeLogsPage {
+  logs: RealtimeRequestLog[]
+  /** 本轮被端侧吸收的网关行 requestId：前端据此移除早前轮次已显示的残留行 */
+  absorbed: string[]
 }

@@ -7,6 +7,9 @@ pub struct RawRecord {
     pub session_id: String,
     pub model: String,
     pub provider_id: String,
+    /// 记录在应用库 `session_request_logs` 的主键（或源库行唯一键），空串 = 无。
+    /// 供跨源去重键匹配（强键）使用；同源重复行靠它稳定判重。
+    pub request_id: String,
     /// 记录所属数据源的 canonical 名（DbType::label），如 "CCS"/"OpenCode"。
     /// 用于供应商一级聚合等按数据源归并的场景；空串表示未标注。
     pub db_type: String,
@@ -188,6 +191,9 @@ pub struct RealtimeRequestLog {
     pub session_id: String,
     /// 数据源原始会话 ID：不随 Codex 会话归属映射变化，供前端稳定去重。
     pub source_session_id: String,
+    /// 记录在应用库 `session_request_logs` 的主键（空串 = 源未提供）。
+    /// 前端实时指纹优先用它判重；为空时退回七元组指纹。
+    pub request_id: String,
     pub model: String,
     pub provider_id: String,
     /// 记录所属数据源 canonical 名(如 "CCS")，用于实时 Tab 行首数据源标记；
@@ -208,6 +214,16 @@ pub struct RealtimeRequestLog {
     pub total_cost: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_tier_threshold: Option<i64>,
+}
+
+/// 实时请求列表响应：去重后记录 + 本轮被端侧吸收的网关行 request_id。
+/// `absorbed` 供前端移除早前轮次已显示的残留行（两源扫描轮错峰时，
+/// 网关行会先于端侧行被单独放出一轮，之后才在配对窗口内被端侧吸收）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RealtimeLogsPage {
+    pub logs: Vec<RealtimeRequestLog>,
+    pub absorbed: Vec<String>,
 }
 
 // ========== 会话分析 ==========

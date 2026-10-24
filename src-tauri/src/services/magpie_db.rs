@@ -76,7 +76,8 @@ impl MagpieDbService {
         let mut stmt = db
             .prepare(
                 "SELECT session_id, model, provider_id, created_at,
-                        input_tokens, output_tokens, cache_read, cache_creation, latency
+                        input_tokens, output_tokens, cache_read, cache_creation, latency,
+                        request_id
                  FROM session_request_logs
                  WHERE source = ?1
                    AND created_at >= ?2 AND created_at < ?3
@@ -95,6 +96,7 @@ impl MagpieDbService {
                         session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                         model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                         provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                        request_id: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
                         db_type: SOURCE.to_string(),
                         created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                         input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
@@ -319,7 +321,7 @@ impl DataSource for MagpieDbService {
             Some(s) => (
                 "SELECT session_id, model, provider_id, created_at,
                         input_tokens, output_tokens, cache_read, cache_creation, latency,
-                        first_token_latency
+                        first_token_latency, request_id
                  FROM session_request_logs
                  WHERE source = ?1 AND created_at >= ?2
                  ORDER BY created_at DESC"
@@ -330,7 +332,7 @@ impl DataSource for MagpieDbService {
                 format!(
                     "SELECT session_id, model, provider_id, created_at,
                             input_tokens, output_tokens, cache_read, cache_creation, latency,
-                            first_token_latency
+                            first_token_latency, request_id
                      FROM session_request_logs
                      WHERE source = ?1
                      ORDER BY created_at DESC
@@ -358,6 +360,7 @@ impl DataSource for MagpieDbService {
                     row.get::<_, Option<i64>>(8)?.unwrap_or(0),
                     row.get::<_, Option<i64>>(9)?.unwrap_or(0),
                     false,
+                    row.get::<_, Option<String>>(10)?.unwrap_or_default(),
                 ))
             })
             .map_err(|e| format!("查询 Magpie 最近请求日志失败: {}", e))?;
@@ -456,6 +459,8 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].3, 2000);
         assert_eq!(all[0].9, 80);
+        // 第 12 列（尾插）为应用库 request_id 主键
+        assert_eq!(all[0].11, "m-new");
 
         // since 为闭式语义：created_at >= since
         let since = svc.get_recent_request_logs_raw(Some(2000)).unwrap();
@@ -473,6 +478,8 @@ mod tests {
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|r| r.db_type == "Magpie"));
         assert!(records.iter().all(|r| r.provider_id == "Magpie"));
+        assert!(records.iter().any(|r| r.request_id == "m-old"));
+        assert!(records.iter().any(|r| r.request_id == "m-new"));
 
         // 会话能力关闭：会话相关查询返回空
         assert!(svc.get_session_breakdown(&params).unwrap().is_empty());

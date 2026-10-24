@@ -101,7 +101,7 @@ Git Bash 中可通过 `powershell.exe -Command` 调用上述脚本。产出自�
 - 数据源类型与规范名由 `services/data_source.rs::DbType` 定义：`CCS`、`OpenCode`、`AIProxy`、`Cursor`、`ZCode`、`Proma`、`DSH`、`MiniMax`、`Antigravity`、`Kimi`、`PI`、`Magpie`。
 - `SourceCapabilities` 声明会话管理、项目归属和增量扫描能力；用量统计可用不代表该源支持会话管理或终端恢复。
 - 持久化数据源时同时保存路径和类型。扫描源可能共用 `pricing.db`，mtime 缓存键必须包含 `db_type` 与路径。
-- 跨源优先级去重在查询侧进行（`services/dedup.rs`，见[决策记录](docs/decisions/implemented/2026-10-24-cross-source-priority-dedup.md)）：端侧直录源（DSH、Cursor、OpenCode、ZCode、MiniMax、Proma、Antigravity、Kimi、PI）优先保留；统一网关源（AIProxy、Magpie、CCS）中与端侧同一请求（四类 Token 一致 + 「创建时刻+耗时」对齐窗口 + 一对一占用）的记录被丢弃，未配对的网关记录保留。落库不动，各源保留完整原始账本；新增数据源须同步 `CROSS_SOURCE_TIER1/TIER2`。
+- 跨源优先级去重在查询侧进行（`services/dedup.rs`，见[决策记录](docs/decisions/implemented/2026-10-24-cross-source-priority-dedup.md)与[去重键抽象](docs/decisions/implemented/2026-10-24-dedup-key-abstraction.md)）：端侧直录源（DSH、Cursor、OpenCode、ZCode、MiniMax、Proma、Antigravity、Kimi、PI）优先保留；统一网关源（AIProxy、Magpie、CCS）中与端侧同一请求的记录被丢弃，未配对的网关记录保留。配对按去重键强弱两阶段：强键 `RequestId`（应用库 request_id 主键，相等即判定；当前各源体系互不相干故跨源恒走弱键，为将来共享真实请求 ID 就位）优先，弱键（四类 Token 一致 + 「创建时刻+耗时」对齐窗口 + 一对一占用）兜底。落库不动，各源保留完整原始账本；新增数据源须同步 `CROSS_SOURCE_TIER1/TIER2`，能提供行唯一键时在 SELECT 带出 `request_id`，无则空串走纯弱键。
 
 ### 版本与项目文档
 
@@ -153,7 +153,7 @@ Cursor CSV 行是聚合用量，不能用 `input + cache_read` 推断单次请�
 
 CCS 会话日志同步记录可按 OpenCode、Claude Code、Codex、Grok Build、MCode、Gemini CLI、Hermes 过滤，代理转发记录保留；`claude-desktop` 继续排除在会话统计及会话详情之外，但保留在实时请求列表和实时分钟趋势中。设置写入应用库，并同步 `SharedState.ccs_filter_session_apps`，主页面、TrafficMonitor 和 macOS 菜单栏共用该口径。
 
-`DataSource::stream_records` 的秒级游标采用闭式语义：返回 `created_at >= since`，前端 `useRealtimePolling` 用指纹去重，避免漏掉同秒后到的记录。实时响应保留重映射前的 `sourceSessionId` 参与指纹，`sessionId` 的 Codex 会话归属映射变化不得导致重复追加。实时页按数据源展示，分别显示首字、耗时与输出/总速度；缺失指标不伪造。
+`DataSource::stream_records` 的秒级游标采用闭式语义：返回 `created_at >= since`，前端 `useRealtimePolling` 用指纹去重，避免漏掉同秒后到的记录；指纹优先用记录主键 `requestId`（稳定不受落库后 UPDATE 影响），为空退回七元组组合。实时响应为 `RealtimeLogsPage { logs, absorbed }`：`absorbed` 是本轮被端侧吸收的网关行 request_id 清单，前端据此移除早前轮次已显示的残留行（两源扫描轮错峰跨过轮询边界时网关行会先被单独放出一轮）。实时响应保留重映射前的 `sourceSessionId` 参与指纹，`sessionId` 的 Codex 会话归属映射变化不得导致重复追加。实时页按数据源展示，分别显示首字、耗时与输出/总速度；缺失指标不伪造。
 
 ### 会话与终端启动
 

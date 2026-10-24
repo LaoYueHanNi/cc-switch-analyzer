@@ -367,7 +367,7 @@ export interface PlatformAdapter {
   queryPrecompute(params: FilterParams): Promise<PrecomputeQueryResult>
   queryHourlyTrend(params: FilterParams): Promise<DailyTrendRow[]>
   queryRealtime(): Promise<RealtimeBucket[]>
-  queryRealtimeLogs(since?: number): Promise<RealtimeRequestLog[]>
+  queryRealtimeLogs(since?: number): Promise<RealtimeLogsPage>
   querySessionsWithCost(params: FilterParams, project?: string): Promise<{ sessions: SessionWithCost[]; availableProjects: string[] }>
   // 定价
   getAllPricing(): Promise<PricingData[]>

@@ -125,7 +125,7 @@ pub fn dedup_request_tokens(items: Vec<crate::models::SessionRequestToken>) -> V
         .collect()
 }
 
-// ========== 跨源优先级去重 ==========
+// ========== 跨源优先级去重（去重键抽象） ==========
 
 /// 第一优先级：端侧直录源（harness 会话日志 / 客户端本地库）。
 pub const CROSS_SOURCE_TIER1: &[&str] = &[
@@ -151,90 +151,219 @@ pub fn cross_source_tier(source_label: &str) -> u8 {
     }
 }
 
-/// 跨源优先级去重核心。
+/// 单条记录可提供的判重键。键分强弱：强键相等即判定，弱键需时间窗佐证。
 ///
-/// 同一真实请求被端侧源（tier 1）与网关源（tier 2）同时记录时（如 DSH 请求经
-/// magpie / AIProxy / cc-switch 转发），保留 tier 1 记录、丢弃能与其配对的 tier 2
-/// 记录；未能配对的 tier 2 记录（端侧未覆盖的流量）照常保留。
-///
-/// 配对规则（宁可漏去重、不误杀）：
-/// - 四类 Token 完全一致（跨源模型名命名体系不同，model 不参与匹配）；
-/// - tier 2 带耗时（latency>0）时以「创建时刻 + 耗时」对齐 tier 1 完成时刻，窗口 ±10s；
-///   无耗时时以创建时刻直比，窗口 ±30s；
-/// - 一对一占用：一条 tier 1 记录至多吸收一条 tier 2 记录，防止 1 对多双杀。
-/// tier 1 内部、tier 2 内部及未知层级（0）互不匹配。
-pub fn cross_source_priority_dedup<T>(
-    items: Vec<T>,
-    tier_of: impl Fn(&T) -> u8,
-    created_at_of: impl Fn(&T) -> i64,
-    latency_ms_of: impl Fn(&T) -> i64,
-    tokens_of: impl Fn(&T) -> (i64, i64, i64, i64),
-) -> Vec<T> {
-    // 快速路径：没有网关层记录时无需任何配对
-    if !items.iter().any(|x| tier_of(x) == 2) {
-        return items;
+/// 扩展模型：数据源只负责「供给键」（一个或多个），匹配器只负责「键之间比较」。
+/// 新源接入或某源新增键类型（如上游 response id），只改供给侧，匹配核心不动。
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum DedupKey {
+    /// 强键：请求唯一标识（应用库 request_id 主键，或跨源可比的真实请求 ID）。
+    /// 双方均存在且相等 ⇒ 直接判定同一请求（ID 已判断过，跳过 Token 环节）；
+    /// 不相等或任一侧缺失 ⇒ 忽略本键，落入弱键判定。
+    /// 当前各源主键体系互不相干（DSH=`dsh:<消息id>`、Magpie=行内容哈希），
+    /// 跨源不会误配；同源重复行则被正确吸收。将来两个源共享真实请求 ID 时自动生效。
+    RequestId(String),
+    /// 弱键：四类 Token 指纹 + 时间锚窗（原跨源配对规则原样收编）。
+    /// Token 全等且时间对齐（anchor±window）⇒ 判定同一请求。
+    TokenWindow {
+        tokens: [i64; 4],
+        anchor: i64,
+        window_secs: i64,
+    },
+}
+
+/// 记录自带的判重证据：数据源层级 + 一个或多个键。
+#[derive(Clone, Debug, Default)]
+pub struct DedupEvidence {
+    /// 数据源跨源去重层级（`cross_source_tier`）：1=端侧、2=网关、0=不参与。
+    pub tier: u8,
+    /// 该记录可提供的全部键；供给越多，可配对途径越多，互不冲突。
+    pub keys: Vec<DedupKey>,
+}
+
+impl DedupEvidence {
+    pub fn new(tier: u8) -> Self {
+        Self { tier, keys: Vec::new() }
     }
 
-    // tier 1 索引按 created_at 排序，供窗口二分
-    let mut tier1: Vec<(i64, usize)> = items
-        .iter()
-        .enumerate()
-        .filter(|(_, x)| tier_of(x) == 1)
-        .map(|(i, x)| (created_at_of(x), i))
-        .collect();
-    tier1.sort_unstable();
-    let tier1_times: Vec<i64> = tier1.iter().map(|(t, _)| *t).collect();
-    let mut tier1_used = vec![false; tier1.len()];
+    pub fn with_key(mut self, key: DedupKey) -> Self {
+        self.keys.push(key);
+        self
+    }
+}
 
+/// 去重键泛型匹配器（跨源优先级判定的核心，供给与判定解耦）。
+///
+/// 同一真实请求被端侧源（tier 1）与网关源（tier 2）同时记录时，保留 tier 1、
+/// 丢弃能配对的 tier 2；未能配对的 tier 2（端侧未覆盖的流量）照常保留。
+///
+/// 按键强度分阶段配对（宁可漏去重、不误杀）：
+/// ① 强键：tier1 侧 RequestId 建索引，tier2 命中即吸收（一对一占用）；
+/// ② 弱键：tier1 按 anchor 排序，tier2 TokenWindow 命中（Token 全等 + 窗口内）即吸收。
+/// tier 1 内部、tier 2 内部及未知层级（0）互不匹配。
+pub fn dedup_by_keys<T>(items: Vec<T>, evidence_of: impl Fn(&T) -> DedupEvidence) -> Vec<T> {
+    dedup_by_keys_with_removed(items, evidence_of).0
+}
+
+/// `dedup_by_keys` 的报告变体：额外返回被吸收（移除）的完整记录，
+/// 供实时链路把「本轮被端侧吸收的网关行」下发给前端移除已显示行。
+pub fn dedup_by_keys_with_removed<T>(
+    items: Vec<T>,
+    evidence_of: impl Fn(&T) -> DedupEvidence,
+) -> (Vec<T>, Vec<T>) {
+    let evidences: Vec<DedupEvidence> = items.iter().map(&evidence_of).collect();
+
+    // 快速路径：没有网关层记录时无需任何配对
+    if !evidences.iter().any(|e| e.tier == 2) {
+        return (items, Vec::new());
+    }
+
+    // 占用与移除标记按 items 索引；一个 tier1 记录至多吸收一条 tier2（一对一）
     let mut removed = vec![false; items.len()];
-    for (i, x) in items.iter().enumerate() {
-        if tier_of(x) != 2 {
-            continue;
-        }
-        let tokens = tokens_of(x);
-        let created = created_at_of(x);
-        let latency = latency_ms_of(x);
-        let (anchor, window) = if latency > 0 {
-            (created + latency / 1000, CROSS_SOURCE_WINDOW_ACTIVE_SECS)
-        } else {
-            (created, CROSS_SOURCE_WINDOW_FALLBACK_SECS)
-        };
-        let lo = tier1_times.partition_point(|&t| t < anchor - window);
-        let hi = tier1_times.partition_point(|&t| t <= anchor + window);
-        for k in lo..hi {
-            if tier1_used[k] {
+    {
+        let mut tier1_used = vec![false; items.len()];
+        // 阶段一索引：强键 → tier1 记录下标列表
+        let mut tier1_ids: HashMap<&str, Vec<usize>> = HashMap::new();
+        // 阶段二索引：(anchor, 记录下标)，供窗口二分
+        let mut tier1_weak: Vec<(i64, usize)> = Vec::new();
+        for (i, e) in evidences.iter().enumerate() {
+            if e.tier != 1 {
                 continue;
             }
-            let (_, idx) = tier1[k];
-            if tokens_of(&items[idx]) == tokens {
-                tier1_used[k] = true;
-                removed[i] = true;
-                break;
+            for key in &e.keys {
+                match key {
+                    DedupKey::RequestId(id) => {
+                        tier1_ids.entry(id.as_str()).or_default().push(i);
+                    }
+                    DedupKey::TokenWindow { anchor, .. } => {
+                        tier1_weak.push((*anchor, i));
+                    }
+                }
+            }
+        }
+        tier1_weak.sort_unstable();
+        let weak_anchors: Vec<i64> = tier1_weak.iter().map(|(t, _)| *t).collect();
+
+        for (i, e) in evidences.iter().enumerate() {
+            if e.tier != 2 || removed[i] {
+                continue;
+            }
+            let mut matched = false;
+            for key in &e.keys {
+                match key {
+                    DedupKey::RequestId(id) => {
+                        if let Some(cands) = tier1_ids.get(id.as_str()) {
+                            for &k in cands {
+                                if !tier1_used[k] {
+                                    tier1_used[k] = true;
+                                    matched = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    DedupKey::TokenWindow { tokens, anchor, window_secs } => {
+                        let lo = weak_anchors.partition_point(|&t| t < anchor - window_secs);
+                        let hi = weak_anchors.partition_point(|&t| t <= anchor + window_secs);
+                        for w in lo..hi {
+                            let k = tier1_weak[w].1;
+                            if tier1_used[k] {
+                                continue;
+                            }
+                            let token_hit = evidences[k].keys.iter().any(|x| match x {
+                                DedupKey::TokenWindow { tokens: t1, .. } => t1 == tokens,
+                                _ => false,
+                            });
+                            if token_hit {
+                                tier1_used[k] = true;
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if matched {
+                    removed[i] = true;
+                    break;
+                }
             }
         }
     }
 
-    let mut out = Vec::new();
+    let mut kept = Vec::new();
+    let mut dropped = Vec::new();
     for (i, x) in items.into_iter().enumerate() {
-        if !removed[i] {
-            out.push(x);
+        if removed[i] {
+            dropped.push(x);
+        } else {
+            kept.push(x);
         }
     }
-    out
+    (kept, dropped)
+}
+
+/// tier2 弱键的锚点与窗口：网关记录带耗时（latency>0）时锚 = 创建时刻+耗时
+/// （完成时刻），窗口 ±10s；无耗时时退化为创建时刻直比，窗口 ±30s。
+/// tier1（端侧）记录的 created_at 本身就是完成时刻，锚恒为裸 created_at——
+/// 两侧比较的是「完成时刻对齐」，tier1 不得再加自己的 latency，否则比较式
+/// 退化为 |d.created - m.created| ≈ 请求耗时，长请求（>10s）全部漏配。
+fn cross_source_anchor_window(created_at: i64, latency_ms: i64) -> (i64, i64) {
+    if latency_ms > 0 {
+        (created_at + latency_ms / 1000, CROSS_SOURCE_WINDOW_ACTIVE_SECS)
+    } else {
+        (created_at, CROSS_SOURCE_WINDOW_FALLBACK_SECS)
+    }
 }
 
 /// RawRecord 版跨源优先级去重（db_type 为空时按 provider_id 兜底判定层级）。
 pub fn cross_source_priority_dedup_records(records: Vec<RawRecord>) -> Vec<RawRecord> {
-    cross_source_priority_dedup(
-        records,
-        |r| {
-            let label = if r.db_type.is_empty() { r.provider_id.as_str() } else { r.db_type.as_str() };
-            cross_source_tier(label)
-        },
-        |r| r.created_at,
-        |r| r.latency,
-        |r| (r.input_tokens, r.output_tokens, r.cache_read, r.cache_creation),
-    )
+    dedup_by_keys(records, |r| {
+        let label = if r.db_type.is_empty() { r.provider_id.as_str() } else { r.db_type.as_str() };
+        let tier = cross_source_tier(label);
+        let (anchor, window) = if tier == 2 {
+            cross_source_anchor_window(r.created_at, r.latency)
+        } else {
+            (r.created_at, 0)
+        };
+        let mut ev = DedupEvidence::new(tier).with_key(DedupKey::TokenWindow {
+            tokens: [r.input_tokens, r.output_tokens, r.cache_read, r.cache_creation],
+            anchor,
+            window_secs: window,
+        });
+        if !r.request_id.is_empty() {
+            ev = ev.with_key(DedupKey::RequestId(r.request_id.clone()));
+        }
+        ev
+    })
+}
+
+/// StreamingRecord 的判重证据构造（实时流无 db_type，经 provider→数据源映射判定层级）。
+/// 供 `cross_source_priority_dedup_streaming` 与 pipeline 的吸收报告路径共用。
+/// tier2 锚 = 创建+耗时（完成时刻）；tier1 锚 = 裸 created_at（见
+/// `cross_source_anchor_window` 的对齐语义说明）。
+pub fn streaming_evidence(
+    r: &StreamingRecord,
+    provider_to_db: &HashMap<String, String>,
+) -> DedupEvidence {
+    let label = provider_to_db
+        .get(&r.2)
+        .map(|s| s.as_str())
+        .unwrap_or(r.2.as_str());
+    let tier = cross_source_tier(label);
+    let (anchor, window) = if tier == 2 {
+        cross_source_anchor_window(r.3, r.8)
+    } else {
+        (r.3, 0)
+    };
+    let mut ev = DedupEvidence::new(tier).with_key(DedupKey::TokenWindow {
+        tokens: [r.4, r.5, r.6, r.7],
+        anchor,
+        window_secs: window,
+    });
+    if !r.11.is_empty() {
+        ev = ev.with_key(DedupKey::RequestId(r.11.clone()));
+    }
+    ev
 }
 
 /// StreamingRecord 版跨源优先级去重（实时流无 db_type，经 provider→数据源映射判定层级）。
@@ -242,19 +371,7 @@ pub fn cross_source_priority_dedup_streaming(
     records: Vec<StreamingRecord>,
     provider_to_db: &HashMap<String, String>,
 ) -> Vec<StreamingRecord> {
-    cross_source_priority_dedup(
-        records,
-        |r| {
-            let label = provider_to_db
-                .get(&r.2)
-                .map(|s| s.as_str())
-                .unwrap_or(r.2.as_str());
-            cross_source_tier(label)
-        },
-        |r| r.3,
-        |r| r.8,
-        |r| (r.4, r.5, r.6, r.7),
-    )
+    dedup_by_keys(records, |r| streaming_evidence(r, provider_to_db))
 }
 
 #[cfg(test)]
@@ -469,6 +586,7 @@ mod tests {
             session_id: session_id.to_string(),
             model: model.to_string(),
             provider_id: provider_id.to_string(),
+            request_id: String::new(),
             db_type: String::new(),
             created_at: 0,
             input_tokens: input,
@@ -559,6 +677,7 @@ mod tests {
             session_id: "s".to_string(),
             model: "m".to_string(),
             provider_id: provider.to_string(),
+            request_id: String::new(),
             db_type: db_type.to_string(),
             created_at,
             input_tokens: input,
@@ -581,6 +700,29 @@ mod tests {
         let magpie = tier_rec("Magpie", "Magpie", 90, 10_000, 100, 50, 4096, 0);
         let out = cross_source_priority_dedup_records(vec![dsh, magpie]);
         assert_eq!(labels(&out), vec!["DSH".to_string()]);
+    }
+
+    #[test]
+    fn cross_source_long_request_with_slightly_different_latencies_still_pairs() {
+        // 回归守卫：两侧都是长请求（耗时 15s/15.4s）且端侧 created 已是完成时刻。
+        // 若 tier1 锚误加自身 latency，比较式会退化为 |d.created - m.created| ≈ 请求
+        // 耗时（15s）> 10s 窗口，长请求全部漏配（曾导致首页统计双计约 18%）。
+        // 网关 t=955 开始耗时 15417ms → 锚 970；端侧完成时刻 971（latency 不参与锚）。
+        let dsh = tier_rec("DSH", "DSH", 971, 15_444, 22543, 483, 0, 0);
+        let magpie = tier_rec("Magpie", "Magpie", 955, 15_417, 22543, 483, 0, 0);
+        let out = cross_source_priority_dedup_records(vec![dsh, magpie]);
+        assert_eq!(labels(&out), vec!["DSH".to_string()]);
+    }
+
+    #[test]
+    fn cross_source_streaming_long_request_pairs() {
+        // 流式路径同语义守卫：端侧锚用裸 created_at
+        let mut map = HashMap::new();
+        let dsh: StreamingRecord = ("s1".into(), "m".into(), "DSH".into(), 971, 100, 50, 0, 0, 15_444, 0, false, String::new());
+        let magpie: StreamingRecord = ("s2".into(), "m".into(), "Magpie".into(), 955, 100, 50, 0, 0, 15_417, 0, false, "mag-x".into());
+        let out = cross_source_priority_dedup_streaming(vec![dsh, magpie], &map);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].2, "DSH");
     }
 
     #[test]
@@ -676,8 +818,63 @@ mod tests {
         // 实时流无 db_type：CCS 的动态 provider id 经映射归并到 "CCS"（tier 2）
         let mut map = HashMap::new();
         map.insert("uuid-ccs".to_string(), "CCS".to_string());
-        let dsh: StreamingRecord = ("s1".into(), "m".into(), "DSH".into(), 100, 10, 2, 0, 0, 8000, 500, false);
-        let ccs: StreamingRecord = ("s2".into(), "m2".into(), "uuid-ccs".into(), 92, 10, 2, 0, 0, 8000, 500, false);
+        let dsh: StreamingRecord = ("s1".into(), "m".into(), "DSH".into(), 100, 10, 2, 0, 0, 8000, 500, false, String::new());
+        let ccs: StreamingRecord = ("s2".into(), "m2".into(), "uuid-ccs".into(), 92, 10, 2, 0, 0, 8000, 500, false, String::new());
+        let out = cross_source_priority_dedup_streaming(vec![dsh, ccs], &map);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].2, "DSH");
+    }
+
+    // ========== 去重键（DedupKey） ==========
+
+    fn tier_rec_id(db_type: &str, provider: &str, created_at: i64, latency: i64, input: i64, output: i64, request_id: &str) -> RawRecord {
+        let mut r = tier_rec(db_type, provider, created_at, latency, input, output, 0, 0);
+        r.request_id = request_id.to_string();
+        r
+    }
+
+    #[test]
+    fn strong_key_matches_across_tiers_even_when_tokens_differ() {
+        // 强键（request_id）相等 ⇒ 直接判定同一请求，无需 Token/时间佐证；
+        // token 不同（如一侧落库后被回填更新）不影响强判定。
+        let dsh = tier_rec_id("DSH", "DSH", 100, 0, 10, 2, "req-1");
+        let mut magpie = tier_rec_id("Magpie", "Magpie", 5000, 0, 999, 999, "req-1");
+        magpie.cache_read = 777;
+        let out = cross_source_priority_dedup_records(vec![dsh, magpie]);
+        assert_eq!(labels(&out), vec!["DSH".to_string()]);
+    }
+
+    #[test]
+    fn different_ids_fall_back_to_weak_token_key() {
+        // ID 不一致 ⇒ 忽略强键，落入弱键（token + 时间窗）判定——现有行为保持
+        let dsh = tier_rec_id("DSH", "DSH", 100, 0, 10, 2, "a");
+        let magpie = tier_rec_id("Magpie", "Magpie", 100, 0, 10, 2, "b");
+        let out = cross_source_priority_dedup_records(vec![dsh, magpie]);
+        assert_eq!(labels(&out), vec!["DSH".to_string()]);
+
+        // 弱键也不满足（token 不同）时保留双方
+        let dsh = tier_rec_id("DSH", "DSH", 100, 0, 10, 2, "a");
+        let magpie = tier_rec_id("Magpie", "Magpie", 100, 0, 10, 3, "b");
+        let out = cross_source_priority_dedup_records(vec![dsh, magpie]);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn strong_key_never_crosses_within_same_tier() {
+        // 同 tier 记录即使 request_id 相同也互不吸收（层级内不匹配）
+        let a = tier_rec_id("DSH", "DSH", 100, 0, 10, 2, "same");
+        let b = tier_rec_id("OpenCode", "oc", 200, 0, 10, 2, "same");
+        let out = cross_source_priority_dedup_records(vec![a, b]);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn streaming_strong_key_via_new_tuple_column() {
+        // 实时流第 12 列（request_id）参与强键配对
+        let mut map = HashMap::new();
+        map.insert("uuid-ccs".to_string(), "CCS".to_string());
+        let dsh: StreamingRecord = ("s1".into(), "m".into(), "DSH".into(), 100, 10, 2, 0, 0, 0, 0, false, "rid-9".into());
+        let ccs: StreamingRecord = ("s2".into(), "m2".into(), "uuid-ccs".into(), 5000, 888, 888, 0, 0, 0, 0, false, "rid-9".into());
         let out = cross_source_priority_dedup_streaming(vec![dsh, ccs], &map);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].2, "DSH");

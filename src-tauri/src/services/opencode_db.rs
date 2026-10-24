@@ -15,9 +15,11 @@ pub struct OpenCodeDbService {
 
 /// 实时记录查询的公共列（表别名固定为 `m`）。
 ///
-/// 第 9 列为耗时、第 10 列为首字：
+/// 第 9 列为耗时、第 10 列为首字、第 11 列为 `m.id`（作为 request_id）：
 /// - 耗时 = `message.time.completed - message.time.created`（维持既有口径）
 /// - 首字 = 首个带 `data.time.start` 的 part 时间 − `message.time.created`
+/// - `m.id` 为 OpenCode message 表主键，充当源库行唯一键；OpenCode 库无
+///   request_id 列，跨源去重强键与同源重复行判重以它稳定标识单条请求
 ///
 /// 首字与耗时同以 `message.time.created` 为起点,保证实时页 A/B 两轨同源可比;
 /// 无正文 part 时子查询为 NULL,COALESCE 回退到 `time.created` 自身使该列为 0;
@@ -35,7 +37,8 @@ const REALTIME_COLUMNS: &str = "m.session_id,
                        FROM part p
                       WHERE p.message_id = m.id
                         AND json_extract(p.data, '$.time.start') IS NOT NULL),
-                    json_extract(m.data, '$.time.created')) - json_extract(m.data, '$.time.created')";
+                    json_extract(m.data, '$.time.created')) - json_extract(m.data, '$.time.created'),
+           m.id";
 
 /// 实时记录过滤条件:assistant 且任一计费维度 > 0(表别名固定为 `m`)。
 const REALTIME_FILTER: &str = "json_extract(m.data, '$.role') = 'assistant'
@@ -935,6 +938,7 @@ impl OpenCodeDbService {
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
                 row.get::<_, Option<i64>>(9)?.unwrap_or(0).max(0),
                 false,
+                row.get::<_, Option<String>>(10)?.unwrap_or_default(),
             ))
         }).map_err(|e| format!("查询最近请求日志失败: {}", e))?;
 
@@ -987,6 +991,7 @@ impl OpenCodeDbService {
                 row.get::<_, Option<i64>>(8)?.unwrap_or(0),
                 row.get::<_, Option<i64>>(9)?.unwrap_or(0).max(0),
                 false,
+                row.get::<_, Option<String>>(10)?.unwrap_or_default(),
             ))
         }).map_err(|e| format!("stream_records 查询失败: {}", e))?;
 
@@ -1009,7 +1014,8 @@ impl OpenCodeDbService {
                     CAST(json_extract(data, '$.tokens.output') AS INTEGER),
                     CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),
                     CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),
-                    (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created'))
+                    (json_extract(data, '$.time.completed') - json_extract(data, '$.time.created')),
+                    id
              FROM message
              {}
              ORDER BY time_created",
@@ -1023,6 +1029,9 @@ impl OpenCodeDbService {
                 session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                // id 列为 OpenCode message 表主键（源库行唯一键）；OpenCode 库无
+                // request_id 列，用它填入 request_id 供去重强键与同源重复行判重。
+                request_id: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
                 db_type: "OpenCode".to_string(),
                 created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                 input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),

@@ -8,8 +8,11 @@ use crate::models::*;
 
 /// 流式去重管道单条原始记录:
 /// (session_id, model, provider_id, created_at, input_tokens, output_tokens,
-///  cache_read, cache_creation, latency_ms, time_to_first_token, is_codex)
-pub type StreamingRecord = (String, String, String, i64, i64, i64, i64, i64, i64, i64, bool);
+///  cache_read, cache_creation, latency_ms, time_to_first_token, is_codex,
+///  request_id)
+/// 末尾 `request_id` 为记录在应用库 `session_request_logs` 的主键（空串 = 无），
+/// 供去重键匹配（强键）与前端实时指纹判重使用；不改变既有列位语义。
+pub type StreamingRecord = (String, String, String, i64, i64, i64, i64, i64, i64, i64, bool, String);
 
 static SOURCE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -73,9 +76,8 @@ pub trait DataSource: Send + Sync {
 
     /// 流式查询请求记录。逐行通过 callback 发射，避免一次性加载全部数据到内存。
     /// 默认实现委托给 `get_recent_request_logs_raw`。
-    /// Tuple 结构: (session_id, model, provider_id, created_at, input_tokens, output_tokens,
-    ///             cache_read, cache_creation, latency_ms, time_to_first_token, is_codex)
-    /// 末尾 `is_codex` 标记该记录是否来自 OpenAI Codex 协议（用于会话重映射）。
+    /// Tuple 结构见 `StreamingRecord` 类型文档（末列为应用库 request_id 主键，
+    /// 空串表示无；末前位 `is_codex` 标记该记录是否来自 OpenAI Codex 协议）。
     ///
     /// # 增量游标契约（since 语义）
     ///

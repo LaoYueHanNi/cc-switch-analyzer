@@ -1,4 +1,4 @@
-pub mod antigravity_db;
+﻿pub mod antigravity_db;
 pub mod antigravity_scanner;
 pub mod app_db;
 pub mod ai_proxy_db;
@@ -45,7 +45,7 @@ pub mod today_query;
 pub mod zcode_db;
 pub mod zcode_scanner;
 
-/// 非 Windows 平台的空实现
+/// 闈?Windows 骞冲彴鐨勭┖瀹炵幇
 #[cfg(not(target_os = "windows"))]
 pub mod http_server {
     use std::sync::atomic::{AtomicBool, AtomicU16};
@@ -67,7 +67,7 @@ pub mod http_server {
         }
 
         pub fn start(&mut self, _shared: Arc<crate::SharedState>) -> Result<u16, String> {
-            Err("TrafficMonitor 插件仅支持 Windows".to_string())
+            Err("TrafficMonitor 鎻掍欢浠呮敮鎸?Windows".to_string())
         }
 
         pub fn stop(&mut self) {}

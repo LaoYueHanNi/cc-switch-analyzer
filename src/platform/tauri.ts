@@ -139,8 +139,8 @@ export const platformAdapter: PlatformAdapter = {
   async queryRealtime(): Promise<RealtimeBucket[]> {
     return invoke<RealtimeBucket[]>('query_realtime')
   },
-  async queryRealtimeLogs(since?: number): Promise<RealtimeRequestLog[]> {
-    return invoke<RealtimeRequestLog[]>('query_realtime_logs', { since: since ?? null })
+  async queryRealtimeLogs(since?: number): Promise<RealtimeLogsPage> {
+    return invoke<RealtimeLogsPage>('query_realtime_logs', { since: since ?? null })
   },
   async querySessionsWithCost(params: FilterParams, project?: string): Promise<{ sessions: SessionWithCost[]; availableProjects: string[] }> {
     return invoke<{ sessions: SessionWithCost[]; availableProjects: string[] }>('query_sessions_with_cost', { params: toTauriParams(params), project: project || null })

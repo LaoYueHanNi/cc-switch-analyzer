@@ -72,7 +72,8 @@ impl PiDbService {
         let mut stmt = db
             .prepare(
                 "SELECT session_id, model, provider_id, created_at,
-                        input_tokens, output_tokens, cache_read, cache_creation, latency
+                        input_tokens, output_tokens, cache_read, cache_creation, latency,
+                        request_id
                  FROM session_request_logs
                  WHERE source = 'PI'
                    AND created_at >= ?1 AND created_at < ?2
@@ -85,6 +86,7 @@ impl PiDbService {
                     session_id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     model: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     provider_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    request_id: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
                     db_type: "PI".to_string(),
                     created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                     input_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
@@ -348,7 +350,7 @@ impl DataSource for PiDbService {
                 format!(
                     "SELECT session_id, model, provider_id, created_at,
                             input_tokens, output_tokens, cache_read, cache_creation, latency,
-                            first_token_latency
+                            first_token_latency, request_id
                      FROM session_request_logs
                      WHERE source = '{}' AND created_at >= ?
                      ORDER BY created_at DESC",
@@ -360,7 +362,7 @@ impl DataSource for PiDbService {
                 format!(
                     "SELECT session_id, model, provider_id, created_at,
                             input_tokens, output_tokens, cache_read, cache_creation, latency,
-                            first_token_latency
+                            first_token_latency, request_id
                      FROM session_request_logs
                      WHERE source = '{}'
                      ORDER BY created_at DESC
@@ -389,6 +391,7 @@ impl DataSource for PiDbService {
                     row.get::<_, Option<i64>>(8)?.unwrap_or(0),
                     row.get::<_, Option<i64>>(9)?.unwrap_or(0),
                     false,
+                    row.get::<_, Option<String>>(10)?.unwrap_or_default(),
                 ))
             })
             .map_err(|e| format!("查询 PI 最近请求日志失败: {}", e))?;

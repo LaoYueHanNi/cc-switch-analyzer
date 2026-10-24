@@ -292,7 +292,7 @@ pub fn query_realtime(state: State<AppState>) -> Result<Vec<RealtimeBucket>, Str
 }
 
 #[tauri::command]
-pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result<Vec<RealtimeRequestLog>, String> {
+pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result<RealtimeLogsPage, String> {
     crate::commands::cursor::sync_and_reload_if_needed(&state)?;
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     require_sources!(sources);
@@ -326,7 +326,7 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     // 供实时 Tab 一级分组
     let provider_to_db = build_provider_to_db_map(&sources);
 
-    let all_raw = run_streaming_dedup(&sources, since);
+    let (all_raw, absorbed) = run_streaming_dedup(&sources, since);
     drop(sources);
 
     // Codex 会话重映射：CC-Switch 给 codex 每个请求分配独立 UUID 作为 session_id，
@@ -334,7 +334,7 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     // 仅对 is_codex 记录做重映射，其他数据源 session_id 保持原值。
     let codex_ts_mapping = {
         let codex_ts: Vec<i64> = all_raw.iter()
-            .filter_map(|(_, _, _, ts, _, _, _, _, _, _, is_codex)| is_codex.then_some(*ts))
+            .filter_map(|(_, _, _, ts, _, _, _, _, _, _, is_codex, _)| is_codex.then_some(*ts))
             .collect();
         crate::services::codex_sessions::get_or_build_codex_ts_mapping(&codex_ts)
     };
@@ -342,7 +342,7 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     let pricing = state.pricing_engine.read().map_err(|e| e.to_string())?;
     let tz_offset = (chrono::Local::now().offset().local_minus_utc() / 3600) as i64;
 
-    let mut result: Vec<RealtimeRequestLog> = all_raw.into_iter().map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms, first_token_latency, is_codex)| {
+    let mut result: Vec<RealtimeRequestLog> = all_raw.into_iter().map(|(session_id, model, provider_id, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, latency_ms, first_token_latency, is_codex, request_id)| {
         // 映射结果会随本地会话日志与 TTL 缓存变化，不能作为请求的稳定身份。
         let source_session_id = session_id.clone();
         let session_id = if is_codex {
@@ -368,7 +368,7 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
             };
         let context_tier_threshold = pricing.get_matched_tier_threshold(&model, created_at, context_size);
         RealtimeRequestLog {
-            session_id, source_session_id, model, provider_id, db_type, created_at,
+            session_id, source_session_id, request_id, model, provider_id, db_type, created_at,
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             latency_ms,
             time_to_first_token: if first_token_latency > 0 { Some(first_token_latency) } else { None },
@@ -384,7 +384,10 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
     result.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     result.truncate(SESSION_TOP_N as usize);
 
-    Ok(result)
+    // absorbed 是本轮被端侧吸收的网关行 request_id：这些行不在 logs 里（保留的
+    // 是端侧行），但可能已在早前轮次被前端显示（两源扫描轮错峰导致的残留），
+    // 前端按 requestId 定位移除；已被截断挤出的行找不到即跳过，无需过滤。
+    Ok(RealtimeLogsPage { logs: result, absorbed })
 }
 
 /// 展示层模型归并（口径参考 dsh-token-usage 的 attachCosts byModel fold）：
