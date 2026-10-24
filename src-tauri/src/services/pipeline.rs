@@ -56,6 +56,19 @@ pub fn scope_to_provider_source<'a>(
     }
 }
 
+/// 增量拉取的重叠窗口（秒）：后台采集各源错峰落库（5 秒/轮），同一请求在
+/// 端侧源与网关源的 created_at 可差十几秒（网关记开始、端侧记完成）。增量
+/// 游标推进后，后入库源的记录 created_at 早于游标，若不回退则永远拉不进
+/// 窗口，跨源优先级去重的配对系统性错过。回退重叠窗口让配对每轮在完整
+/// 窗口上进行；重复拉回的记录由调用方指纹去重兜底（实时列表前端 logKey、
+/// 请求缓存 RequestCache::merge），不产生重复显示或重复累加。
+const STREAM_DEDUP_OVERLAP_SECS: i64 = 60;
+
+/// 增量游标回退：Some(s) 时向左扩重叠窗口，None（全量拉取）保持不变。
+pub fn stream_dedup_overlap_since(since: Option<i64>) -> Option<i64> {
+    since.map(|s| (s - STREAM_DEDUP_OVERLAP_SECS).max(0))
+}
+
 /// 流式去重 Pipeline。
 ///
 /// 并行查询所有数据源，通过 channel 流式传输记录，
@@ -68,6 +81,7 @@ pub fn run_streaming_dedup(
     sources: &[SourceEntry],
     since: Option<i64>,
 ) -> Vec<crate::services::data_source::StreamingRecord> {
+    let since = stream_dedup_overlap_since(since);
     let (tx, rx) = mpsc::channel();
 
     // 并行 Producer：每个数据源一个线程，逐条发送到 channel
@@ -557,6 +571,15 @@ mod tests {
     use super::*;
 
     const DAY1: i64 = 1704067200; // 2024-01-01 00:00:00 UTC
+
+    #[test]
+    fn overlap_since_rewinds_incremental_cursor_only() {
+        // 增量游标回退重叠窗口；None（全量）与 0 下限不动
+        assert_eq!(stream_dedup_overlap_since(None), None);
+        assert_eq!(stream_dedup_overlap_since(Some(DAY1 + 100)), Some(DAY1 + 40));
+        assert_eq!(stream_dedup_overlap_since(Some(30)), Some(0));
+        assert_eq!(stream_dedup_overlap_since(Some(0)), Some(0));
+    }
 
     fn rec(session_id: &str, model: &str, provider_id: &str, created_at: i64, input: i64, output: i64, cache_read: i64, cache_creation: i64, latency: i64) -> RawRecord {
         RawRecord {

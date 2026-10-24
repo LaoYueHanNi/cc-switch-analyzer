@@ -4,7 +4,7 @@
 
 **CC-Switch Analyzer** — 多数据源 AI 用量桌面分析工具，支持 CC-Switch、OpenCode、AI-Proxy、Cursor、ZCode、Proma、DSH、MiniMax Code、Antigravity、Kimi、PI（pi / oh-my-pi）与 Magpie。
 
-- **当前代码版本**: 0.8.12（以 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 为准）
+- **当前代码版本**: 0.8.13（以 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 为准）
 - **架构**: Tauri v2（Rust 后端 + Vue 3 前端）
 - **仓库**: https://github.com/LaoYueHanNi/cc-switch-analyzer
 - **用户功能与数据路径**: [README.md](README.md)
@@ -163,7 +163,7 @@ CCS 会话日志同步记录可按 OpenCode、Claude Code、Codex、Grok Build�
 
 ### 定价页与 Token 输入
 
-云端 `aliasPatterns` 经校验后以 JSON 数组保存到应用库；`cloud_pricing_cache_format=2` 标记字段已完整下载，旧格式即使云端版本相同也须补写。Rust `ModelResolver` 与前端 `createModelResolver` 共用模型 ID、历史／用户精确别名、正则兜底三阶段，忽略 ASCII 大小写并要求完整名称匹配；歧义不选候选，禁止剥离模型身份。新增模型识别消费者须复用统一解析器。模型维度的展示聚合（ByModel、趋势、预计算费用）在查询侧按 canonical 名折叠，完整名未命中时允许剥 `provider/` 路由前缀兜底（口径同 dsh-token-usage，见[决策记录](docs/decisions/implemented/2026-10-24-query-time-model-normalization.md)）；落库与会话/实时明细保留原始名，模型筛选下拉仍按原始名精确过滤。
+云端 `aliasPatterns` 经校验后以 JSON 数组保存到应用库；`cloud_pricing_cache_format=2` 标记字段已完整下载，旧格式即使云端版本相同也须补写。Rust `ModelResolver` 与前端 `createModelResolver` 共用模型 ID、历史／用户精确别名、正则兜底三阶段，忽略 ASCII 大小写并要求完整名称匹配；歧义不选候选，禁止剥离模型身份。新增模型识别消费者须复用统一解析器。模型维度的展示聚合（ByModel、趋势、预计算费用、实时列表）在查询侧按 canonical 名折叠，完整名未命中时允许剥 `provider/` 路由前缀兜底（口径同 dsh-token-usage，见[决策记录](docs/decisions/implemented/2026-10-24-query-time-model-normalization.md)）；落库与会话明细保留原始名，模型筛选下拉仍按原始名精确过滤。`run_streaming_dedup` 的增量游标回退 60 秒重叠窗口，保证后入库源的记录进入跨源去重配对窗口，重复拉回由调用方指纹去重兜底（见[决策记录](docs/decisions/implemented/2026-10-24-realtime-stream-dedup-window.md)）。
 
 模型卡片仅在 hover 时显示“带入定价”，经 Pinia 一次性交接输入、输出、缓存读、缓存写四项原始 Token，并切换到定价页。交接请求消费后清空。
 

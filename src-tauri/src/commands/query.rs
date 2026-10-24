@@ -350,6 +350,9 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
         } else {
             session_id
         };
+        // 展示与算费用归一化模型名：路由前缀名（group/glm-5.3-flashx 等）
+        // 折叠为 canonical id，与 ByModel 口径一致；未定价名保留原始名。
+        let model = pricing.resolve_model_id(&model).unwrap_or(model);
         let db_type = provider_to_db.get(&provider_id).cloned().unwrap_or_else(|| provider_id.clone());
         let context_size = pricing_context_width(&db_type, &provider_id, input_tokens, cache_read_tokens);
         let (input_cost, output_cost, cache_read_cost, cache_creation_cost) =
@@ -387,7 +390,8 @@ pub fn query_realtime_logs(since: Option<i64>, state: State<AppState>) -> Result
 /// 展示层模型归并（口径参考 dsh-token-usage 的 attachCosts byModel fold）：
 /// 模型名先按定价表规范化为 canonical id（含 `provider/` 路由前缀兜底），
 /// 同名的行合并求和；解析不出的行保留原始名。仅作用于模型维度的展示聚合
-/// ——落库、会话明细与实时列表保持原始名，与跨源去重「落库不动」的约定一致。
+/// ——落库与会话明细保留原始名，与跨源去重「落库不动」的约定一致。
+/// 实时列表同样归一化展示（见 query_realtime_logs）。
 fn fold_model_breakdown(
     mut rows: Vec<ModelBreakdown>,
     pricing: &crate::services::pricing_engine::PricingEngine,

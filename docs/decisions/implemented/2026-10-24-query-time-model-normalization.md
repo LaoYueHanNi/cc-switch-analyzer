@@ -10,12 +10,15 @@ DSH 从 magpie 网关调用模型后，会话日志 `assistant/message` 的 `sou
 
 ## Decision
 
+> [!NOTE]
+> 本决策中「实时请求列表保留原始名」的范围已于同日由 [DR: 实时流跨源去重重叠窗口与模型名归一化](2026-10-24-realtime-stream-dedup-window.md) 修订：实时列表模型名同样归一化展示，并回退增量游标保证跨源去重配对。其余范围（落库与会话明细保留原始名、模型筛选按原始名精确过滤）不变。
+
 查询展示层归一化，落库不动：
 
 - `PricingEngine::resolve_model_id` 增加路由前缀兜底：完整名（modelId → 别名 → 正则三阶段）未命中且无歧义时，取 `provider/` 形式名的最后一段（`provider_suffix`，与插件 `providerSuffix` 同口径：多于一段且每段非空）再解析一次。完整名命中的斜杠别名（`meta/muse-glimmer-30b`、`openrouter/free`）优先，不受剥离影响；歧义仍返回 None 不猜。定价表来自云端 model-price-table（应用库 `aliasPatterns`），与插件共用同一数据源。
 - `query_by_model` 聚合后按 canonical id 折叠（`fold_model_breakdown`）：同名行 requests 与四类 Token 求和，解析不出的行保留原始名，按总量降序。
 - `query_daily_trend` / `query_hourly_trend` 聚合后规范化并按 (day, model) 折叠（`fold_trend_rows`），平均耗时按请求数加权合并；补齐了此前只规范 hourly 不规范 daily 的不一致。
-- 作用范围仅模型维度展示聚合（ByModel、趋势、预计算费用的 canonical 键）。落库、会话明细（SessionAnalysis 卡片）、实时请求列表保留原始名；模型筛选下拉仍列各源原始名、按精确名过滤。
+- 作用范围仅模型维度展示聚合（ByModel、趋势、预计算费用的 canonical 键）。落库与会话明细（SessionAnalysis 卡片）保留原始名；模型筛选下拉仍列各源原始名、按精确名过滤。实时请求列表最初保留原始名，现已修订为归一化展示（见上方 NOTE）。
 
 ## Alternatives considered
 
