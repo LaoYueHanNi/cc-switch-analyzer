@@ -89,7 +89,7 @@
       <div class="session-rows">
         <div
           class="log-row"
-          :class="{ 'log-new': row.isNew }"
+          :class="{ 'log-new': row.isNew, 'row-cache-miss': cacheFlag(row) === 'miss' }"
           v-for="(row, i) in pagedLogs"
           :key="`${row.createdAt}-${row.model}-${row.dbType}-${i}`"
         >
@@ -98,7 +98,19 @@
             <span class="source-name">{{ row.dbType }}</span>
           </span>
           <span class="col-time">{{ formatTime(row.createdAt) }}</span>
-          <span class="col-model" :title="row.model">{{ shortModel(row.model) }}</span>
+          <span class="col-model" :title="row.model">
+            <span class="model-name">{{ shortModel(row.model) }}</span>
+            <span
+              v-if="cacheFlag(row) === 'miss'"
+              class="cache-flag miss"
+              :title="cacheHitTooltip(row)"
+            >缓存丢失</span>
+            <span
+              v-else-if="cacheFlag(row) === 'new'"
+              class="cache-flag new"
+              :title="cacheNewTooltip(row)"
+            >缓存新建</span>
+          </span>
           <span class="col-token c-input">
             <em>{{ formatNum(row.inputTokens) }}</em>
             <small>{{ formatCost(row.inputCost) }}</small>
@@ -107,7 +119,7 @@
             <em>{{ formatNum(row.outputTokens) }}</em>
             <small>{{ formatCost(row.outputCost) }}</small>
           </span>
-          <span class="col-token c-cache-r">
+          <span class="col-token c-cache-r" :title="cacheFlag(row) === 'miss' ? cacheHitTooltip(row) : undefined">
             <em>{{ formatNum(row.cacheReadTokens) }}</em>
             <small>{{ formatCost(row.cacheReadCost) }}</small>
           </span>
@@ -157,6 +169,7 @@ import DualValueCell from '@/components/common/DualValueCell.vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useFilterStore } from '@/stores/filter'
 import { useRealtimePolling } from '@/composables/useRealtimePolling'
+import type { RealtimeRequestLog } from '@/types/database'
 import { formatNum, formatCost, formatPercent, formatDualTokenSpeed, formatLatency, formatTtft } from '@/utils/format'
 
 const dbStore = useDatabaseStore()
@@ -208,6 +221,30 @@ function dotClass(dbType: string): string {
     'Magpie': 'magpie',
   }
   return map[dbType] ?? dbType.toLowerCase()
+}
+
+// 缓存丢失标记：行级命中率与页面顶部统计同口径（缓存读 / 输入+缓存读+缓存写）。
+// 低于阈值打「缓存丢失」；缓存读为 0 且有缓存写视为「缓存新建」（多为会话首次
+// 请求，正常现象）；缓存读+写均为 0 的源/模型无缓存概念，不打标避免整屏误标。
+const CACHE_MISS_THRESHOLD = 0.5
+
+type CacheFlag = 'miss' | 'new' | 'none'
+
+function cacheFlag(row: RealtimeRequestLog): CacheFlag {
+  if (row.cacheReadTokens + row.cacheCreationTokens === 0) return 'none'
+  if (row.cacheReadTokens === 0) return 'new'
+  const rate = row.cacheReadTokens / (row.inputTokens + row.cacheReadTokens + row.cacheCreationTokens)
+  return rate < CACHE_MISS_THRESHOLD ? 'miss' : 'none'
+}
+
+function cacheHitTooltip(row: RealtimeRequestLog): string {
+  const denom = row.inputTokens + row.cacheReadTokens + row.cacheCreationTokens
+  const rate = (row.cacheReadTokens / denom) * 100
+  return `缓存命中率 ${rate.toFixed(1)}%（阈值 ${CACHE_MISS_THRESHOLD * 100}%）\n缓存读 ${formatNum(row.cacheReadTokens)} / 可缓存输入 ${formatNum(denom)}`
+}
+
+function cacheNewTooltip(row: RealtimeRequestLog): string {
+  return `纯缓存写入（多为会话首次请求）\n缓存写 ${formatNum(row.cacheCreationTokens)}`
 }
 
 // 平铺列表:按时间倒序(后端已全局排序+截断 500,此处兜底再排)
@@ -421,7 +458,11 @@ watch(() => dbStore.hasDatabase, (val) => {
 
 /* 列宽 - 基础 */
 .col-time { width: 80px; flex-shrink: 0; color: var(--text-primary); font-weight: 500; }
-.col-model { width: 150px; flex-shrink: 0; font-weight: 500; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.col-model {
+  width: 178px; flex-shrink: 0; font-weight: 500; color: var(--text-primary);
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+}
+.col-model .model-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Token 列 - 带配色 */
 .col-token {
@@ -445,6 +486,27 @@ watch(() => dbStore.hasDatabase, (val) => {
 .c-output em { color: var(--color-orange); }
 .c-cache-r em { color: var(--color-blue); }
 .c-cache-w em { color: var(--color-dark-orange); }
+
+/* 缓存丢失行：缓存读列染警示色 */
+.log-row.row-cache-miss .c-cache-r em { color: var(--color-warn); }
+
+/* 缓存标记徽标（模型列内） */
+.cache-flag {
+  flex-shrink: 0;
+  font-size: 10px; font-weight: 600; line-height: 1;
+  padding: 2px 6px; border-radius: 3px;
+  cursor: default;
+}
+.cache-flag.miss {
+  color: var(--color-warn);
+  background: var(--color-warn-bg);
+  border: 1px solid var(--color-warn);
+}
+.cache-flag.new {
+  color: var(--color-blue);
+  background: var(--color-blue-bg);
+  border: 1px dashed var(--color-blue);
+}
 
 /* 总 Token 列 */
 .col-total { width: 64px; flex-shrink: 0; text-align: right; font-weight: 600; color: var(--color-green); font-size: 12px; }

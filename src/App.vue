@@ -81,6 +81,8 @@ const themeOverrides = computed(() => {
   --color-blue: #4d7cc4;
   --color-indigo: #5b6b82;
   --color-dark-orange: #f59e0b;
+  --color-warn: #e8590c;
+  --color-warn-bg: #fdf0e8;
 
   --shadow-card: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 3px 8px rgba(0, 0, 0, 0.03);
   --shadow-focus: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 8px 24px rgba(0, 0, 0, 0.08);
@@ -124,6 +126,8 @@ html.dark {
   --color-blue: #8096d0;
   --color-indigo: #b4becc;
   --color-dark-orange: #dd8629;
+  --color-warn: #ff922b;
+  --color-warn-bg: #33281c;
 
   --shadow-card: 0 0 0 0.5px rgba(255, 255, 255, 0.10), 0 3px 8px rgba(0, 0, 0, 0.25);
   --shadow-focus: 0 0 0 0.5px rgba(255, 255, 255, 0.18), 0 8px 24px rgba(0, 0, 0, 0.35);
