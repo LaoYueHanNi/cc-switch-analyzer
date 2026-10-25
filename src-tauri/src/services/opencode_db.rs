@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use crate::models::*;
+use crate::services::dsh_scanner::metadata_modified_nanos;
 use crate::utils::*;
 
 // OpenCode SQLite 数据库服务（只读）
@@ -11,6 +12,50 @@ pub struct OpenCodeDbService {
     db: Option<Mutex<Connection>>,
     db_path: String,
     latest_timestamp: Option<i64>,
+    /// 源库未变时跳过 message 表全量扫描的结果缓存（见 FilteredRecordsCache）
+    filtered_cache: Mutex<Option<FilteredRecordsCache>>,
+}
+
+/// 源库内容戳：主库与 WAL 文件的 (mtime, size) 合并，任一变化即视为内容变化。
+/// 外部库只读不能加索引，message 表过滤查询必然全表 json_extract 扫描，
+/// stat 两个文件仅微秒级，用它作为「可以复用上次结果」的判据。
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ContentStamp {
+    main_mtime: i64,
+    main_size: u64,
+    wal_mtime: i64,
+    wal_size: u64,
+}
+
+fn content_stamp(db_path: &str) -> ContentStamp {
+    let read = |p: &str| -> (i64, u64) {
+        std::fs::metadata(p)
+            .map(|m| (metadata_modified_nanos(&m), m.len()))
+            .unwrap_or((0, 0))
+    };
+    let (main_mtime, main_size) = read(db_path);
+    let (wal_mtime, wal_size) = read(&format!("{db_path}-wal"));
+    ContentStamp {
+        main_mtime,
+        main_size,
+        wal_mtime,
+        wal_size,
+    }
+}
+
+/// filtered_records 的结果缓存。today 轮询每秒调用，OpenCode message 表
+/// 的 WHERE 含 json_extract 与 (time_created/1000) 表达式包裹，索引不可达。
+/// 源库内容未变且查询区间可被缓存区间覆盖时直接复用上次结果。
+struct FilteredRecordsCache {
+    stamp: ContentStamp,
+    /// build_where_clause 实际消费的参数键（ccs 过滤对 OpenCode 不生效，不入键）
+    from_epoch: i64,
+    provider_id: String,
+    model_id: String,
+    /// 缓存结果的查询上界。内容未变时数据集合固定，本次 to ≥ 缓存 to
+    /// 则缓存结果即完整答案；to 缩小（历史窄区间）不得复用
+    to_epoch: i64,
+    records: Vec<RawRecord>,
 }
 
 /// 实时记录查询的公共列（表别名固定为 `m`）。
@@ -53,6 +98,7 @@ impl OpenCodeDbService {
             db: None,
             db_path: String::new(),
             latest_timestamp: None,
+            filtered_cache: Mutex::new(None),
         }
     }
 
@@ -75,6 +121,10 @@ impl OpenCodeDbService {
     pub fn close(&mut self) {
         self.db = None;
         self.db_path = String::new();
+        // 换库重开时不得携带旧库的缓存结果
+        if let Ok(mut cache) = self.filtered_cache.get_mut() {
+            *cache = None;
+        }
     }
 
     pub fn is_open(&self) -> bool {
@@ -1003,6 +1053,28 @@ impl OpenCodeDbService {
     }
 
     pub fn get_filtered_raw_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> {
+        // 源库未变时的短路：见 FilteredRecordsCache 注释
+        let stamp = content_stamp(&self.db_path);
+        let from_key = params.from_epoch.filter(|v| *v > 0).unwrap_or(i64::MIN);
+        let provider_key = params.provider_id.clone().unwrap_or_default();
+        let model_key = params.model_id.clone().unwrap_or_default();
+        let to_key = params.to_epoch.filter(|v| *v > 0).unwrap_or(i64::MAX);
+        {
+            let cache = self
+                .filtered_cache
+                .lock()
+                .map_err(|e| format!("缓存锁失败: {}", e))?;
+            if let Some(c) = cache.as_ref() {
+                if c.stamp == stamp
+                    && c.from_epoch == from_key
+                    && c.provider_id == provider_key
+                    && c.model_id == model_key
+                    && to_key >= c.to_epoch
+                {
+                    return Ok(c.records.clone());
+                }
+            }
+        }
         let db = self.db()?;
         let (where_sql, binds) = Self::build_where_clause(params);
         let sql = format!(
@@ -1043,7 +1115,32 @@ impl OpenCodeDbService {
             })
         }).map_err(|e| format!("查询过滤记录失败: {}", e))?;
 
-        Self::collect_rows(rows, "读取过滤记录")
+        let records = Self::collect_rows(rows, "读取过滤记录")?;
+        // 写回缓存；查询失败时不动缓存（stamp 已不匹配，旧缓存不会误用）。
+        // 同内容下若已有上界更大的缓存（如 today 的宽区间），保留宽的，
+        // 避免偶发的历史窄区间查询把高频 today 轮询的缓存挤掉。
+        let mut cache = self
+            .filtered_cache
+            .lock()
+            .map_err(|e| format!("缓存锁失败: {}", e))?;
+        let keep_wider = cache.as_ref().is_some_and(|c| {
+            c.stamp == stamp
+                && c.from_epoch == from_key
+                && c.provider_id == provider_key
+                && c.model_id == model_key
+                && c.to_epoch > to_key
+        });
+        if !keep_wider {
+            *cache = Some(FilteredRecordsCache {
+                stamp,
+                from_epoch: from_key,
+                provider_id: provider_key,
+                model_id: model_key,
+                to_epoch: to_key,
+                records: records.clone(),
+            });
+        }
+        Ok(records)
     }
 
     pub fn get_session_titles_from_db(
@@ -1129,6 +1226,75 @@ impl super::data_source::DataSource for OpenCodeDbService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::params;
+    use tempfile::tempdir;
+
+    fn insert_msg(conn: &Connection, id: &str, ts_ms: i64, model: &str) {
+        let data = format!(
+            r#"{{"role":"assistant","modelID":"{model}","providerID":"anthropic","tokens":{{"input":100,"output":10,"cache":{{"read":0,"write":0}}}},"time":{{"created":{ts_ms},"completed":{}}}}}"#,
+            ts_ms + 5000
+        );
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, data) VALUES (?1, 's1', ?2, ?3)",
+            params![id, ts_ms, data],
+        )
+        .unwrap();
+    }
+
+    fn range_params(from: i64, to: i64) -> FilterParams {
+        FilterParams {
+            from_epoch: Some(from),
+            to_epoch: Some(to),
+            tz_offset: None,
+            provider_id: None,
+            model_id: None,
+            ccs_filter_session_apps: None,
+        }
+    }
+
+    /// 源库未变时按内容戳复用缓存；to 缩小、from 变化不得复用；内容变化后失效。
+    #[test]
+    fn test_filtered_records_content_stamp_cache() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let path_str = path.to_str().unwrap().to_string();
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                time_created INTEGER,
+                data TEXT
+            )",
+        )
+        .unwrap();
+        insert_msg(&conn, "m1", 1_000_000, "claude-3");
+        insert_msg(&conn, "m2", 2_000_000, "claude-3");
+        drop(conn);
+
+        let mut svc = OpenCodeDbService::new();
+        svc.open(&path_str).unwrap();
+
+        // 首查 [0, 3000]（秒）→ 2 行
+        assert_eq!(svc.get_filtered_raw_records(&range_params(0, 3000)).unwrap().len(), 2);
+        // to 增大（内容未变）→ 复用缓存，仍 2 行
+        assert_eq!(svc.get_filtered_raw_records(&range_params(0, 4000)).unwrap().len(), 2);
+        // to 缩小为窄区间 → 不得误用宽缓存，重查得 1 行
+        assert_eq!(svc.get_filtered_raw_records(&range_params(0, 2000)).unwrap().len(), 1);
+        // from 变化（参数键不同）→ 重查，0 行
+        assert_eq!(svc.get_filtered_raw_records(&range_params(2500, 4000)).unwrap().len(), 0);
+
+        // 源库追加新行（内容戳变化）→ 缓存失效，宽区间查到 3 行
+        let conn = Connection::open(&path).unwrap();
+        insert_msg(&conn, "m3", 3_500_000, "claude-3");
+        drop(conn);
+        assert_eq!(svc.get_filtered_raw_records(&range_params(0, 4000)).unwrap().len(), 3);
+
+        // 换库重开 → 缓存清空，不携带旧库结果
+        svc.close();
+        svc.open(&path_str).unwrap();
+        assert_eq!(svc.get_filtered_raw_records(&range_params(0, 4000)).unwrap().len(), 3);
+    }
 
     /// 真实数据验证:实时记录的首字应取自 part 表,且与耗时同源不倒挂。
     /// 需 `CCSA_REAL_OPENCODE_DB` 指向 opencode.db(只读打开,不改源库)。
