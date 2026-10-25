@@ -87,6 +87,8 @@ impl AiProxyDbService {
         }
     }
 
+    /// 列侧 epoch 表达式：仅用于 SELECT 列表与 GROUP BY（不在 WHERE 谓词，
+    /// 不影响索引）；WHERE 的时间过滤已在 build_where_clause 参数侧转换。
     fn ts_epoch_col(col: &str) -> String {
         let offset = Self::utc_offset_secs();
         if offset != 0 {
@@ -94,6 +96,19 @@ impl AiProxyDbService {
             format!("CAST(strftime('%s', {}) AS INTEGER) {}", col, adj)
         } else {
             format!("CAST(strftime('%s', {}) AS INTEGER)", col)
+        }
+    }
+
+    /// MIN/MAX 聚合的 epoch 表达式：聚合参数保持裸列以触发 SQLite 的
+    /// min/max 索引优化（直接读 idx_token_stats_request_ts 首尾），
+    /// 本地时间 → epoch 的转换在聚合结果上做。
+    fn ts_epoch_of_agg(agg: &str) -> String {
+        let offset = Self::utc_offset_secs();
+        if offset != 0 {
+            let adj = if offset > 0 { format!("- {}", offset) } else { format!("+ {}", -offset) };
+            format!("CAST(strftime('%s', {}(request_ts)) AS INTEGER) {}", agg, adj)
+        } else {
+            format!("CAST(strftime('%s', {}(request_ts)) AS INTEGER)", agg)
         }
     }
 
@@ -140,16 +155,27 @@ impl AiProxyDbService {
         ];
         let mut binds: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
+        // 时间过滤在参数侧转换：strftime 作用于绑定值而非列，request_ts 保持
+        // 裸列可用 idx_token_stats_request_ts 走索引（'YYYY-MM-DD HH:MM:SS' 的
+        // 字典序与时间序一致）。request_ts 是本地时间文本，绑定值并入 UTC 偏移
+        // 后由 'unixepoch' 生成 UTC 文本，与旧列侧表达式语义等价：
+        // CAST(strftime('%s', ts) AS INTEGER) - offset >= from
+        //   ⇔ ts >= strftime('%Y-%m-%d %H:%M:%S', from + offset, 'unixepoch')
+        let offset = Self::utc_offset_secs();
         if let Some(from_epoch) = params.from_epoch {
             if from_epoch > 0 {
-                clauses.push(format!("{} >= ?", Self::ts_epoch_col(ts_col)));
-                binds.push(Box::new(from_epoch));
+                clauses.push(format!(
+                    "{ts_col} >= strftime('%Y-%m-%d %H:%M:%S', ?, 'unixepoch')"
+                ));
+                binds.push(Box::new(from_epoch + offset));
             }
         }
         if let Some(to_epoch) = params.to_epoch {
             if to_epoch > 0 {
-                clauses.push(format!("{} < ?", Self::ts_epoch_col(ts_col)));
-                binds.push(Box::new(to_epoch));
+                clauses.push(format!(
+                    "{ts_col} < strftime('%Y-%m-%d %H:%M:%S', ?, 'unixepoch')"
+                ));
+                binds.push(Box::new(to_epoch + offset));
             }
         }
         // AI Proxy 无 provider 过滤（固定 "AI Proxy"）
@@ -174,8 +200,10 @@ impl AiProxyDbService {
     }
 
     fn get_latest_timestamp_internal(&self) -> Option<i64> {
-        let ts_expr = Self::ts_epoch_col("request_ts");
-        let sql = format!("SELECT MAX({}) FROM token_stats", ts_expr);
+        let sql = format!(
+            "SELECT {} FROM token_stats",
+            Self::ts_epoch_of_agg("MAX")
+        );
         self.db().ok().and_then(|db| {
             db.query_row(&sql, [], |row| row.get(0))
                 .ok()
@@ -211,10 +239,10 @@ impl AiProxyDbService {
 
     pub fn get_date_range(&self) -> Result<DateRange, String> {
         let db = self.db()?;
-        let ts_expr = Self::ts_epoch_col("request_ts");
         let sql = format!(
-            "SELECT MIN({}), MAX({}) FROM token_stats",
-            ts_expr, ts_expr
+            "SELECT {}, {} FROM token_stats",
+            Self::ts_epoch_of_agg("MIN"),
+            Self::ts_epoch_of_agg("MAX")
         );
         let (min, max): (Option<i64>, Option<i64>) = db
             .query_row(&sql, [], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -1080,4 +1108,73 @@ impl super::data_source::DataSource for AiProxyDbService {
     fn get_recent_request_logs_raw(&self, since: Option<i64>) -> Result<Vec<super::data_source::StreamingRecord>, String> { self.get_recent_request_logs_raw(since) }
     fn stream_records(&self, since: Option<i64>, on_record: &mut dyn FnMut(super::data_source::StreamingRecord)) -> Result<(), String> { self.stream_records(since, on_record) }
     fn get_filtered_records(&self, params: &FilterParams) -> Result<Vec<RawRecord>, String> { self.get_filtered_raw_records(params) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 时间过滤改写后 request_ts 保持裸列：EQP 应走 idx_token_stats_request_ts，
+    /// 且参数侧时区换算的筛选语义与列侧表达式等价。
+    #[test]
+    fn test_time_filter_uses_request_ts_index_and_matches_bounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("access_log.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE token_stats (
+                id INTEGER PRIMARY KEY,
+                request_ts TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cached_read_tokens INTEGER,
+                cached_write_tokens INTEGER
+            );
+            CREATE INDEX idx_token_stats_request_ts ON token_stats(request_ts);
+            INSERT INTO token_stats (request_ts, input_tokens, output_tokens)
+                VALUES ('2026-10-25 10:00:00', 10, 1),
+                       ('2026-10-25 11:00:00', 20, 2);",
+        )
+        .unwrap();
+        conn.close().unwrap();
+
+        let mut svc = AiProxyDbService::new();
+        svc.open(path.to_str().unwrap()).unwrap();
+
+        // 与应用同口径：request_ts 是本地时间文本，epoch = 该本地时刻的真实时间戳
+        let local_epoch = |text: &str| {
+            use chrono::TimeZone;
+            let naive =
+                chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S").unwrap();
+            chrono::Local.from_local_datetime(&naive).single().unwrap().timestamp()
+        };
+
+        let params = FilterParams {
+            from_epoch: Some(local_epoch("2026-10-25 10:30:00")),
+            to_epoch: Some(local_epoch("2026-10-25 12:00:00")),
+            tz_offset: None,
+            provider_id: None,
+            model_id: None,
+            ccs_filter_session_apps: None,
+        };
+        let (where_sql, binds) = AiProxyDbService::build_where_clause(&params, false);
+        let sql = format!("SELECT COUNT(*) FROM token_stats {where_sql}");
+
+        let db = svc.db().unwrap();
+        let refs: Vec<&dyn rusqlite::types::ToSql> =
+            binds.iter().map(|b| b.as_ref()).collect();
+        let plan: String = db
+            .query_row(
+                &format!("EXPLAIN QUERY PLAN {sql}"),
+                refs.as_slice(),
+                |r| r.get(3),
+            )
+            .unwrap();
+        assert!(
+            plan.contains("USING INDEX idx_token_stats_request_ts"),
+            "EQP 应走索引: {plan}"
+        );
+        let count: i64 = db.query_row(&sql, refs.as_slice(), |r| r.get(0)).unwrap();
+        assert_eq!(count, 1, "10:30 起的窗口只含 11:00 那行");
+    }
 }
