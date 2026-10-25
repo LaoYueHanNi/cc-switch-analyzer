@@ -108,7 +108,7 @@ fn scan_source(db: &AppDbService, db_type: &DbType) -> Result<(), String> {
         DbType::Magpie => magpie_scanner::scan_magpie(db)?,
         DbType::Proma => proma_scanner::scan_proma(db)?,
         DbType::ZCode => zcode_scanner::scan_zcode(db)?,
-        DbType::Antigravity => antigravity_scanner::scan_antigravity(db)?,
+        DbType::Antigravity => antigravity_scanner::scan_antigravity_with_backoff(db)?,
         // No Cursor API requests here.
         _ => return Ok(()),
     };

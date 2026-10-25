@@ -23,7 +23,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -46,6 +47,54 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const RESCAN_GRACE_SECS: i64 = 600;
 /// 单次 RPC 响应上限(GetCascadeTrajectory 含全文,长会话可达数 MB)
 const MAX_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
+
+// ========== 不可达退避 ==========
+//
+// IDE 未运行是常态:pending 会话存在时每轮采集都要做进程枚举 + 端口探测
+// 并以失败告终。连续失败按 5s→10s→20s→40s→60s(封顶)退避,期间后台采集
+// 直接跳过;成功立即重置。手动扫描命令走 scan_antigravity,不受退避限制。
+
+struct AntigravityBackoff {
+    failures: u32,
+    next: Instant,
+}
+
+static BACKOFF: Mutex<Option<AntigravityBackoff>> = Mutex::new(None);
+
+/// 第 n 次连续失败后的等待时长(n 从 1 起):5s, 10s, 20s, 40s, 之后封顶 60s
+fn backoff_delay_secs(failures: u32) -> u64 {
+    (5u64 << (failures - 1).min(4)).min(60)
+}
+
+fn backoff_allows_try() -> bool {
+    BACKOFF
+        .lock()
+        .map(|s| s.as_ref().map_or(true, |b| Instant::now() >= b.next))
+        .unwrap_or(true)
+}
+
+fn backoff_record_failure() {
+    if let Ok(mut guard) = BACKOFF.lock() {
+        let failures = guard.as_ref().map_or(0, |b| b.failures) + 1;
+        *guard = Some(AntigravityBackoff {
+            failures,
+            next: Instant::now() + Duration::from_secs(backoff_delay_secs(failures)),
+        });
+    }
+}
+
+fn backoff_reset() {
+    if let Ok(mut guard) = BACKOFF.lock() {
+        *guard = None;
+    }
+}
+
+/// 是否为「language server 不可达」类失败(其它错误如应用库故障不退避,照常重试)
+fn is_endpoint_unavailable(err: &str) -> bool {
+    err.starts_with("未发现运行中的 Antigravity")
+        || err.starts_with("Antigravity language server 已在运行但 RPC 不可达")
+}
+
 
 // ========== language server 发现 ==========
 
@@ -814,6 +863,21 @@ fn empty_result(app_db: &AppDbService) -> DshScanResult {
 ///
 /// 会话 mtime 全都未变时**在探测端点之前**就返回:进程枚举要起一次
 /// PowerShell(数百毫秒级),不能让每轮刷新都付这个代价。
+/// 后台采集入口:language server 不可达时按指数退避跳过(见 BACKOFF 注释)。
+/// 手动扫描命令直接调 [`scan_antigravity`],不受退避限制。
+pub fn scan_antigravity_with_backoff(app_db: &AppDbService) -> Result<DshScanResult, String> {
+    if !backoff_allows_try() {
+        return Ok(empty_result(app_db));
+    }
+    let result = scan_antigravity(app_db);
+    match &result {
+        Ok(_) => backoff_reset(),
+        Err(e) if is_endpoint_unavailable(e) => backoff_record_failure(),
+        Err(_) => {}
+    }
+    result
+}
+
 pub fn scan_antigravity(app_db: &AppDbService) -> Result<DshScanResult, String> {
     let candidates = scan_session_candidates();
     let total_candidates = candidates.len();
@@ -895,6 +959,33 @@ pub fn imported_record_count(app_db: &AppDbService) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backoff_delay_grows_then_caps_at_60s() {
+        assert_eq!(
+            (1..=6).map(backoff_delay_secs).collect::<Vec<_>>(),
+            vec![5, 10, 20, 40, 60, 60]
+        );
+    }
+
+    #[test]
+    fn backoff_blocks_after_failure_and_clears_on_reset() {
+        backoff_reset();
+        assert!(backoff_allows_try());
+        backoff_record_failure();
+        assert!(!backoff_allows_try(), "失败后应进入退避窗口");
+        backoff_reset();
+        assert!(backoff_allows_try());
+    }
+
+    #[test]
+    fn endpoint_unavailable_matches_probe_errors_only() {
+        assert!(is_endpoint_unavailable("未发现运行中的 Antigravity language server。x"));
+        assert!(is_endpoint_unavailable(
+            "Antigravity language server 已在运行但 RPC 不可达: timeout"
+        ));
+        assert!(!is_endpoint_unavailable("扫描失败: 数据库被锁"));
+    }
 
     #[test]
     fn extract_flag_handles_space_and_equals() {
