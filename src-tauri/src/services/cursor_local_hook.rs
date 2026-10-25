@@ -1,8 +1,10 @@
 //! Cursor 本机 Hook 安装/卸载与 requests.jsonl 读取
 
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 use chrono::{DateTime, FixedOffset, Utc};
 use rusqlite::{Connection, OptionalExtension};
@@ -427,46 +429,106 @@ fn is_attribution_event(event_name: &str) -> bool {
     ATTRIBUTION_HOOK_EVENTS.contains(&event_name)
 }
 
-/// 读取可用于归因的本机事件（模型相关 hook，且有 model / subagent_model）
+/// 单行 hook 日志 → 归因事件；非归因事件 / 无模型 / 无时间戳返回 None。
+fn parse_event_line(line: &str) -> Option<LocalHookEvent> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let row: Value = serde_json::from_str(line).ok()?;
+    let event_name = row
+        .get("hook_event_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !is_attribution_event(event_name) {
+        return None;
+    }
+    let model = extract_model(&row);
+    if model.is_empty() {
+        return None;
+    }
+    let ts_epoch = parse_event_ts(&row)?;
+    let family = normalize_model_family(&model);
+    Some(LocalHookEvent {
+        ts_epoch,
+        model,
+        family,
+        hook_event_name: event_name.to_string(),
+    })
+}
+
+/// `load_local_events` 的增量缓存：hook 日志是纯追加的 JSONL，
+/// 记录 (mtime, size, 已消费字节偏移) 后每轮只解析新增行，避免每次全量重读。
+struct LocalEventsCacheState {
+    path: PathBuf,
+    size: u64,
+    mtime: SystemTime,
+    /// 已完整消费（含结尾换行）的字节偏移；残缺的末尾行留待下轮
+    offset: u64,
+    events: Vec<LocalHookEvent>,
+}
+
+static LOCAL_EVENTS_CACHE: Mutex<Option<LocalEventsCacheState>> = Mutex::new(None);
+
+/// 读取可用于归因的本机事件（模型相关 hook，且有 model / subagent_model）。
+/// 文件未变直接复用缓存；变长则从上次偏移续读新增完整行；截断/换文件时全量重扫。
 pub fn load_local_events() -> Result<Vec<LocalHookEvent>, String> {
     let path = requests_jsonl_path()?;
-    if !path.exists() {
-        return Ok(Vec::new());
+    load_local_events_from(&path)
+}
+
+fn load_local_events_from(path: &Path) -> Result<Vec<LocalHookEvent>, String> {
+    let (size, mtime) = match fs::metadata(path) {
+        Ok(m) => (
+            m.len(),
+            m.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+        ),
+        // 文件不存在/不可访问：与旧实现一致返回空，同时作废缓存
+        Err(_) => {
+            *LOCAL_EVENTS_CACHE.lock().map_err(|e| e.to_string())? = None;
+            return Ok(Vec::new());
+        }
+    };
+    let mut cache = LOCAL_EVENTS_CACHE.lock().map_err(|e| e.to_string())?;
+    if let Some(c) = cache.as_ref() {
+        if c.path == path && c.size == size && c.mtime == mtime {
+            return Ok(c.events.clone());
+        }
     }
-    let file = fs::File::open(&path).map_err(|e| format!("读取 requests.jsonl 失败: {}", e))?;
-    let reader = BufReader::new(file);
-    let mut events = Vec::new();
-    for line in reader.lines() {
-        let line = line.map_err(|e| e.to_string())?;
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+    // 同一文件且未截断 → 增量续读；否则（截断 / 首次 / 换文件）从 0 全量
+    let (start, mut events) = match cache.as_ref() {
+        Some(c) if c.path == path && size >= c.offset => (c.offset, c.events.clone()),
+        _ => (0, Vec::new()),
+    };
+    let mut consumed: u64 = 0;
+    if size > start {
+        let mut file =
+            fs::File::open(path).map_err(|e| format!("读取 requests.jsonl 失败: {e}"))?;
+        file.seek(SeekFrom::Start(start))
+            .map_err(|e| format!("定位 requests.jsonl 偏移失败: {e}"))?;
+        let mut buf = Vec::with_capacity((size - start) as usize);
+        file.read_to_end(&mut buf)
+            .map_err(|e| format!("读取 requests.jsonl 失败: {e}"))?;
+        // 半行保护：hook 正在追加时末尾行可能不完整，只消费到最后一个换行符（含）
+        consumed = buf
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map(|i| i + 1)
+            .unwrap_or(0) as u64;
+        let text = String::from_utf8_lossy(&buf[..consumed as usize]);
+        for line in text.lines() {
+            if let Some(ev) = parse_event_line(line) {
+                events.push(ev);
+            }
         }
-        let Ok(row) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let event_name = row
-            .get("hook_event_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if !is_attribution_event(event_name) {
-            continue;
-        }
-        let model = extract_model(&row);
-        if model.is_empty() {
-            continue;
-        }
-        let Some(ts_epoch) = parse_event_ts(&row) else {
-            continue;
-        };
-        let family = normalize_model_family(&model);
-        events.push(LocalHookEvent {
-            ts_epoch,
-            model,
-            family,
-            hook_event_name: event_name.to_string(),
-        });
     }
+    *cache = Some(LocalEventsCacheState {
+        path: path.to_path_buf(),
+        size,
+        mtime,
+        offset: start + consumed,
+        events: events.clone(),
+    });
     Ok(events)
 }
 
@@ -508,7 +570,7 @@ pub fn attribution_hint(enabled: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::io::{BufRead, BufReader, Write};
     use tempfile::tempdir;
 
     #[test]
@@ -595,22 +657,9 @@ mod tests {
         let mut events = Vec::new();
         for line in reader.lines() {
             let line = line.unwrap();
-            let row: Value = serde_json::from_str(&line).unwrap();
-            let event_name = row.get("hook_event_name").and_then(|v| v.as_str()).unwrap_or("");
-            if !is_attribution_event(event_name) {
-                continue;
+            if let Some(ev) = parse_event_line(&line) {
+                events.push(ev);
             }
-            let model = extract_model(&row);
-            if model.is_empty() {
-                continue;
-            }
-            let ts = parse_event_ts(&row).unwrap();
-            events.push(LocalHookEvent {
-                ts_epoch: ts,
-                family: normalize_model_family(&model),
-                model,
-                hook_event_name: event_name.to_string(),
-            });
         }
         // beforeSubmitPrompt + afterAgentResponse + subagentStart（有 model）
         // stop 无 model、sessionEnd 不在归因列表 → 排除
@@ -667,25 +716,81 @@ mod tests {
         let mut events = Vec::new();
         for line in reader.lines() {
             let line = line.unwrap();
-            let row: Value = serde_json::from_str(&line).unwrap();
-            let event_name = row.get("hook_event_name").and_then(|v| v.as_str()).unwrap_or("");
-            if !is_attribution_event(event_name) {
-                continue;
+            if let Some(ev) = parse_event_line(&line) {
+                events.push(ev);
             }
-            let model = extract_model(&row);
-            if model.is_empty() {
-                continue;
-            }
-            let ts = parse_event_ts(&row).unwrap();
-            events.push(LocalHookEvent {
-                ts_epoch: ts,
-                family: normalize_model_family(&model),
-                model,
-                hook_event_name: event_name.to_string(),
-            });
         }
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].hook_event_name, "postToolUse");
         assert_eq!(events[0].family, "grok-4.5");
+    }
+
+    fn event_line(n: i64, model: &str) -> String {
+        format!(
+            r#"{{"ts_utc":"2026-07-13T06:00:{n:02}+00:00","hook_event_name":"beforeSubmitPrompt","model":"{model}"}}"#
+        )
+    }
+
+    /// 增量缓存全链路：追加、半行保护、补全、截断全量重扫。
+    /// 各场景使用独立 tempdir 路径，避免共享 static 缓存互相污染。
+    #[test]
+    fn test_load_local_events_incremental() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("requests.jsonl");
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(f, "{}", event_line(0, "cursor-grok-4.5-high")).unwrap();
+        writeln!(f, "{}", event_line(1, "composer-2.5")).unwrap();
+        drop(f);
+
+        // 首次全量
+        let events = load_local_events_from(&path).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].family, "grok-4.5");
+
+        // 未变化 → 复用缓存，结果一致
+        let events = load_local_events_from(&path).unwrap();
+        assert_eq!(events.len(), 2);
+
+        // 追加一行完整事件 → 增量解析出 3 条
+        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(f, "{}", event_line(2, "cursor-grok-4.5-high")).unwrap();
+        drop(f);
+        let events = load_local_events_from(&path).unwrap();
+        assert_eq!(events.len(), 3);
+
+        // 追加半行（无换行）→ 不消费，仍 3 条
+        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let half = event_line(3, "composer-2.5");
+        write!(f, "{}", &half[..half.len() / 2]).unwrap();
+        drop(f);
+        let events = load_local_events_from(&path).unwrap();
+        assert_eq!(events.len(), 3);
+
+        // 补全该行 → 半行 + 余下内容整体成为新行，4 条
+        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(f, "{}", &half[half.len() / 2..]).unwrap();
+        drop(f);
+        let events = load_local_events_from(&path).unwrap();
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[3].family, "composer-2.5");
+
+        // 截断重写为 1 行 → 全量重扫，1 条
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(f, "{}", event_line(9, "cursor-grok-4.5-high")).unwrap();
+        drop(f);
+        let events = load_local_events_from(&path).unwrap();
+        assert_eq!(events.len(), 1);
+    }
+
+    /// 文件消失 → 返回空并作废缓存；重建后能重新加载。
+    #[test]
+    fn test_load_local_events_missing_then_recreated() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("requests.jsonl");
+        assert!(load_local_events_from(&path).unwrap().is_empty());
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(f, "{}", event_line(5, "cursor-grok-4.5-high")).unwrap();
+        drop(f);
+        assert_eq!(load_local_events_from(&path).unwrap().len(), 1);
     }
 }
