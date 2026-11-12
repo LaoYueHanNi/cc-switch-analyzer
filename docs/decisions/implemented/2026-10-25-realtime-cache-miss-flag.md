@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-实时页每行按行级命中率 `cache_read / (input + cache_read + cache_write)` 判定（与页面顶部统计同口径），低于 50% 阈值时在模型名右侧显示「缓存丢失」徽标、缓存读 token 染警示色，悬停显示精确百分比与分母构成。两类行不打标：缓存读+缓存写均为 0（模型或数据源不报缓存 token，如 Gemini、GPT 网关、GLM，命中率 0 属正常）；缓存读为 0 且缓存写大于 0（纯缓存写入，多为会话首次请求），后者以中性蓝虚线徽标「缓存新建」弱化区分。阈值 50% 为模块内常量 `CACHE_MISS_THRESHOLD`；警示色使用独立主题变量 `--color-warn`（浅 `#e8590c` / 深 `#ff922b`），与缓存写琥珀 `--color-dark-orange`、费用红 `--color-cost` 区分。仅影响实时页展示，不参与查询、去重与定价口径。
+实时页每行按行级命中率 `cache_read / (input + cache_read + cache_write)` 判定（与页面顶部统计同口径），低于 50% 阈值时在模型名右侧显示「缓存丢失」徽标、缓存读 token 染警示色，悬停显示精确百分比与分母构成。三类行不打标：缓存读+缓存写均为 0（模型或数据源不报缓存 token，如 Gemini、GPT 网关、GLM，命中率 0 属正常）；缓存读为 0 且缓存写大于 0（纯缓存写入，多为会话首次请求），后者以中性蓝虚线徽标「缓存新建」弱化区分；prompt 总量（分母 input + cache_read + cache_write）低于 1024（常量 `CACHE_MISS_MIN_PROMPT`，对齐 Anthropic 等缓存机制的最小可缓存前缀）——小请求未命中是机制使然，不构成异常信号，否则几百 token 的短请求因命中率天然低于 50% 被整屏误标。阈值 50% 为模块内常量 `CACHE_MISS_THRESHOLD`；警示色使用独立主题变量 `--color-warn`（浅 `#e8590c` / 深 `#ff922b`），与缓存写琥珀 `--color-dark-orange`、费用红 `--color-cost` 区分。仅影响实时页展示，不参与查询、去重与定价口径。
 
 ## Alternatives considered
 

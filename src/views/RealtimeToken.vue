@@ -226,14 +226,19 @@ function dotClass(dbType: string): string {
 // 缓存丢失标记：行级命中率与页面顶部统计同口径（缓存读 / 输入+缓存读+缓存写）。
 // 低于阈值打「缓存丢失」；缓存读为 0 且有缓存写视为「缓存新建」（多为会话首次
 // 请求，正常现象）；缓存读+写均为 0 的源/模型无缓存概念，不打标避免整屏误标。
+// prompt 总量未达最小门槛时不判丢失：常见缓存机制有最小可缓存前缀（Anthropic
+// 为 1024 token），小请求未命中是机制使然，不构成「花钱没省到钱」的异常信号。
 const CACHE_MISS_THRESHOLD = 0.5
+const CACHE_MISS_MIN_PROMPT = 1024
 
 type CacheFlag = 'miss' | 'new' | 'none'
 
 function cacheFlag(row: RealtimeRequestLog): CacheFlag {
   if (row.cacheReadTokens + row.cacheCreationTokens === 0) return 'none'
   if (row.cacheReadTokens === 0) return 'new'
-  const rate = row.cacheReadTokens / (row.inputTokens + row.cacheReadTokens + row.cacheCreationTokens)
+  const promptTokens = row.inputTokens + row.cacheReadTokens + row.cacheCreationTokens
+  if (promptTokens < CACHE_MISS_MIN_PROMPT) return 'none'
+  const rate = row.cacheReadTokens / promptTokens
   return rate < CACHE_MISS_THRESHOLD ? 'miss' : 'none'
 }
 
