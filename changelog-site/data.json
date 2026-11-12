@@ -1,6 +1,22 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-11-12",
+    "commits": [
+      {
+        "hash": "dffd5ab",
+        "subject": "fix(magpie): 模型统计改为取供应商实际应答模型served",
+        "date": "2026-11-12"
+      },
+      {
+        "hash": "516c7be",
+        "subject": "feat(realtime): 实时页低命中请求打缓存丢失标记",
+        "date": "2026-10-25"
+      }
+    ]
+  },
+  {
+    "version": "0.8.15",
     "date": "2026-10-25",
     "commits": [
       {
