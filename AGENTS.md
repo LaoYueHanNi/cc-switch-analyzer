@@ -126,7 +126,7 @@ Git Bash 中可通过 `powershell.exe -Command` 调用上述脚本。产出自�
 | Antigravity | 从 `~/.gemini/antigravity*` 会话目录发现 ID，通过正在运行的 language server RPC 读取用量；IDE 关闭时仍可查询已导入历史 |
 | Kimi | 扫描 Kimi CLI / Kimi Code / Kimi Work 的 `wire.jsonl` 用量事件，并导入会话标题、项目路径 |
 | PI | 合并 pi、oh-my-pi CLI 与 OMP 桌面版 profiles 的会话 JSONL，按请求去重；设置页展示全部实际扫描根 |
-| Magpie | 只读 magpie 网关请求账本 `usage.jsonl`（`$XDG_CONFIG_HOME/magpie` 优先，否则 `~/.config/magpie`），按整行内容哈希 + 字节偏移增量导入；不接 `routing/`、`usage-others/` 与客户端上报（`source=reported`）记录 |
+| Magpie | 只读 magpie 网关请求账本 `usage.jsonl`（`$XDG_CONFIG_HOME/magpie` 优先，否则 `~/.config/magpie`），按整行内容哈希 + 字节偏移增量导入；模型名取供应商实际应答模型（`served` 优先，回退发送名 `model`、请求名 `req`）；不接 `routing/`、`usage-others/` 与客户端上报（`source=reported`）记录 |
 
 PI 默认扫描 `~/.pi/agent/sessions/`、`~/.omp/agent/sessions/` 与 `~/.omp/profiles/<profile>/agent/sessions/`。`PI_CODING_AGENT_DIR` 覆盖 pi agent 目录，`PI_CONFIG_DIR` 覆盖 OMP 配置根。Kimi 的实际候选目录见 `kimi_scanner::get_all_kimi_session_roots`。
 

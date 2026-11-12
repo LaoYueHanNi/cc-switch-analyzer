@@ -39,6 +39,12 @@ pub const MAGPIE_SOURCE: &str = "Magpie";
 /// 自定义 magpie 配置目录（settings 表）；空串表示未设置、按默认规则解析
 pub const SETTING_MAGPIE_DATA_DIR: &str = "magpie_data_dir";
 
+/// 解析口径版本（settings 表）。2 = 模型名取 `served` 优先（供应商响应声明的
+/// 实际应答模型），缺失回退 `model`（网关发送的供应商模型 id）、`req`（客户端
+/// 请求名）。版本变化时清空本源入库行与游标，全量重扫刷新历史。
+const SETTING_MAGPIE_PARSE_VERSION: &str = "magpie_parse_version";
+const MAGPIE_PARSE_VERSION: &str = "2";
+
 /// magpie 网关账本文件名（对应 magpie `usage.Path()`）
 const USAGE_FILE_NAME: &str = "usage.jsonl";
 
@@ -127,8 +133,11 @@ pub fn parse_magpie_line(line: &[u8]) -> Option<ParsedRow> {
         return None;
     }
 
-    // model 是供应商实际模型 id；缺失时按 served → req 回退，避免丢计费口径
-    let model = ["model", "served", "req"]
+    // 模型取「实际应答模型」：served 是供应商响应声明的应答模型（如 qoder-cn
+    // 收到代号 dfmodel、实际由 DeepSeek-Flash 应答），优先采用；缺失时回退
+    // model（网关发送的供应商模型 id，可能是内部代号或带 provider/ 前缀）、
+    // req（客户端请求名），避免丢计费口径。
+    let model = ["served", "model", "req"]
         .iter()
         .find_map(|key| {
             value
@@ -348,8 +357,29 @@ fn scan_magpie_file_incremental(
     Ok((imported, skipped))
 }
 
+/// 解析口径版本检查：settings 中版本与当前不一致（含首次使用、旧版升级）时，
+/// 清空本源全部入库行与游标，使其按新口径全量重扫。清空失败不写版本，下一轮重试；
+/// 幂等——重复清空只会让重扫后的行按主键去重重新写入。
+fn ensure_parse_version(app_db: &AppDbService) {
+    if app_db.get_setting(SETTING_MAGPIE_PARSE_VERSION).as_deref() == Some(MAGPIE_PARSE_VERSION) {
+        return;
+    }
+    log::info!(
+        "[Magpie] 解析口径升级到 v{}，清空历史行与游标后全量重扫",
+        MAGPIE_PARSE_VERSION
+    );
+    if let Err(e) = app_db.clear_session_logs(MAGPIE_SOURCE) {
+        log::warn!("[Magpie] 清空历史行失败（下一轮重试）: {}", e);
+        return;
+    }
+    if let Err(e) = app_db.set_setting(SETTING_MAGPIE_PARSE_VERSION, MAGPIE_PARSE_VERSION) {
+        log::warn!("[Magpie] 写入解析口径版本失败: {}", e);
+    }
+}
+
 /// 执行 Magpie 网关账本增量扫描（source = "Magpie"）
 pub fn scan_magpie(app_db: &AppDbService) -> Result<DshScanResult, String> {
+    ensure_parse_version(app_db);
     let mut result = DshScanResult {
         files_scanned: 0,
         imported: 0,
@@ -440,6 +470,20 @@ mod tests {
 
         let bad = "not json";
         assert!(parse_magpie_line(bad.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn served_model_wins_over_sent_and_requested() {
+        // 真实场景：客户端请求 qoder-cn/dfmodel，网关发送代号 dfmodel，
+        // 供应商响应声明实际由 DeepSeek-Flash 应答
+        let line = r#"{"t":"2026-11-10T10:40:22Z","model":"dfmodel","req":"qoder-cn/dfmodel","served":"DeepSeek-Flash","in":328,"out":66,"cache_read":22400,"cache_write":0,"ms":1191,"ttft_ms":785}"#;
+        let row = parse_magpie_line(line.as_bytes()).unwrap();
+        assert_eq!(row.model, "DeepSeek-Flash");
+
+        // served 为空串视同缺失：回退 model
+        let fallback = r#"{"t":"2026-11-10T10:40:22Z","model":"zhipu/glm-5.3","served":"","in":10,"out":2}"#;
+        let row = parse_magpie_line(fallback.as_bytes()).unwrap();
+        assert_eq!(row.model, "zhipu/glm-5.3");
     }
 
     #[test]
@@ -570,6 +614,61 @@ mod tests {
         let next = scan_magpie(&db).unwrap();
         assert_eq!(next.imported, 1);
         assert_eq!(db.get_session_log_count(MAGPIE_SOURCE).unwrap(), 3);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn parse_version_change_rescans_history() {
+        let (dir, db) = temp_app_db();
+        let config = dir.join("magpie");
+        std::fs::create_dir_all(&config).unwrap();
+        let line = r#"{"t":"2026-11-10T10:40:22Z","model":"dfmodel","req":"qoder-cn/dfmodel","served":"DeepSeek-Flash","in":328,"out":66,"cache_read":22400,"cache_write":0,"ms":1191,"ttft_ms":785}"#;
+        std::fs::write(config.join("usage.jsonl"), format!("{}\n", line)).unwrap();
+        db.set_setting(SETTING_MAGPIE_DATA_DIR, &config.to_string_lossy())
+            .unwrap();
+
+        // 模拟旧口径状态：库里有旧口径行（model=dfmodel）、游标已读完、版本为 1
+        {
+            let conn = db.conn();
+            let tx = conn.unchecked_transaction().unwrap();
+            AppDbService::insert_session_log_on_conn(
+                &tx, MAGPIE_SOURCE, "Magpie:old-row", "s", "dfmodel", MAGPIE_SOURCE,
+                100, 10, 0, 0, 1_760_000_000, 100, 50,
+            )
+            .unwrap();
+            AppDbService::update_session_log_sync_on_conn(
+                &tx, MAGPIE_SOURCE,
+                &config.join("usage.jsonl").to_string_lossy(),
+                i64::MAX, line.len() as i64 + 1,
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        db.set_setting(SETTING_MAGPIE_PARSE_VERSION, "1").unwrap();
+
+        // 版本变化：清空旧行与游标，同一份文件按新口径全量重扫
+        let result = scan_magpie(&db).unwrap();
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.total_records, 1);
+        let model: String = db
+            .conn()
+            .query_row(
+                "SELECT model FROM session_request_logs WHERE source = 'Magpie'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(model, "DeepSeek-Flash");
+        assert_eq!(
+            db.get_setting(SETTING_MAGPIE_PARSE_VERSION).as_deref(),
+            Some("2")
+        );
+
+        // 后续轮次不再重刷：纯增量语义恢复
+        let again = scan_magpie(&db).unwrap();
+        assert_eq!(again.imported, 0);
+        assert_eq!(again.total_records, 1);
 
         std::fs::remove_dir_all(&dir).ok();
     }

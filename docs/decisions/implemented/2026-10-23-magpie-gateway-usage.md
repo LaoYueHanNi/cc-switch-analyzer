@@ -14,7 +14,7 @@ Status: implemented
 
 **数据位置与注册**。账本路径按 magpie 的 `internal/appdir` 规则解析：`$XDG_CONFIG_HOME` 为绝对路径时取 `$XDG_CONFIG_HOME/magpie/usage.jsonl`，否则取 `~/.config/magpie/usage.jsonl`（Windows 同样在 `%USERPROFILE%\.config\magpie`，不是 `%APPDATA%`）。portable 模式的账本在 magpie 可执行文件旁，应用无法自动定位可执行文件，由设置页自定义目录覆盖（settings 键 `magpie_data_dir`，命令 `magpie_settings` / `set_magpie_data_dir`，空串恢复默认）。自定义目录优先于默认解析；配置目录存在即注册数据源，账本尚未创建时扫描返回 0 条，用户首次请求后下一轮自动导入，无需重启应用。
 
-**记录映射**。`in` → `input_tokens`、`out` → `output_tokens`（magpie 的 out 已含 reasoning token）、`cache_read` → `cache_read`、`cache_write` → `cache_creation`、`t`（RFC3339Nano）→ `created_at`（Unix 秒）、`ms` → `latency`、`ttft_ms` → `first_token_latency`、`model` → `model`。`model` 缺失时依次回退 `served`、`req`，仍为空则记 `unknown`。记录里的 `session` 用作会话 id，参与实时列表与跨源去重指纹；没有会话头时用 `magpie:<request_id>` 兜底，避免同模型同 token 的不同请求被指纹合并。
+**记录映射**。`in` → `input_tokens`、`out` → `output_tokens`（magpie 的 out 已含 reasoning token）、`cache_read` → `cache_read`、`cache_write` → `cache_creation`、`t`（RFC3339Nano）→ `created_at`（Unix 秒）、`ms` → `latency`、`ttft_ms` → `first_token_latency`、`model` → `model`。`model` 缺失时依次回退 `served`、`req`，仍为空则记 `unknown`。（2026-11-12 起模型取值改为 `served` 优先，见 [Magpie 模型名取实际应答模型](2026-11-12-magpie-served-model.md)。）记录里的 `session` 用作会话 id，参与实时列表与跨源去重指纹；没有会话头时用 `magpie:<request_id>` 兜底，避免同模型同 token 的不同请求被指纹合并。
 
 **过滤口径**。只接入网关账本本身：不读 `routing/`（路由调试轨迹）、`usage-others/`（其他电脑同步来的账本），跳过 `source = "reported"`（客户端 HTTP 上报、实际未经网关）与显式 `rejected`、四维 token 全 0 的本地拒绝／无计费失败记录。`handed_on` 交接行只要携带 token 就保留，其 token 与 magpie 汇总一致；magpie 的 `Calls` 不计交接行，本应用请求数按记录数统计，因此会略高于 magpie 的 `Calls`。
 

@@ -79,7 +79,7 @@
 
 DSH 插件目录可在设置中选择，默认按 `$DSH_HOME/token-usage` 或 `~/.dsh/token-usage` 解析。PI 支持 `PI_CODING_AGENT_DIR` 与 `PI_CONFIG_DIR`，Kimi Code 支持 `KIMI_CODE_HOME` 覆盖默认目录；设置页列出实际发现的目录。
 
-Magpie 只读取网关请求账本 `usage.jsonl`：`$XDG_CONFIG_HOME` 为绝对路径时使用 `$XDG_CONFIG_HOME/magpie/usage.jsonl`，否则使用 `~/.config/magpie/usage.jsonl`（Windows 同样在 `%USERPROFILE%\.config\magpie`，不是 `%APPDATA%`）。portable 模式的账本无法自动定位，可在设置页指定自定义目录覆盖；只接入经过网关的调用记录，不含 magpie 从 agent 会话日志扫描出的用量。
+Magpie 只读取网关请求账本 `usage.jsonl`：`$XDG_CONFIG_HOME` 为绝对路径时使用 `$XDG_CONFIG_HOME/magpie/usage.jsonl`，否则使用 `~/.config/magpie/usage.jsonl`（Windows 同样在 `%USERPROFILE%\.config\magpie`，不是 `%APPDATA%`）。portable 模式的账本无法自动定位，可在设置页指定自定义目录覆盖；只接入经过网关的调用记录，不含 magpie 从 agent 会话日志扫描出的用量。模型名取供应商响应声明的实际应答模型（`served`），缺失时回退网关发送名。
 
 Kimi Work 默认会话位于 macOS 的 `~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/` 或 Windows 的 `%APPDATA%/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/`，并支持桌面配置中的 `shareDir`。
 
