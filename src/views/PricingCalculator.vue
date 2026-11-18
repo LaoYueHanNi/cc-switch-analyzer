@@ -19,6 +19,7 @@
             :model-value="searchModel"
             :options="modelOptions"
             clearable
+            live-filter
             placeholder="全部"
             @update:model-value="searchModel = $event"
           />
@@ -63,6 +64,13 @@
           <CompactTokenInput v-model="simCacheCreation" label="缓存写" />
         </div>
       </div>
+    </div>
+
+    <div
+      v-if="pricingStore.pricingData.length > 0 && allCards.length === 0"
+      class="pricing-empty"
+    >
+      没有匹配的模型，试试调整家族或模型筛选
     </div>
 
     <div v-if="displayMode === 'all'" class="pricing-section all-models-section">
@@ -242,7 +250,7 @@ import TimePricingDialog from '@/components/pricing/TimePricingDialog.vue'
 import AliasDialog from '@/components/pricing/AliasDialog.vue'
 import { usePricingOverride } from '@/composables/usePricingOverride'
 import { getActiveRate, dailySlotsWindowsOverlap } from '@/utils/pricing'
-import { foldModelName } from '@/utils/modelResolver'
+import { matchesModelSearch } from '@/utils/modelSearch'
 import {
   DEPRECATED_FAMILY_IDS,
   getEffectiveFamilies,
@@ -439,12 +447,7 @@ function getFamilyLabel(p: PricingData): string {
 }
 
 function matchesModelFilter(p: PricingData): boolean {
-  if (!searchModel.value) return true
-  const search = foldModelName(searchModel.value)
-  return foldModelName(p.modelId).includes(search)
-    || (p.aliases || []).some(a => foldModelName(a).includes(search))
-    || (p.userAliases?.some(a => foldModelName(a).includes(search)) ?? false)
-    || pricingStore.modelResolver.get(searchModel.value)?.modelId === p.modelId
+  return matchesModelSearch(p, searchModel.value, pricingStore.modelResolver)
 }
 
 function isUnusedExpanded(familyId: string): boolean {
@@ -458,10 +461,11 @@ function toggleUnusedFamily(familyId: string): void {
   expandedUnusedFamilies.value = next
 }
 
-// 模型选项（受家族筛选约束）
+// 模型选项（受家族筛选与模型搜索词约束，与下方卡片共用同一匹配口径）
 const modelOptions = computed(() =>
   pricingStore.pricingData
     .filter(p => !searchFamily.value || resolveFamilyId(p) === searchFamily.value)
+    .filter(p => matchesModelFilter(p))
     .map(p => ({
       label: p.modelId,
       value: p.modelId
@@ -721,6 +725,13 @@ watch(() => dbStore.hasDatabase, async (val) => {
   font-size: 11px;
   color: var(--text-tertiary);
   white-space: nowrap;
+}
+
+.pricing-empty {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 11px;
 }
 
 .pricing-family-section {

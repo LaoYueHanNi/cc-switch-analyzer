@@ -3,7 +3,7 @@
     <div class="compact-select__trigger" @click="toggle">
       <span v-if="!modelValue" class="compact-select__placeholder">{{ placeholder }}</span>
       <span v-else class="compact-select__value">{{ currentLabel }}</span>
-      <span v-if="modelValue && clearable" class="compact-select__clear" @click.stop="emit('update:modelValue', '')">✕</span>
+      <span v-if="modelValue && clearable" class="compact-select__clear" @click.stop="clearValue">✕</span>
       <span v-else class="compact-select__arrow">▾</span>
     </div>
   </div>
@@ -13,9 +13,10 @@
       <div v-if="searchable" class="compact-select-search">
         <input
           ref="searchRef"
-          v-model="search"
+          :value="search"
           class="compact-select-search__input"
           placeholder="搜索..."
+          @input="onSearchInput"
           @keydown.escape.stop="open = false"
         />
       </div>
@@ -42,10 +43,13 @@ const props = withDefaults(defineProps<{
   placeholder?: string
   clearable?: boolean
   searchable?: boolean
+  // 输入即筛选：面板搜索词直接作为值向外更新，候选列表由父级按同一搜索词过滤
+  liveFilter?: boolean
 }>(), {
   placeholder: '请选择',
   clearable: false,
   searchable: true,
+  liveFilter: false,
 })
 
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
@@ -61,19 +65,31 @@ const currentLabel = computed(() =>
 )
 
 const filteredOptions = computed(() => {
-  if (!search.value) return props.options
+  // liveFilter 下父级已按搜索词过滤 options，面板不再二次过滤，保证候选与外部结果同口径
+  if (props.liveFilter || !search.value) return props.options
   const q = search.value.toLowerCase()
   return props.options.filter(o => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q))
 })
 
 function toggle() {
   if (open.value) { open.value = false; return }
-  search.value = ''
+  search.value = props.liveFilter ? props.modelValue : ''
   open.value = true
   nextTick(() => {
     positionPanel()
     searchRef.value?.focus()
   })
+}
+
+function onSearchInput(event: Event): void {
+  const value = (event.target as HTMLInputElement).value
+  search.value = value
+  if (props.liveFilter) emit('update:modelValue', value)
+}
+
+function clearValue(): void {
+  if (props.liveFilter) search.value = ''
+  emit('update:modelValue', '')
 }
 
 let measureCanvas: HTMLCanvasElement | null = null
@@ -116,10 +132,16 @@ function positionPanel() {
 
 function onSelect(val: string) {
   open.value = false
+  if (props.liveFilter) search.value = val
   emit('update:modelValue', val)
 }
 
 watch(filteredOptions, () => { if (open.value) positionPanel() })
+
+// liveFilter 下外部重置值时同步面板搜索词，避免重新打开面板残留旧词
+watch(() => props.modelValue, (val) => {
+  if (props.liveFilter) search.value = val
+})
 
 function onGlobalKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape' && open.value) open.value = false
