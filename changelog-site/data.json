@@ -1,6 +1,22 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-11-18",
+    "commits": [
+      {
+        "hash": "d2ca657",
+        "subject": "feat(pricing): 模型筛选支持打字即时过滤",
+        "date": "2026-11-18"
+      },
+      {
+        "hash": "1d5e5bb",
+        "subject": "fix(realtime): 小请求不再打缓存丢失标记",
+        "date": "2026-11-12"
+      }
+    ]
+  },
+  {
+    "version": "0.8.16",
     "date": "2026-11-12",
     "commits": [
       {
