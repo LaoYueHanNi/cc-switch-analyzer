@@ -13,7 +13,7 @@
 
     <!-- 图表 + 按钮组 -->
     <template v-else>
-      <div class="chart-wrapper">
+      <div ref="wrapperRef" class="chart-wrapper">
         <TrendChart
           :dates="display.dates"
           :total-cost-data="display.cost"
@@ -29,8 +29,14 @@
         />
         <div
           v-if="mode === 'byModel' && modelTipRows.length > 0"
+          ref="tipRef"
           class="model-tip"
-          :class="{ expandable: rankedModels.length > 5 }"
+          :class="{ expandable: rankedModels.length > 5, dragging: tipDragging }"
+          :style="tipStyle"
+          title="拖动调整位置 · 双击空白处恢复自动避让"
+          @mousedown="onTipDragStart"
+          @click.capture="onTipClickCapture"
+          @dblclick="onTipReset"
         >
           <div
             v-for="r in modelTipRows"
@@ -99,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch, onActivated, onDeactivated } from 'vue'
+import { computed, reactive, ref, watch, onActivated, onDeactivated, onMounted, onUnmounted } from 'vue'
 import { NSpin } from 'naive-ui'
 import { useQueryStore } from '@/stores/query'
 import { useFilterStore } from '@/stores/filter'
@@ -246,6 +252,7 @@ onActivated(() => {
 })
 onDeactivated(() => {
   isActive.value = false
+  cancelTipDrag()
 })
 
 // ===== 定价查找表 =====
@@ -589,6 +596,221 @@ const modelTipRows = computed(() => {
   })
 })
 
+// ===== 右上角 tip:智能避让 + 拖拽 + 位置记忆 =====
+// 问题:tip 固定右上角,而曲线高峰常偏右,浮层会挡住关键段(峰值/飙升段)。
+// 策略:初始位置按曲线占用自动选更空的一侧;用户可拖动微调,位置按容器百分比记忆;
+// 渲染时按当前容器与浮层尺寸即时 clamp(不改写原比例,避免切 Tab / resize 丢失位置);
+// 双击空白处清除记忆,回到自动避让。
+
+const TIP_POS_KEY = 'trend-analysis:model-tip-pos'
+const tipRef = ref<HTMLElement | null>(null)
+const wrapperRef = ref<HTMLElement | null>(null)
+const tipDragging = ref(false)
+/** null = 自动避让;否则为相对 chart-wrapper 的归一化比例 [0, 1] */
+const tipPosPct = ref<{ xPct: number; yPct: number } | null>(loadTipPosPct())
+/** 最近一次观测到的有效(>0)容器与浮层尺寸,隐藏(KeepAlive/最小化)时不归零 */
+const tipLayoutSize = reactive({ wrapperW: 0, wrapperH: 0, tipW: 0, tipH: 0 })
+let dragSession: { startX: number; startY: number; baseTop: number; baseLeft: number } | null = null
+let dragArmed = false
+let justDragged = false
+
+function loadTipPosPct(): { xPct: number; yPct: number } | null {
+  try {
+    const raw = localStorage.getItem(TIP_POS_KEY)
+    if (!raw) return null
+    const p = JSON.parse(raw) as { xPct?: unknown; yPct?: unknown }
+    if (
+      typeof p.xPct === 'number' && typeof p.yPct === 'number' &&
+      Number.isFinite(p.xPct) && Number.isFinite(p.yPct) &&
+      p.xPct >= 0 && p.xPct <= 1 && p.yPct >= 0 && p.yPct <= 1
+    ) {
+      return { xPct: p.xPct, yPct: p.yPct }
+    }
+  } catch { /* 存储不可用或数据损坏,按无保存处理 */ }
+  return null
+}
+
+/** 自动避让:比较左右两半列在图表顶部区域(归一化 > 0.7)的占用强度,选更空的一侧 */
+const tipSide = computed<'left' | 'right'>(() => {
+  const series = byModelSeries.value.filter(s => s.visible)
+  const n = display.dates.length
+  if (series.length === 0 || n < 2) return 'right'
+  let globalMax = 0
+  for (const s of series) {
+    for (const v of s.data) if (v > globalMax) globalMax = v
+  }
+  if (globalMax <= 0) return 'right'
+  const half = n / 2
+  let leftWeight = 0
+  let rightWeight = 0
+  for (let x = 0; x < n; x++) {
+    let colMax = 0
+    for (const s of series) {
+      const v = s.data[x] ?? 0
+      if (v > colMax) colMax = v
+    }
+    const ratio = colMax / globalMax
+    // 曲线爬进顶部约 30% 高度带才可能碰到浮层
+    if (ratio > 0.7) {
+      if (x < half) leftWeight += ratio
+      else rightWeight += ratio
+    }
+  }
+  if (leftWeight === 0 && rightWeight === 0) return 'right'
+  return leftWeight < rightWeight ? 'left' : 'right'
+})
+
+/** 渲染位置:按记忆比例换算像素并即时 clamp,resize/展开后不溢出且可无损恢复 */
+const tipStyle = computed(() => {
+  const pct = tipPosPct.value
+  if (pct) {
+    if (tipLayoutSize.wrapperW > 0 && tipLayoutSize.wrapperH > 0) {
+      const maxTop = Math.max(0, tipLayoutSize.wrapperH - tipLayoutSize.tipH)
+      const maxLeft = Math.max(0, tipLayoutSize.wrapperW - tipLayoutSize.tipW)
+      const top = Math.min(Math.max(pct.yPct * tipLayoutSize.wrapperH, 0), maxTop)
+      const left = Math.min(Math.max(pct.xPct * tipLayoutSize.wrapperW, 0), maxLeft)
+      return {
+        top: `${Math.round(top)}px`,
+        left: `${Math.round(left)}px`,
+        right: 'auto'
+      }
+    }
+    return {
+      top: `${(pct.yPct * 100).toFixed(3)}%`,
+      left: `${(pct.xPct * 100).toFixed(3)}%`,
+      right: 'auto'
+    }
+  }
+  if (tipSide.value === 'left') return { top: '36px', left: '64px', right: 'auto' }
+  return undefined // 走 CSS 默认:top 36px / right 12px
+})
+
+function syncTipLayoutSize(): void {
+  const wrapper = wrapperRef.value
+  if (wrapper && wrapper.clientWidth > 0 && wrapper.clientHeight > 0) {
+    tipLayoutSize.wrapperW = wrapper.clientWidth
+    tipLayoutSize.wrapperH = wrapper.clientHeight
+  }
+  const tip = tipRef.value
+  if (tip && tip.offsetWidth > 0 && tip.offsetHeight > 0) {
+    tipLayoutSize.tipW = tip.offsetWidth
+    tipLayoutSize.tipH = tip.offsetHeight
+  }
+}
+
+function persistTipPos(): void {
+  const pct = tipPosPct.value
+  if (!pct) return
+  try {
+    localStorage.setItem(TIP_POS_KEY, JSON.stringify(pct))
+  } catch { /* 存储不可用时静默,仅本次会话内生效 */ }
+}
+
+function cancelTipDrag(): void {
+  if (!dragSession) return
+  window.removeEventListener('mousemove', onTipDragMove)
+  window.removeEventListener('mouseup', onTipDragEnd)
+  dragSession = null
+  dragArmed = false
+  tipDragging.value = false
+  justDragged = false
+}
+
+function onTipDragStart(e: MouseEvent): void {
+  if (e.button !== 0) return
+  if ((e.target as HTMLElement).closest('.model-tip-expand')) return
+  const el = tipRef.value
+  const wrapper = wrapperRef.value
+  if (!el || !wrapper || wrapper.clientWidth <= 0 || wrapper.clientHeight <= 0) return
+  syncTipLayoutSize()
+  const rect = el.getBoundingClientRect()
+  const parentRect = wrapper.getBoundingClientRect()
+  dragSession = {
+    startX: e.clientX,
+    startY: e.clientY,
+    baseTop: rect.top - parentRect.top,
+    baseLeft: rect.left - parentRect.left
+  }
+  dragArmed = true
+  window.addEventListener('mousemove', onTipDragMove)
+  window.addEventListener('mouseup', onTipDragEnd)
+}
+
+function onTipDragMove(e: MouseEvent): void {
+  if (!dragSession) return
+  const wrapper = wrapperRef.value
+  const el = tipRef.value
+  if (!wrapper || !el || wrapper.clientWidth <= 0 || wrapper.clientHeight <= 0) return
+  const dx = e.clientX - dragSession.startX
+  const dy = e.clientY - dragSession.startY
+  // 位移超过阈值才进入拖拽,避免吞掉行上原有的点击交互
+  if (dragArmed && Math.abs(dx) < 4 && Math.abs(dy) < 4) return
+  if (dragArmed) {
+    dragArmed = false
+    justDragged = true
+    tipDragging.value = true
+  }
+  const maxTop = Math.max(0, wrapper.clientHeight - el.offsetHeight)
+  const maxLeft = Math.max(0, wrapper.clientWidth - el.offsetWidth)
+  const top = Math.min(Math.max(dragSession.baseTop + dy, 0), maxTop)
+  const left = Math.min(Math.max(dragSession.baseLeft + dx, 0), maxLeft)
+  tipPosPct.value = {
+    xPct: Math.min(1, Math.max(0, left / wrapper.clientWidth)),
+    yPct: Math.min(1, Math.max(0, top / wrapper.clientHeight))
+  }
+}
+
+function onTipDragEnd(): void {
+  window.removeEventListener('mousemove', onTipDragMove)
+  window.removeEventListener('mouseup', onTipDragEnd)
+  if (tipDragging.value) persistTipPos()
+  dragSession = null
+  dragArmed = false
+  tipDragging.value = false
+  // click 事件在 mouseup 后同步派发,由 click.capture 消费;兜底定时清
+  setTimeout(() => { justDragged = false }, 0)
+}
+
+/** 拖拽结束后拦截紧随的 click,避免误触行的显隐切换 */
+function onTipClickCapture(e: MouseEvent): void {
+  if (justDragged) {
+    e.stopPropagation()
+    e.preventDefault()
+    justDragged = false
+  }
+}
+
+/** 双击空白处(非行/非按钮):清除记忆,回到自动避让 */
+function onTipReset(e: MouseEvent): void {
+  if ((e.target as HTMLElement).closest('.model-tip-row, .model-tip-expand')) return
+  tipPosPct.value = null
+  try { localStorage.removeItem(TIP_POS_KEY) } catch { /* 忽略 */ }
+}
+
+let tipResizeObserver: ResizeObserver | null = null
+
+function rebindTipObserver(): void {
+  if (!tipResizeObserver) return
+  tipResizeObserver.disconnect()
+  if (wrapperRef.value) tipResizeObserver.observe(wrapperRef.value)
+  if (tipRef.value) tipResizeObserver.observe(tipRef.value)
+  syncTipLayoutSize()
+}
+
+onMounted(() => {
+  tipResizeObserver = new ResizeObserver(syncTipLayoutSize)
+  rebindTipObserver()
+})
+
+onUnmounted(() => {
+  tipResizeObserver?.disconnect()
+  tipResizeObserver = null
+  cancelTipDrag()
+})
+
+// 浮层与容器都是 v-if 延迟渲染(loading/空态/overview 无此节点),变化后重挂观察器并同步尺寸
+watch([wrapperRef, tipRef], rebindTipObserver, { flush: 'post' })
+
 // ===== 持久化有效数据，刷新期间保持图表显示 =====
 const display = reactive({
   dates: [] as string[], cost: [] as number[], token: [] as number[],
@@ -641,6 +863,11 @@ watch(allSeriesData, (v) => {
   pointer-events: auto;
   max-width: 240px;
   user-select: none;
+  cursor: grab;
+}
+.model-tip.dragging {
+  cursor: grabbing;
+  opacity: 0.92;
 }
 .model-tip.expandable {
   padding-bottom: 18px;
