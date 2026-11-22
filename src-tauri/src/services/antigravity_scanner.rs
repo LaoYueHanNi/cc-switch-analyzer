@@ -98,7 +98,30 @@ fn is_endpoint_unavailable(err: &str) -> bool {
 
 // ========== language server 发现 ==========
 
-/// 一个候选 language server 进程
+/// 单个待探活端点候选
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EndpointCandidate {
+    pid: u32,
+    scheme: &'static str,
+    port: u16,
+    csrf_token: String,
+    source: &'static str,
+}
+
+/// 从 `daemon/*.json` 解析出的连接元数据。
+///
+/// Antigravity 2.34+ 不再在 `language_server` 命令行暴露 `--csrf_token`,
+/// 改为把运行时的 `pid` / `httpPort` / `httpsPort` / `csrfToken` 写入
+/// `~/.gemini/antigravity*/daemon/hub_<httpPort>.json`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DaemonDescriptor {
+    pid: u32,
+    http_port: Option<u16>,
+    https_port: Option<u16>,
+    csrf_token: String,
+}
+
+/// 一个候选 language server 进程(旧版命令行发现路径)
 #[derive(Debug, Clone)]
 struct LsProcess {
     pid: u32,
@@ -121,6 +144,161 @@ impl LsEndpoint {
             self.scheme, self.port, LS_SERVICE, method
         )
     }
+}
+
+/// 判断进程 PID 是否仍存活(零子进程、微秒级,用于过滤 `daemon/` 下残留的旧文件)。
+#[cfg(target_os = "windows")]
+fn is_pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+    const ERROR_ACCESS_DENIED: i32 = 5;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
+        fn GetExitCodeProcess(handle: *mut std::ffi::c_void, exit_code: *mut u32) -> i32;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+    }
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            // 无权限打开目标进程句柄仍说明进程存在
+            return std::io::Error::last_os_error().raw_os_error() == Some(ERROR_ACCESS_DENIED);
+        }
+        let mut exit_code: u32 = 0;
+        let ok = GetExitCodeProcess(handle, &mut exit_code);
+        CloseHandle(handle);
+        ok != 0 && exit_code == STILL_ACTIVE
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_pid_alive(pid: u32) -> bool {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return false;
+    }
+    const EPERM: i32 = 1;
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    unsafe {
+        if kill(pid as i32, 0) == 0 {
+            return true;
+        }
+        std::io::Error::last_os_error().raw_os_error() == Some(EPERM)
+    }
+}
+
+fn json_port(value: Option<&Value>) -> Option<u16> {
+    let raw = match value {
+        Some(Value::Number(n)) => n.as_u64()?,
+        Some(Value::String(s)) => s.trim().parse::<u64>().ok()?,
+        _ => return None,
+    };
+    if raw == 0 || raw > u16::MAX as u64 {
+        None
+    } else {
+        Some(raw as u16)
+    }
+}
+
+/// 解析 `daemon/*.json` 的连接元数据。
+fn parse_daemon_descriptor(content: &str) -> Option<DaemonDescriptor> {
+    let v: Value = serde_json::from_str(content).ok()?;
+    let csrf_token = json_str(v.get("csrfToken"));
+    if csrf_token.is_empty() {
+        return None;
+    }
+    let http_port = json_port(v.get("httpPort"));
+    let https_port = json_port(v.get("httpsPort"));
+    if http_port.is_none() && https_port.is_none() {
+        return None;
+    }
+    let pid = match v.get("pid") {
+        Some(Value::Number(n)) => n.as_u64().and_then(|p| u32::try_from(p).ok()).unwrap_or(0),
+        Some(Value::String(s)) => s.trim().parse::<u32>().unwrap_or(0),
+        _ => 0,
+    };
+    Some(DaemonDescriptor {
+        pid,
+        http_port,
+        https_port,
+        csrf_token,
+    })
+}
+
+/// 从给定数据根的 `daemon/*.json` 收集候选端点:按修改时间降序,过滤已退出的 PID,
+/// 每个存活实例优先尝试明文 `httpPort` 再尝试 `httpsPort`。
+fn collect_daemon_candidates_in<F>(roots: &[PathBuf], pid_alive: F) -> Vec<EndpointCandidate>
+where
+    F: Fn(u32) -> bool,
+{
+    let mut entries_with_mtime: Vec<(i64, String, DaemonDescriptor)> = Vec::new();
+    for root in roots {
+        let daemon_dir = root.join("daemon");
+        let Ok(read_dir) = std::fs::read_dir(&daemon_dir) else {
+            continue;
+        };
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Some(desc) = parse_daemon_descriptor(&content) else {
+                continue;
+            };
+            if desc.pid > 0 && !pid_alive(desc.pid) {
+                continue;
+            }
+            let mtime = entry
+                .metadata()
+                .map(|m| metadata_modified_nanos(&m))
+                .unwrap_or(0);
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            entries_with_mtime.push((mtime, name, desc));
+        }
+    }
+
+    // 最新写入的描述文件排在最前,命中当前实例时首跳即通
+    entries_with_mtime.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+
+    let mut out = Vec::new();
+    for (_, _, desc) in entries_with_mtime {
+        if let Some(port) = desc.http_port {
+            out.push(EndpointCandidate {
+                pid: desc.pid,
+                scheme: "http",
+                port,
+                csrf_token: desc.csrf_token.clone(),
+                source: "daemon",
+            });
+        }
+        if let Some(port) = desc.https_port {
+            out.push(EndpointCandidate {
+                pid: desc.pid,
+                scheme: "https",
+                port,
+                csrf_token: desc.csrf_token.clone(),
+                source: "daemon",
+            });
+        }
+    }
+    out
+}
+
+fn detect_daemon_candidates() -> Vec<EndpointCandidate> {
+    collect_daemon_candidates_in(&antigravity_data_roots(), is_pid_alive)
 }
 
 /// 执行外部命令取 stdout。Windows 下隐藏控制台窗口,避免扫描时闪黑框。
@@ -313,46 +491,90 @@ fn rpc_call(
     serde_json::from_str(&text).map_err(|e| format!("解析 {} 响应失败: {}", method, e))
 }
 
+/// 将旧版命令行发现的进程展开为候选端点(每个端口先试明文 HTTP 再试 HTTPS)
+fn detect_process_candidates() -> Vec<EndpointCandidate> {
+    let mut out = Vec::new();
+    for proc in detect_processes() {
+        for port in proc.ports {
+            for scheme in ["http", "https"] {
+                out.push(EndpointCandidate {
+                    pid: proc.pid,
+                    scheme,
+                    port,
+                    csrf_token: proc.csrf_token.clone(),
+                    source: "cmdline",
+                });
+            }
+        }
+    }
+    out
+}
+
+fn try_probe_candidates(
+    agent: &ureq::Agent,
+    candidates: &[EndpointCandidate],
+    seen: &mut std::collections::HashSet<(&'static str, u16, String)>,
+    last_err: &mut String,
+) -> Option<LsEndpoint> {
+    let heartbeat = serde_json::json!({ "uuid": "00000000-0000-0000-0000-000000000000" });
+    for c in candidates {
+        if !seen.insert((c.scheme, c.port, c.csrf_token.clone())) {
+            continue;
+        }
+        let endpoint = LsEndpoint {
+            scheme: c.scheme,
+            port: c.port,
+            csrf_token: c.csrf_token.clone(),
+        };
+        match rpc_call(agent, &endpoint, "Heartbeat", &heartbeat) {
+            Ok(_) => {
+                log::info!(
+                    "[ANTIGRAVITY] 端点可用: {}://127.0.0.1:{} (pid={}, source={})",
+                    c.scheme,
+                    c.port,
+                    c.pid,
+                    c.source
+                );
+                return Some(endpoint);
+            }
+            Err(e) => *last_err = e,
+        }
+    }
+    None
+}
+
 /// 找到一个可用端点。
 ///
-/// language server 会同时开 HTTPS(gRPC)与明文 HTTP 两个随机端口,且端口号每次
-/// 重启都变。这里对每个监听端口先试明文 HTTP——它不需要放宽证书校验,
-/// 是最省事的一条;都不通再试 HTTPS。用 `Heartbeat` 作探活(payload 最小)。
+/// 两级发现策略:
+/// 1. 优先读取 `~/.gemini/antigravity*/daemon/*.json`(Antigravity 2.34+ 不再在命令行暴露
+///    `--csrf_token`,且直接给出了 `httpPort`/`httpsPort` 与 `csrfToken`,免去进程枚举开销);
+/// 2. 未命中时回退到旧版进程命令行 `--csrf_token` + 监听端口枚举。
+///
+/// 对每个候选优先试明文 HTTP——无需放宽证书校验,最省事;都不通再试 HTTPS。
+/// 用 `Heartbeat` 作探活(payload 最小)。
 pub fn probe_endpoint() -> Result<LsEndpoint, String> {
-    let processes = detect_processes();
-    if processes.is_empty() {
+    let agent = build_agent(PROBE_TIMEOUT);
+    let mut seen = std::collections::HashSet::new();
+    let mut last_err = String::new();
+
+    let daemon_candidates = detect_daemon_candidates();
+    if let Some(ep) = try_probe_candidates(&agent, &daemon_candidates, &mut seen, &mut last_err) {
+        return Ok(ep);
+    }
+
+    let process_candidates = detect_process_candidates();
+    if let Some(ep) = try_probe_candidates(&agent, &process_candidates, &mut seen, &mut last_err) {
+        return Ok(ep);
+    }
+
+    if daemon_candidates.is_empty() && process_candidates.is_empty() {
         return Err(
             "未发现运行中的 Antigravity language server。Antigravity 的 token 用量不落盘，\
              需要 Antigravity 保持打开才能读取"
                 .to_string(),
         );
     }
-    let agent = build_agent(PROBE_TIMEOUT);
-    let heartbeat = serde_json::json!({ "uuid": "00000000-0000-0000-0000-000000000000" });
-    let mut last_err = String::new();
-    for proc in &processes {
-        for &port in &proc.ports {
-            for scheme in ["http", "https"] {
-                let candidate = LsEndpoint {
-                    scheme,
-                    port,
-                    csrf_token: proc.csrf_token.clone(),
-                };
-                match rpc_call(&agent, &candidate, "Heartbeat", &heartbeat) {
-                    Ok(_) => {
-                        log::info!(
-                            "[ANTIGRAVITY] 端点可用: {}://127.0.0.1:{} (pid={})",
-                            scheme,
-                            port,
-                            proc.pid
-                        );
-                        return Ok(candidate);
-                    }
-                    Err(e) => last_err = e,
-                }
-            }
-        }
-    }
+
     Err(format!(
         "Antigravity language server 已在运行但 RPC 不可达: {}",
         last_err
@@ -1318,5 +1540,102 @@ mod tests {
         });
         let map = parse_trajectory_timestamps(&payload);
         assert_eq!(map.get("r"), Some(&rfc3339_to_epoch("2026-09-16T03:34:00Z").unwrap()));
+    }
+
+    #[test]
+    fn parse_daemon_descriptor_extracts_ports_pid_and_token() {
+        let raw = r#"{
+            "pid": 26348,
+            "httpsPort": 57438,
+            "httpPort": 57439,
+            "lsVersion": "2.34.0",
+            "csrfToken": "tok-abc-123"
+        }"#;
+        let desc = parse_daemon_descriptor(raw).unwrap();
+        assert_eq!(desc.pid, 26348);
+        assert_eq!(desc.http_port, Some(57439));
+        assert_eq!(desc.https_port, Some(57438));
+        assert_eq!(desc.csrf_token, "tok-abc-123");
+
+        // 只有单一端口且忽略 0 端口
+        let https_only = r#"{"pid": 99, "httpPort": 0, "httpsPort": 50001, "csrfToken": "t"}"#;
+        let desc = parse_daemon_descriptor(https_only).unwrap();
+        assert_eq!(desc.http_port, None);
+        assert_eq!(desc.https_port, Some(50001));
+
+        // 缺少 token 或无有效端口均应丢弃
+        assert!(parse_daemon_descriptor(r#"{"pid": 1, "httpPort": 8080, "csrfToken": ""}"#).is_none());
+        assert!(parse_daemon_descriptor(r#"{"pid": 1, "httpPort": 0, "httpsPort": 0, "csrfToken": "t"}"#).is_none());
+        assert!(parse_daemon_descriptor("not json").is_none());
+    }
+
+    #[test]
+    fn collect_daemon_candidates_filters_dead_pids_and_orders_http_before_https() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = dir.path().join("daemon");
+        std::fs::create_dir_all(&daemon).unwrap();
+
+        // 已退出 PID 的残留文件应被跳过
+        std::fs::write(
+            daemon.join("hub_52176.json"),
+            r#"{"pid": 17400, "httpPort": 52176, "httpsPort": 52175, "csrfToken": "dead-tok"}"#,
+        )
+        .unwrap();
+        // 存活 PID 的有效文件
+        std::fs::write(
+            daemon.join("hub_57439.json"),
+            r#"{"pid": 26348, "httpPort": 57439, "httpsPort": 57438, "csrfToken": "live-tok"}"#,
+        )
+        .unwrap();
+        // 非 json 文件与损坏 json 应静默跳过
+        std::fs::write(daemon.join("notes.txt"), "ignored").unwrap();
+        std::fs::write(daemon.join("broken.json"), "{broken").unwrap();
+
+        let candidates =
+            collect_daemon_candidates_in(&[dir.path().to_path_buf()], |pid| pid == 26348);
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(
+            candidates[0],
+            EndpointCandidate {
+                pid: 26348,
+                scheme: "http",
+                port: 57439,
+                csrf_token: "live-tok".to_string(),
+                source: "daemon",
+            }
+        );
+        assert_eq!(
+            candidates[1],
+            EndpointCandidate {
+                pid: 26348,
+                scheme: "https",
+                port: 57438,
+                csrf_token: "live-tok".to_string(),
+                source: "daemon",
+            }
+        );
+    }
+
+    #[test]
+    fn is_pid_alive_detects_current_process_and_rejects_zero() {
+        assert!(is_pid_alive(std::process::id()));
+        assert!(!is_pid_alive(0));
+    }
+
+    #[test]
+    #[ignore = "需要本机正在运行 Antigravity 才能执行真机探活"]
+    fn probe_and_scan_real_antigravity_in_memory() {
+        let ep = probe_endpoint().expect("本机运行中的 Antigravity 应可探活");
+        assert!(ep.port > 0);
+        assert!(!ep.csrf_token.is_empty());
+
+        let db = crate::services::app_db::AppDbService::new_in_memory().unwrap();
+        let result = scan_antigravity(&db).expect("真机扫描应成功");
+        eprintln!(
+            "real probe ok: {}://127.0.0.1:{}, scanned={}, imported={}, errors={}",
+            ep.scheme, ep.port, result.files_scanned, result.imported, result.errors
+        );
+        assert!(result.files_scanned > 0);
+        assert!(result.imported > 0);
     }
 }
