@@ -1,6 +1,17 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-11-22",
+    "commits": [
+      {
+        "hash": "ac72810",
+        "subject": "fix(antigravity): 优先从 daemon 描述文件发现 language server 端点",
+        "date": "2026-11-22"
+      }
+    ]
+  },
+  {
+    "version": "0.8.17",
     "date": "2026-11-18",
     "commits": [
       {
