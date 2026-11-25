@@ -1,5 +1,5 @@
 use rusqlite::{Connection, OpenFlags};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -11,9 +11,20 @@ use crate::utils::*;
 pub struct OpenCodeDbService {
     db: Option<Mutex<Connection>>,
     db_path: String,
-    latest_timestamp: Option<i64>,
     /// 源库未变时跳过 message 表全量扫描的结果缓存（见 FilteredRecordsCache）
     filtered_cache: Mutex<Option<FilteredRecordsCache>>,
+    /// 源库未变时复用单趟聚合的元数据缓存（计数、模型、供应商、日期范围）
+    metadata_cache: Mutex<Option<OpenCodeMetadataCache>>,
+}
+
+#[derive(Clone)]
+struct OpenCodeMetadataCache {
+    stamp: ContentStamp,
+    record_count: i64,
+    min_ts: i64,
+    max_ts: Option<i64>,
+    models: Vec<String>,
+    providers: Vec<Provider>,
 }
 
 /// 源库内容戳：主库与 WAL 文件的 (mtime, size) 合并，任一变化即视为内容变化。
@@ -97,8 +108,8 @@ impl OpenCodeDbService {
         Self {
             db: None,
             db_path: String::new(),
-            latest_timestamp: None,
             filtered_cache: Mutex::new(None),
+            metadata_cache: Mutex::new(None),
         }
     }
 
@@ -114,7 +125,6 @@ impl OpenCodeDbService {
         })?;
         self.db_path = file_path.to_string();
         self.db = Some(Mutex::new(conn));
-        self.latest_timestamp = self.get_latest_timestamp_internal();
         Ok(())
     }
 
@@ -124,6 +134,9 @@ impl OpenCodeDbService {
         // 换库重开时不得携带旧库的缓存结果
         if let Ok(mut cache) = self.filtered_cache.get_mut() {
             *cache = None;
+        }
+        if let Ok(meta) = self.metadata_cache.get_mut() {
+            *meta = None;
         }
     }
 
@@ -226,29 +239,99 @@ impl OpenCodeDbService {
         (format!("WHERE {}", clauses.join(" AND ")), binds)
     }
 
-    // ========== 基础查询 ==========
+    // ========== 基础查询（单趟元数据缓存）==========
+
+    /// 单趟扫描 `message` 表收集记录数、时间范围、模型集与供应商集，按 `ContentStamp` 缓存。
+    fn load_metadata_snapshot(&self) -> Result<OpenCodeMetadataCache, String> {
+        let stamp = content_stamp(&self.db_path);
+        {
+            let cache = self
+                .metadata_cache
+                .lock()
+                .map_err(|e| format!("元数据缓存锁失败: {}", e))?;
+            if let Some(c) = cache.as_ref() {
+                if c.stamp == stamp {
+                    return Ok(c.clone());
+                }
+            }
+        }
+
+        let db = self.db()?;
+        let mut stmt = db
+            .prepare(
+                "SELECT (time_created / 1000),
+                        json_extract(data, '$.modelID'),
+                        json_extract(data, '$.providerID')
+                 FROM message
+                 WHERE json_extract(data, '$.role') = 'assistant'",
+            )
+            .map_err(|e| format!("查询 OpenCode 元数据失败: {}", e))?;
+
+        let mut rows = stmt
+            .query([])
+            .map_err(|e| format!("查询 OpenCode 元数据失败: {}", e))?;
+
+        let mut record_count: i64 = 0;
+        let mut min_ts: Option<i64> = None;
+        let mut max_ts: Option<i64> = None;
+        let mut model_set: BTreeSet<String> = BTreeSet::new();
+        let mut provider_set: BTreeSet<String> = BTreeSet::new();
+
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| format!("读取 OpenCode 元数据失败: {}", e))?
+        {
+            record_count += 1;
+            if let Some(ts) = row
+                .get::<_, Option<i64>>(0)
+                .map_err(|e| format!("读取时间戳失败: {}", e))?
+            {
+                min_ts = Some(min_ts.map_or(ts, |m| m.min(ts)));
+                max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
+            }
+            if let Some(model) = row
+                .get::<_, Option<String>>(1)
+                .map_err(|e| format!("读取模型失败: {}", e))?
+            {
+                model_set.insert(model);
+            }
+            if let Some(provider) = row
+                .get::<_, Option<String>>(2)
+                .map_err(|e| format!("读取供应商失败: {}", e))?
+            {
+                provider_set.insert(provider);
+            }
+        }
+
+        let snapshot = OpenCodeMetadataCache {
+            stamp,
+            record_count,
+            min_ts: min_ts.unwrap_or(0),
+            max_ts,
+            models: model_set.into_iter().collect(),
+            providers: provider_set
+                .into_iter()
+                .map(|id| Provider {
+                    name: id.clone(),
+                    id,
+                })
+                .collect(),
+        };
+
+        let mut cache = self
+            .metadata_cache
+            .lock()
+            .map_err(|e| format!("元数据缓存锁失败: {}", e))?;
+        *cache = Some(snapshot.clone());
+        Ok(snapshot)
+    }
 
     pub fn get_record_count(&self) -> Result<i64, String> {
-        let db = self.db()?;
-        let count: i64 = db
-            .query_row(
-                "SELECT COUNT(*) FROM message WHERE json_extract(data, '$.role') = 'assistant'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| format!("查询记录数失败: {}", e))?;
-        Ok(count)
+        Ok(self.load_metadata_snapshot()?.record_count)
     }
 
     fn get_latest_timestamp_internal(&self) -> Option<i64> {
-        self.db().ok().and_then(|db| {
-            db.query_row(
-                "SELECT MAX(time_created / 1000) FROM message WHERE json_extract(data, '$.role') = 'assistant'",
-                [],
-                |row| row.get(0),
-            )
-            .ok()
-        })
+        self.load_metadata_snapshot().ok().and_then(|s| s.max_ts)
     }
 
     pub fn get_latest_timestamp(&self) -> Option<i64> {
@@ -256,64 +339,19 @@ impl OpenCodeDbService {
     }
 
     pub fn get_providers(&self) -> Result<Vec<Provider>, String> {
-        let db = self.db()?;
-        let mut stmt = db
-            .prepare(
-                "SELECT DISTINCT json_extract(data, '$.providerID') AS id
-                 FROM message
-                 WHERE json_extract(data, '$.role') = 'assistant'
-                   AND json_extract(data, '$.providerID') IS NOT NULL
-                 ORDER BY id",
-            )
-            .map_err(|e| format!("查询供应商失败: {}", e))?;
-
-        let rows = stmt
-            .query_map([], |row| {
-                let id: String = row.get::<_, Option<String>>(0)?.unwrap_or_default();
-                Ok(Provider {
-                    name: id.clone(),
-                    id,
-                })
-            })
-            .map_err(|e| format!("查询供应商失败: {}", e))?;
-
-        Self::collect_rows(rows, "读取供应商")
+        Ok(self.load_metadata_snapshot()?.providers)
     }
 
     pub fn get_models(&self) -> Result<Vec<String>, String> {
-        let db = self.db()?;
-        let mut stmt = db
-            .prepare(
-                "SELECT DISTINCT json_extract(data, '$.modelID')
-                 FROM message
-                 WHERE json_extract(data, '$.role') = 'assistant'
-                   AND json_extract(data, '$.modelID') IS NOT NULL
-                 ORDER BY json_extract(data, '$.modelID')",
-            )
-            .map_err(|e| format!("查询模型失败: {}", e))?;
-
-        let rows = stmt
-            .query_map([], |row| row.get::<_, Option<String>>(0))
-            .map_err(|e| format!("查询模型失败: {}", e))?;
-
-        Ok(Self::collect_rows(rows, "读取模型")?
-            .into_iter()
-            .flatten()
-            .collect())
+        Ok(self.load_metadata_snapshot()?.models)
     }
 
     pub fn get_date_range(&self) -> Result<DateRange, String> {
-        let db = self.db()?;
-        let (min, max): (Option<i64>, Option<i64>) = db
-            .query_row(
-                "SELECT MIN(time_created / 1000), MAX(time_created / 1000)
-                 FROM message
-                 WHERE json_extract(data, '$.role') = 'assistant'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(|e| format!("查询日期范围失败: {}", e))?;
-        Ok(DateRange { min: min.unwrap_or(0), max: max.unwrap_or(0) })
+        let s = self.load_metadata_snapshot()?;
+        Ok(DateRange {
+            min: s.min_ts,
+            max: s.max_ts.unwrap_or(0),
+        })
     }
 
     // ========== 筛选查询 ==========
@@ -1338,5 +1376,56 @@ mod tests {
             "[REAL-OPENCODE] 样例: session={} model={} created_at={} latency={} ttft={}",
             sample.0, sample.1, sample.3, sample.8, sample.9
         );
+    }
+
+    /// 源库未变时单趟元数据缓存复用结果；内容变化后自动刷新；close 清空缓存。
+    #[test]
+    fn test_metadata_snapshot_content_stamp_cache() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let path_str = path.to_str().unwrap().to_string();
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                time_created INTEGER,
+                data TEXT
+            )",
+        )
+        .unwrap();
+        insert_msg(&conn, "m1", 2_000_000, "z-model");
+        insert_msg(&conn, "m2", 1_000_000, "a-model");
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, data) VALUES ('u1', 's1', 500000, '{\"role\":\"user\"}')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut svc = OpenCodeDbService::new();
+        svc.open(&path_str).unwrap();
+        assert!(svc.metadata_cache.lock().unwrap().is_none(), "open 时不应提前扫库");
+
+        assert_eq!(svc.get_record_count().unwrap(), 2);
+        assert!(svc.metadata_cache.lock().unwrap().is_some());
+        assert_eq!(svc.get_models().unwrap(), vec!["a-model", "z-model"]);
+        assert_eq!(svc.get_providers().unwrap().len(), 1);
+        assert_eq!(svc.get_providers().unwrap()[0].id, "anthropic");
+        let range = svc.get_date_range().unwrap();
+        assert_eq!((range.min, range.max), (1000, 2000));
+        assert_eq!(svc.get_latest_timestamp(), Some(2000));
+
+        // 写库后内容戳变化，元数据自动失效并更新
+        let conn = Connection::open(&path).unwrap();
+        insert_msg(&conn, "m3", 3_500_000, "m-model");
+        drop(conn);
+        assert_eq!(svc.get_record_count().unwrap(), 3);
+        assert_eq!(svc.get_models().unwrap(), vec!["a-model", "m-model", "z-model"]);
+        assert_eq!(svc.get_latest_timestamp(), Some(3500));
+
+        // close 清空缓存
+        svc.close();
+        assert!(svc.metadata_cache.lock().unwrap().is_none());
     }
 }

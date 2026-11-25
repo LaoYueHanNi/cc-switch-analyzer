@@ -653,6 +653,29 @@ fn antigravity_data_roots() -> Vec<PathBuf> {
         .collect()
 }
 
+/// 判断目录名是否为标准的 36 字符 UUID（8-4-4-4-12 十六进制），用于跳过 `brain/tempmediaStorage` 等非会话目录。
+fn is_valid_cascade_id(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    for (idx, &b) in bytes.iter().enumerate() {
+        match idx {
+            8 | 13 | 18 | 23 => {
+                if b != b'-' {
+                    return false;
+                }
+            }
+            _ => {
+                if !b.is_ascii_hexdigit() {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
 /// 枚举会话候选:`brain/<cascadeId>/` 目录名 与 `conversations/<cascadeId>.pb` 文件名。
 ///
 /// 同一 cascadeId 可能同时出现在多个根下(如 2.0 与备份),按 mtime 取最新的一份。
@@ -689,6 +712,9 @@ fn scan_session_candidates() -> Vec<SessionCandidate> {
                     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                         continue;
                     };
+                    if !is_valid_cascade_id(name) {
+                        continue;
+                    }
                     let mtime = session_mtime_nanos(&path, 3);
                     consider(name.to_string(), path.clone(), mtime);
                 }
@@ -1620,6 +1646,17 @@ mod tests {
     fn is_pid_alive_detects_current_process_and_rejects_zero() {
         assert!(is_pid_alive(std::process::id()));
         assert!(!is_pid_alive(0));
+    }
+
+    #[test]
+    fn is_valid_cascade_id_accepts_uuid_and_rejects_non_session_dirs() {
+        assert!(is_valid_cascade_id("460aa64e-335e-4c60-a4cc-119a1987072f"));
+        assert!(is_valid_cascade_id("01E4658B-46BB-4667-9D34-6D1A814EE6BE"));
+        assert!(!is_valid_cascade_id("tempmediaStorage"));
+        assert!(!is_valid_cascade_id(""));
+        assert!(!is_valid_cascade_id("460aa64e-335e-4c60-a4cc-119a1987072"));
+        assert!(!is_valid_cascade_id("460aa64e_335e_4c60_a4cc_119a1987072f"));
+        assert!(!is_valid_cascade_id("460aa64e-335e-4c60-a4cc-119a1987072g"));
     }
 
     #[test]

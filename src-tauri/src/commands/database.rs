@@ -84,18 +84,28 @@ pub fn auto_load_database(state: State<AppState>) -> Result<Vec<SourceInfo>, Str
     initialize_sources(&state)
 }
 
-/// Backend startup and IPC share one initialization; rebuilding a WebView only lists sources.
-pub(crate) fn initialize_sources(state: &AppState) -> Result<Vec<SourceInfo>, String> {
+/// 仅初始化定价引擎并恢复数据源（不触发统计行数，供后端 `.setup()` 使用）。
+pub(crate) fn ensure_sources_initialized(state: &AppState) -> Result<(), String> {
     let mut initialized = state.sources_initialized.lock().map_err(|e| e.to_string())?;
     if !*initialized {
         refresh_pricing(state)?;
         restore_sources(state)?;
         *initialized = true;
     }
-    Ok(state.data_sources.read().map_err(|e| e.to_string())?.iter().map(|s| s.to_info()).collect())
+    Ok(())
 }
 
-fn restore_sources(state: &AppState) -> Result<Vec<SourceInfo>, String> {
+/// Backend startup and IPC share one initialization; rebuilding a WebView only lists sources.
+pub(crate) fn initialize_sources(state: &AppState) -> Result<Vec<SourceInfo>, String> {
+    ensure_sources_initialized(state)?;
+    let sources = state.data_sources.read().map_err(|e| e.to_string())?;
+    Ok(std::thread::scope(|s| {
+        let handles: Vec<_> = sources.iter().map(|entry| s.spawn(move || entry.to_info())).collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    }))
+}
+
+fn restore_sources(state: &AppState) -> Result<(), String> {
     let app_db = state.app_db.lock().map_err(|e| e.to_string())?;
     let paths_json = app_db.get_setting("last_db_paths");
     drop(app_db);
@@ -110,7 +120,7 @@ fn restore_sources(state: &AppState) -> Result<Vec<SourceInfo>, String> {
                     .collect();
                 if existing.is_empty() {
                     log::info!("[DB] 记忆的数据库路径均不存在");
-                    return Ok(Vec::new());
+                    return Ok(());
                 }
                 return auto_load_paths(&state, existing);
             }
@@ -124,7 +134,7 @@ fn restore_sources(state: &AppState) -> Result<Vec<SourceInfo>, String> {
                 .collect();
             if existing.is_empty() {
                 log::info!("[DB] 记忆的数据库路径均不存在");
-                return Ok(Vec::new());
+                return Ok(());
             }
             let entries: Vec<PersistedSource> = existing
                 .into_iter()
@@ -282,10 +292,10 @@ fn restore_sources(state: &AppState) -> Result<Vec<SourceInfo>, String> {
         return auto_load_paths(&state, defaults);
     }
     log::info!("[DB] 无可加载的数据库");
-    return Ok(Vec::new());
+    Ok(())
 }
 
-fn auto_load_paths(state: &AppState, mut entries: Vec<PersistedSource>) -> Result<Vec<SourceInfo>, String> {
+fn auto_load_paths(state: &AppState, mut entries: Vec<PersistedSource>) -> Result<(), String> {
     let ccs_discover = state.app_db.lock().map_err(|e| e.to_string()).map(|db| ccs_auto_discover_enabled(&db))?;
     if ccs_discover && !entries.iter().any(|e| e.db_type == "CCS") {
         if let Ok(path) = crate::utils::get_default_db_path() {
@@ -558,7 +568,7 @@ fn auto_load_paths(state: &AppState, mut entries: Vec<PersistedSource>) -> Resul
     }
 
     if sources.is_empty() {
-        return Ok(Vec::new());
+        return Ok(());
     }
 
     // 恢复 disabled 状态
@@ -569,12 +579,8 @@ fn auto_load_paths(state: &AppState, mut entries: Vec<PersistedSource>) -> Resul
         }
     }
 
-    // 刷新定价引擎
-    refresh_pricing(state)?;
-
-    let info: Vec<SourceInfo> = sources.iter().map(|s| s.to_info()).collect();
-    save_paths(&state, &info);
-    Ok(info)
+    save_paths_from_entries(state, &sources);
+    Ok(())
 }
 
 fn path_equals_ignore_slash(a: &str, b: &str) -> bool {
@@ -1115,12 +1121,25 @@ pub fn get_filter_options(state: State<AppState>) -> Result<FilterOptions, Strin
         })
         .collect();
 
+    let enabled_sources: Vec<_> = sources.iter().filter(|s| s.enabled).collect();
+    let per_source = std::thread::scope(|s| {
+        let handles: Vec<_> = enabled_sources
+            .into_iter()
+            .map(|entry| {
+                s.spawn(move || (entry.source.get_models().ok(), entry.source.get_date_range().ok()))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().ok())
+            .collect::<Vec<_>>()
+    });
+
     let mut all_models = Vec::new();
     let mut all_ranges = Vec::new();
-
-    for entry in sources.iter().filter(|s| s.enabled) {
-        if let Ok(m) = entry.source.get_models() { all_models.push(m); }
-        if let Ok(r) = entry.source.get_date_range() { all_ranges.push(r); }
+    for (models, range) in per_source {
+        if let Some(m) = models { all_models.push(m); }
+        if let Some(r) = range { all_ranges.push(r); }
     }
 
     Ok(FilterOptions {
@@ -1205,7 +1224,19 @@ pub fn save_paths_public(state: &AppState, info: &[SourceInfo]) {
         path: s.path.clone(),
         db_type: s.db_type.clone(),
     }).collect();
-    if let Ok(json) = serde_json::to_string(&entries) {
+    save_persisted_sources(state, &entries);
+}
+
+fn save_paths_from_entries(state: &AppState, sources: &[SourceEntry]) {
+    let entries: Vec<PersistedSource> = sources.iter().map(|s| PersistedSource {
+        path: s.path.clone(),
+        db_type: s.db_type.label().to_string(),
+    }).collect();
+    save_persisted_sources(state, &entries);
+}
+
+fn save_persisted_sources(state: &AppState, entries: &[PersistedSource]) {
+    if let Ok(json) = serde_json::to_string(entries) {
         if let Ok(app_db) = state.app_db.lock() {
             if let Err(e) = app_db.set_setting("last_db_paths", &json) {
                 log::error!("[DB] 保存数据库路径失败: {}", e);
