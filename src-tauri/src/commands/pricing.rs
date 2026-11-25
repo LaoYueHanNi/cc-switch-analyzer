@@ -14,11 +14,19 @@ pub fn get_all_pricing(state: State<AppState>) -> Result<Vec<PricingData>, Strin
 
     let user_alias_map = app_db.get_user_aliases().unwrap_or_default();
 
+    let per_source_models = std::thread::scope(|s| {
+        let handles: Vec<_> = sources
+            .iter()
+            .map(|entry| s.spawn(move || entry.source.get_models().ok()))
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().ok().flatten())
+            .collect::<Vec<_>>()
+    });
     let mut used_models: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for entry in sources.iter() {
-        if let Ok(models) = entry.source.get_models() {
-            used_models.extend(models);
-        }
+    for models in per_source_models {
+        used_models.extend(models);
     }
 
     let mut resolved_used_model_ids: std::collections::HashSet<String> = std::collections::HashSet::new();

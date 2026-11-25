@@ -8,7 +8,12 @@ OpenCode 源库（`~/.local/share/opencode/opencode.db`，实测 198MB）是外�
 
 ## Decision
 
-`OpenCodeDbService` 增加 `filtered_cache`：以主库与 `-wal` 文件的 `(mtime, size)` 四元组内容戳（`ContentStamp`，stat 两个文件微秒级）判定源库未变，且查询参数与缓存一致时直接复用上次 `get_filtered_raw_records` 结果。参数键为 `build_where_clause` 实际消费的 `(from_epoch, provider_id, model_id)`（ccs 过滤对 OpenCode 不生效，不入键）；`to_epoch` 按"内容未变时数据集合固定"的单调性处理：本次 `to ≥ 缓存 to` 才复用，`to` 缩小的历史窄区间查询强制重查。写回时同内容下保留上界更大的缓存，避免窄区间查询挤掉高频 today 轮询的宽缓存。`close()` 清空缓存防止换库携带旧结果；查询失败不动缓存（内容戳已不匹配，旧缓存不会误用）。
+`OpenCodeDbService` 增加两类基于内容戳（`ContentStamp`，即主库与 `-wal` 文件 `(mtime, size)` 四元组，stat 微秒级）的缓存：
+
+1. **`filtered_cache`**：以 `ContentStamp` 判定源库未变，且查询参数与缓存一致时直接复用上次 `get_filtered_raw_records` 结果。参数键为 `build_where_clause` 实际消费的 `(from_epoch, provider_id, model_id)`（ccs 过滤对 OpenCode 不生效，不入键）；`to_epoch` 按"内容未变时数据集合固定"的单调性处理：本次 `to ≥ 缓存 to` 才复用，`to` 缩小的历史窄区间查询强制重查。写回时同内容下保留上界更大的缓存，避免窄区间查询挤掉高频 today 轮询的宽缓存。
+2. **`metadata_cache`**：`load_metadata_snapshot` 单趟扫描 `message`（`role = 'assistant'`）汇总 `record_count`、`min_ts`、`max_ts`、`models` 与 `providers`，供 `get_record_count`、`get_latest_timestamp_internal`、`get_providers`、`get_models` 与 `get_date_range` 共用，避免启动期 `auto_load_database`、`get_filter_options` 与 `query_precompute` 对 `opencode.db` 连续做多次全表扫描；`open()` 不再提前执行 `get_latest_timestamp_internal()`。
+
+`close()` 清空两类缓存防止换库携带旧结果；查询失败不动缓存（内容戳已不匹配，旧缓存不会误用）。
 
 ## Alternatives considered
 
@@ -19,5 +24,5 @@ OpenCode 源库（`~/.local/share/opencode/opencode.db`，实测 198MB）是外�
 
 ## Consequences
 
-- 换来：源库静置时每秒轮询的 OpenCode 全表扫描与对应 IO 消失；stat 成本可忽略。
-- 代价：`OpenCodeDbService` 持有可变缓存状态（`Mutex<Option<…>>`，today 与图表查询并发安全）；OpenCode 活跃使用时（库每次变化）仍要付一次全表扫描，缓存只在两次变化之间生效；`(mtime, size)` 双戳不覆盖原地重写同长度文件的极端场景（SQLite 正常写入不发生）。
+- 换来：源库静置时每秒轮询与启动阶段元数据枚举的 OpenCode 重复全表扫描与对应 IO 消失；stat 成本可忽略。
+- 代价：`OpenCodeDbService` 持有可变缓存状态（`filtered_cache` 与 `metadata_cache` 两个 `Mutex<Option<…>>`，today 与图表查询并发安全）；OpenCode 活跃使用时（库每次变化）仍要付一次元数据/过滤扫描，缓存只在两次变化之间生效；`(mtime, size)` 双戳不覆盖原地重写同长度文件的极端场景（SQLite 正常写入不发生）。
