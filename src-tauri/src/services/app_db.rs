@@ -33,6 +33,7 @@ impl AppDbService {
         let mut svc = Self { db: conn };
         svc.init_schema()?;
         svc.db.execute_batch("CREATE INDEX IF NOT EXISTS idx_srl_source_created ON session_request_logs(source, created_at);").map_err(|e| e.to_string())?;
+        svc.sync_antigravity_seed_model_map()?;
         Ok(svc)
     }
 
@@ -112,6 +113,9 @@ impl AppDbService {
         }
         if version < 17 {
             self.migrate_v17()?;
+        }
+        if version < 18 {
+            self.migrate_v18()?;
         }
 
         Ok(())
@@ -547,6 +551,22 @@ impl AppDbService {
         self.set_schema_version(17)
     }
 
+    /// v18: 新建 Antigravity 占位符映射表 antigravity_model_map，
+    /// 并清空 Antigravity 同步游标以触发重扫补采历史压缩（CHECKPOINT）用量。
+    fn migrate_v18(&mut self) -> Result<(), String> {
+        self.db
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS antigravity_model_map (
+                    placeholder TEXT PRIMARY KEY,
+                    model_id TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+                );
+                DELETE FROM session_log_sync WHERE source = 'Antigravity';",
+            )
+            .map_err(|e| format!("迁移 v18 (antigravity_model_map) 失败: {}", e))?;
+        self.set_schema_version(18)
+    }
+
     // ========== 任务 CRUD ==========
 
     pub fn list_tasks(&self) -> Result<Vec<Task>, String> {
@@ -869,6 +889,106 @@ impl AppDbService {
                 |row| row.get(0),
             )
             .map_err(|e| format!("查询会话日志数量失败: {}", e))
+    }
+
+    /// 读取持久化的 Antigravity 占位符 → 真实模型 ID 映射表。
+    pub fn load_antigravity_model_map(&self) -> Result<HashMap<String, String>, String> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT placeholder, model_id FROM antigravity_model_map")
+            .map_err(|e| format!("查询 Antigravity 模型映射失败: {}", e))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| format!("查询 Antigravity 模型映射失败: {}", e))?;
+        let mut out = HashMap::new();
+        for row in rows {
+            let (placeholder, model_id) =
+                row.map_err(|e| format!("读取 Antigravity 模型映射失败: {}", e))?;
+            out.insert(placeholder, model_id);
+        }
+        Ok(out)
+    }
+
+    /// 批量写入 Antigravity 占位符 → 真实模型 ID 映射。
+    ///
+    /// - `overwrite = true`：用于来自真实 `chatModel` 的观测，更新已变更的模型名；
+    /// - `overwrite = false`：用于内置种子字典初始化，不覆盖运行期已观测到的最新映射。
+    /// 返回实际新增或变更的条数。
+    pub fn upsert_antigravity_model_map_on_conn<K: AsRef<str>, V: AsRef<str>>(
+        conn: &Connection,
+        entries: &[(K, V)],
+        overwrite: bool,
+    ) -> Result<usize, String> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        let sql = if overwrite {
+            "INSERT INTO antigravity_model_map (placeholder, model_id, updated_at)
+             VALUES (?1, ?2, strftime('%s','now'))
+             ON CONFLICT(placeholder) DO UPDATE SET
+               model_id = excluded.model_id,
+               updated_at = strftime('%s','now')
+             WHERE antigravity_model_map.model_id <> excluded.model_id"
+        } else {
+            "INSERT OR IGNORE INTO antigravity_model_map (placeholder, model_id, updated_at)
+             VALUES (?1, ?2, strftime('%s','now'))"
+        };
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| format!("准备写入 Antigravity 模型映射失败: {}", e))?;
+        let mut changed = 0usize;
+        for (placeholder, model_id) in entries {
+            let p = placeholder.as_ref().trim();
+            let m = model_id.as_ref().trim();
+            if p.is_empty() || m.is_empty() || p == m {
+                continue;
+            }
+            changed += stmt
+                .execute(params![p, m])
+                .map_err(|e| format!("写入 Antigravity 模型映射失败: {}", e))?;
+        }
+        Ok(changed)
+    }
+
+    /// 用当前映射表回刷历史上因未命中字典而保留了占位符原 ID 的 Antigravity 记录。
+    /// 仅更新仍等于占位符的行，不动已解析为真实模型 ID 的行。
+    pub fn backfill_antigravity_model_ids_on_conn(conn: &Connection) -> Result<usize, String> {
+        conn.execute(
+            "UPDATE session_request_logs
+             SET model = (
+                 SELECT m.model_id
+                 FROM antigravity_model_map m
+                 WHERE m.placeholder = session_request_logs.model
+             )
+             WHERE source = 'Antigravity'
+               AND EXISTS (
+                   SELECT 1
+                   FROM antigravity_model_map m
+                   WHERE m.placeholder = session_request_logs.model
+                     AND m.model_id <> session_request_logs.model
+               )",
+            [],
+        )
+        .map_err(|e| format!("回刷 Antigravity 历史模型名失败: {}", e))
+    }
+
+    /// 合并内置 Antigravity 模型种子字典并回刷历史上仍保留占位符原 ID 的记录。
+    pub fn sync_antigravity_seed_model_map(&self) -> Result<usize, String> {
+        let tx = self
+            .db
+            .unchecked_transaction()
+            .map_err(|e| format!("开启 Antigravity 映射同步事务失败: {}", e))?;
+        Self::upsert_antigravity_model_map_on_conn(
+            &tx,
+            crate::services::antigravity_scanner::DEFAULT_MODEL_MAP,
+            false,
+        )?;
+        let updated = Self::backfill_antigravity_model_ids_on_conn(&tx)?;
+        tx.commit()
+            .map_err(|e| format!("提交 Antigravity 映射同步事务失败: {}", e))?;
+        Ok(updated)
     }
 
     /// 清空某来源的全部入库数据与同步游标。
@@ -2065,6 +2185,13 @@ impl AppDbService {
                 last_synced_at INTEGER NOT NULL
             );"
         ).map_err(|e| format!("初始化内存表失败: {}", e))?;
+        self.db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS antigravity_model_map (
+                placeholder TEXT PRIMARY KEY,
+                model_id TEXT NOT NULL,
+                updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            );"
+        ).map_err(|e| format!("初始化 antigravity_model_map 失败: {}", e))?;
         self.set_setting("schema_version", "15")?;
         Ok(())
     }
@@ -2456,5 +2583,124 @@ mod tests {
         assert!(db.create_task("   ", "x", "todo").is_err());
         // 非法 status 应被拒绝
         assert!(db.create_task("t", "x", "weird").is_err());
+    }
+
+    #[test]
+    fn test_migrate_v18_creates_model_map_and_resets_antigravity_cursor() {
+        let mut db = create_db();
+        db.conn()
+            .execute_batch("DROP TABLE IF EXISTS antigravity_model_map;")
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO session_log_sync (file_path, source, last_modified, last_synced_at)
+                 VALUES ('/ag/s1', 'Antigravity', 123, 456), ('/dsh/s2', 'DSH', 789, 101)",
+                [],
+            )
+            .unwrap();
+
+        db.migrate_v18().unwrap();
+
+        let ag_sync: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM session_log_sync WHERE source = 'Antigravity'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let dsh_sync: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM session_log_sync WHERE source = 'DSH'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(ag_sync, 0);
+        assert_eq!(dsh_sync, 1);
+        assert_eq!(db.get_schema_version(), 18);
+        assert!(db.load_antigravity_model_map().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_antigravity_model_map_seed_overwrite_and_backfill() {
+        let db = create_db();
+        // 预先写入两条历史记录：一条是尚未映射的占位符，另一条已是真实模型名（不应被改）
+        AppDbService::insert_session_log_on_conn(
+            db.conn(),
+            "Antigravity",
+            "Antigravity:cp-unknown",
+            "s1",
+            "MODEL_PLACEHOLDER_M999",
+            "Antigravity",
+            1000,
+            200,
+            5000,
+            0,
+            100,
+            500,
+            0,
+        )
+        .unwrap();
+        AppDbService::insert_session_log_on_conn(
+            db.conn(),
+            "Antigravity",
+            "Antigravity:chat-existing",
+            "s1",
+            "gemini-3.8-flash",
+            "Antigravity",
+            100,
+            20,
+            0,
+            0,
+            100,
+            500,
+            100,
+        )
+        .unwrap();
+
+        // 运行期观察到 M318 最新名为 gemini-3.8-flash-n
+        AppDbService::upsert_antigravity_model_map_on_conn(
+            db.conn(),
+            &[("MODEL_PLACEHOLDER_M318", "gemini-3.8-flash-n")],
+            true,
+        )
+        .unwrap();
+
+        // 合并内置种子不应覆盖已有运行期观测值
+        db.sync_antigravity_seed_model_map().unwrap();
+        let map = db.load_antigravity_model_map().unwrap();
+        assert_eq!(map.get("MODEL_PLACEHOLDER_M318").map(String::as_str), Some("gemini-3.8-flash-n"));
+        assert_eq!(map.get("MODEL_PLACEHOLDER_M525").map(String::as_str), Some("gemini-4-hydrogen"));
+
+        // 后续新增 M999 映射并回刷：仅 cp-unknown 应变成新模型 ID
+        AppDbService::upsert_antigravity_model_map_on_conn(
+            db.conn(),
+            &[("MODEL_PLACEHOLDER_M999", "gemini-4-future")],
+            true,
+        )
+        .unwrap();
+        let updated = AppDbService::backfill_antigravity_model_ids_on_conn(db.conn()).unwrap();
+        assert_eq!(updated, 1);
+
+        let cp_model: String = db
+            .conn()
+            .query_row(
+                "SELECT model FROM session_request_logs WHERE request_id = 'Antigravity:cp-unknown'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let chat_model: String = db
+            .conn()
+            .query_row(
+                "SELECT model FROM session_request_logs WHERE request_id = 'Antigravity:chat-existing'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cp_model, "gemini-4-future");
+        assert_eq!(chat_model, "gemini-3.8-flash");
     }
 }

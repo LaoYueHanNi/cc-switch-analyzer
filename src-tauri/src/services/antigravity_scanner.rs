@@ -5,8 +5,8 @@
 //! (transcript.jsonl)与 artifact,没有任何 token 字段;用量只能向
 //! **正在运行的** language server 用 Connect RPC 问出来:
 //!
-//! - `GetCascadeTrajectoryGeneratorMetadata` → 每轮生成的 usage(token 明细)
-//! - `GetCascadeTrajectory` → 每步 createdAt,按 responseId / messageId 回填时间戳
+//! - `GetCascadeTrajectoryGeneratorMetadata` → 每轮对话的 usage(token 明细)与占位符→真实模型映射
+//! - `GetCascadeTrajectory` → 每步 createdAt 与上下文压缩(`CORTEX_STEP_TYPE_CHECKPOINT`)用量
 //!
 //! 因此扫描流程为「文件系统枚举会话 id → RPC 取用量 → 写入 session_request_logs」。
 //! 落库后与 ZCode / DSH / MiniMax 完全同构:同一张表、同一套增量游标、只追加不
@@ -33,6 +33,33 @@ use crate::services::dsh_scanner::DshScanResult;
 
 /// session_request_logs.source / provider_id 的 canonical 值(= DbType::label)
 pub const ANTIGRAVITY_SOURCE: &str = "Antigravity";
+
+/// 内置 Antigravity 模型占位符 → 真实模型 ID 种子字典（基于实测会话观测整理）。
+///
+/// 用于在压缩步骤（`CORTEX_STEP_TYPE_CHECKPOINT`）仅携带占位符时直接换算为真实模型 ID；
+/// 运行时从 `chatModel` 观测到的新映射会持续补充并更新到本地 `antigravity_model_map` 表。
+pub const DEFAULT_MODEL_MAP: &[(&str, &str)] = &[
+    ("MODEL_OPENAI_GPT_OSS_120B_MEDIUM", "gpt-oss-120b-medium"),
+    ("MODEL_PLACEHOLDER_M198", "gemini-3.5-flash-lite"),
+    ("MODEL_PLACEHOLDER_M26", "claude-opus-4-6-thinking"),
+    ("MODEL_PLACEHOLDER_M318", "gemini-3.8-flash"),
+    ("MODEL_PLACEHOLDER_M320", "gemini-3.8-flash-control"),
+    ("MODEL_PLACEHOLDER_M322", "gemini-3.8-flash-tiered"),
+    ("MODEL_PLACEHOLDER_M35", "claude-sonnet-4-6"),
+    ("MODEL_PLACEHOLDER_M400", "claude-opus-5-5-low"),
+    ("MODEL_PLACEHOLDER_M401", "claude-opus-5-5-medium"),
+    ("MODEL_PLACEHOLDER_M403", "claude-sonnet-5-5-low"),
+    ("MODEL_PLACEHOLDER_M418", "gemini-4-argon-trial"),
+    ("MODEL_PLACEHOLDER_M419", "gemini-4-argon-trial"),
+    ("MODEL_PLACEHOLDER_M438", "gemini-4-carbon"),
+    ("MODEL_PLACEHOLDER_M525", "gemini-4-hydrogen"),
+    ("MODEL_PLACEHOLDER_M526", "gemini-4-hydrogen"),
+    ("MODEL_PLACEHOLDER_M528", "gemini-4-hydrogen"),
+    ("MODEL_PLACEHOLDER_M530", "gemini-4-hydrogen-tiered-high"),
+    ("MODEL_PLACEHOLDER_M531", "gemini-4-hydrogen-tiered-xhigh"),
+    ("MODEL_PLACEHOLDER_M532", "gemini-4-neon"),
+    ("MODEL_PLACEHOLDER_M533", "gemini-4-neon"),
+];
 
 /// Connect RPC 服务前缀
 const LS_SERVICE: &str = "exa.language_server_pb.LanguageServerService";
@@ -786,6 +813,8 @@ struct UsageRow {
     first_token_latency: i64,
     response_id: String,
     message_id: String,
+    /// 步骤自带的创建时间戳(如 CHECKPOINT 步骤直接从 step.metadata.createdAt 取得)
+    created_at: Option<i64>,
 }
 
 /// protojson 把 int64 编码成字符串,同时容忍数字形式
@@ -821,6 +850,22 @@ fn rfc3339_to_epoch(text: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(text.trim())
         .ok()
         .map(|dt| dt.timestamp())
+}
+
+/// 计算两个 RFC3339 时间戳之间的毫秒差（缺失、解析失败或为负时返回 0）
+fn duration_between_rfc3339(start: Option<&Value>, end: Option<&Value>) -> i64 {
+    let start_str = json_str(start);
+    let end_str = json_str(end);
+    if start_str.is_empty() || end_str.is_empty() {
+        return 0;
+    }
+    let Ok(s) = chrono::DateTime::parse_from_rfc3339(&start_str) else {
+        return 0;
+    };
+    let Ok(e) = chrono::DateTime::parse_from_rfc3339(&end_str) else {
+        return 0;
+    };
+    (e.timestamp_millis() - s.timestamp_millis()).max(0)
 }
 
 /// 从一个 usage 对象取出 token 明细。
@@ -867,6 +912,7 @@ fn parse_usage(usage: &Value, model: &str, latency: i64, first_token_latency: i6
         first_token_latency,
         response_id,
         message_id,
+        created_at: None,
     })
 }
 
@@ -932,6 +978,34 @@ fn parse_generator_metadata(payload: &Value) -> Vec<UsageRow> {
     out
 }
 
+/// 从 `GetCascadeTrajectoryGeneratorMetadata` 提取「占位符 → 真实模型 ID」映射。
+///
+/// 主对话的 `chatModel` 同时携带 `model`(占位符如 `MODEL_PLACEHOLDER_M525`)与
+/// `responseModel`(如 `gemini-4-hydrogen`);捕获该配对后可持久入库,供后续压缩等
+/// 仅带占位符的请求换算真实模型 ID。
+fn parse_generator_model_map(payload: &Value) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let Some(entries) = payload.get("generatorMetadata").and_then(|v| v.as_array()) else {
+        return map;
+    };
+    for entry in entries {
+        let Some(chat_model) = entry.get("chatModel") else {
+            continue;
+        };
+        let placeholder = json_str(chat_model.get("model"));
+        let response_model = json_str(chat_model.get("responseModel"));
+        if placeholder.is_empty()
+            || response_model.is_empty()
+            || placeholder == response_model
+            || response_model.starts_with("MODEL_PLACEHOLDER_")
+        {
+            continue;
+        }
+        map.insert(placeholder, response_model);
+    }
+    map
+}
+
 /// 解析 `GetCascadeTrajectory` 响应,建立 responseId / messageId → epoch 秒的映射。
 ///
 /// generatorMetadata 自身不带时间戳,轨迹的 `steps[].metadata.createdAt` 才有;
@@ -972,6 +1046,94 @@ fn parse_trajectory_timestamps(payload: &Value) -> HashMap<String, i64> {
     map
 }
 
+/// 从 `GetCascadeTrajectory` 的 `steps[]` 提取上下文压缩(`CORTEX_STEP_TYPE_CHECKPOINT`)用量。
+///
+/// 压缩请求不出现在 `GetCascadeTrajectoryGeneratorMetadata` 中,仅存在于轨迹步骤里:
+/// - 新版通常同时写 `metadata.modelUsage` 与 `metadata.retryInfos[].usage`,其中
+///   `retryInfos[].usage` 往往省略 `model`,需回退取 `metadata.modelUsage.model` 占位符;
+/// - 旧版(2.34 之前)完全没有任何模型字段,按约定直接丢弃不入库;
+/// - 无 TTFT/streamingDuration,用 `completedAt - startedAt` 算耗时,`first_token_latency = 0`。
+fn parse_checkpoint_steps(payload: &Value) -> Vec<UsageRow> {
+    let Some(steps) = payload
+        .get("trajectory")
+        .and_then(|t| t.get("steps"))
+        .and_then(|s| s.as_array())
+    else {
+        return Vec::new();
+    };
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for step in steps {
+        if step.get("type").and_then(|v| v.as_str()) != Some("CORTEX_STEP_TYPE_CHECKPOINT") {
+            continue;
+        }
+        let Some(metadata) = step.get("metadata") else {
+            continue;
+        };
+        let step_created_at = rfc3339_to_epoch(&json_str(metadata.get("createdAt")));
+        let latency = duration_between_rfc3339(
+            metadata.get("startedAt"),
+            metadata.get("completedAt"),
+        );
+        let fallback_model = json_str(
+            metadata
+                .get("modelUsage")
+                .and_then(|mu| mu.get("model")),
+        );
+
+        let mut usages: Vec<&Value> = Vec::new();
+        if let Some(retries) = metadata.get("retryInfos").and_then(|v| v.as_array()) {
+            for retry in retries {
+                if let Some(u) = retry.get("usage") {
+                    usages.push(u);
+                }
+            }
+        }
+        if usages.is_empty() {
+            if let Some(mu) = metadata.get("modelUsage") {
+                usages.push(mu);
+            }
+        }
+
+        for usage in usages {
+            let raw_model = {
+                let m = json_str(usage.get("model"));
+                if m.is_empty() {
+                    fallback_model.clone()
+                } else {
+                    m
+                }
+            };
+            // 完全没有模型占位符的压缩记录（如旧版轨迹）直接丢弃
+            if raw_model.is_empty() {
+                continue;
+            }
+            if let Some(mut row) = parse_usage(usage, &raw_model, latency, 0) {
+                if seen.insert(row.dedup_key.clone()) {
+                    row.created_at = step_created_at;
+                    out.push(row);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 将原始模型名(或占位符)解析为最终入库的模型 ID:
+/// 当前会话观测到的 `chatModel` 映射 > 本地持久化字典 > 保留原占位符/原始名。
+fn resolve_antigravity_model(
+    raw_model: &str,
+    session_map: &HashMap<String, String>,
+    persisted_map: &HashMap<String, String>,
+) -> String {
+    session_map
+        .get(raw_model)
+        .or_else(|| persisted_map.get(raw_model))
+        .cloned()
+        .unwrap_or_else(|| raw_model.to_string())
+}
+
 // ========== 扫描入口 ==========
 
 /// mtime 游标能否推进到本次观测值。
@@ -998,19 +1160,43 @@ fn should_advance_cursor(
     now_epoch - mtime_nanos / 1_000_000_000 >= RESCAN_GRACE_SECS
 }
 
-/// 扫描一个会话:两次 RPC 取用量与时间戳,写入 session_request_logs。
-///
-/// 返回 (导入条数, 跳过条数)。时间戳缺失的记录回退到会话 mtime——宁可日期
-/// 略有偏差也不丢记录,否则该轮用量会永久缺失。
-fn scan_one_session(
+/// 解析并入库单个会话的两次 RPC 响应(同时更新模型映射字典与压缩用量)。
+fn ingest_session_payloads(
     app_db: &AppDbService,
-    agent: &ureq::Agent,
-    endpoint: &LsEndpoint,
     candidate: &SessionCandidate,
+    metadata: &Value,
+    trajectory_result: Result<Value, String>,
+    persisted_map: &mut HashMap<String, String>,
 ) -> Result<(u32, u32), String> {
-    let body = serde_json::json!({ "cascadeId": candidate.cascade_id });
-    let metadata = rpc_call(agent, endpoint, "GetCascadeTrajectoryGeneratorMetadata", &body)?;
-    let rows = parse_generator_metadata(&metadata);
+    let chat_rows = parse_generator_metadata(metadata);
+    let session_map = parse_generator_model_map(metadata);
+
+    let (timestamps, checkpoint_rows) = match trajectory_result {
+        Ok(trajectory) => (
+            parse_trajectory_timestamps(&trajectory),
+            parse_checkpoint_steps(&trajectory),
+        ),
+        Err(e) => {
+            if chat_rows.is_empty() && session_map.is_empty() {
+                return Err(e);
+            }
+            log::warn!(
+                "[ANTIGRAVITY] 会话 {} 轨迹获取失败,主对话时间戳回退到文件 mtime(本次不含压缩步骤): {}",
+                candidate.cascade_id,
+                e
+            );
+            (HashMap::new(), Vec::new())
+        }
+    };
+
+    let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut rows = Vec::with_capacity(chat_rows.len() + checkpoint_rows.len());
+    for row in chat_rows.into_iter().chain(checkpoint_rows.into_iter()) {
+        if seen_keys.insert(row.dedup_key.clone()) {
+            rows.push(row);
+        }
+    }
+
     let advance_cursor = should_advance_cursor(
         rows.len(),
         candidate.prev_row_count,
@@ -1018,7 +1204,7 @@ fn scan_one_session(
         crate::utils::now_epoch_seconds(),
     );
 
-    if rows.is_empty() {
+    if rows.is_empty() && session_map.is_empty() {
         // 尚未产生用量(或 language server 重启后丢了会话状态)。静置后仍为空则
         // 记下游标,免得这类会话每轮都被重扫。
         if advance_cursor {
@@ -1034,31 +1220,38 @@ fn scan_one_session(
         return Ok((0, 0));
     }
 
-    // 时间戳是可选增强:轨迹 RPC 失败不该让整个会话的用量丢掉
-    let timestamps = match rpc_call(agent, endpoint, "GetCascadeTrajectory", &body) {
-        Ok(trajectory) => parse_trajectory_timestamps(&trajectory),
-        Err(e) => {
-            log::warn!(
-                "[ANTIGRAVITY] 会话 {} 时间戳获取失败,回退到文件 mtime: {}",
-                candidate.cascade_id,
-                e
-            );
-            HashMap::new()
-        }
-    };
     let fallback_epoch = candidate.mtime_nanos / 1_000_000_000;
-
     let conn = app_db.conn();
     let tx = conn
         .unchecked_transaction()
         .map_err(|e| format!("开启事务失败: {}", e))?;
+
+    if !session_map.is_empty() {
+        let entries: Vec<(&str, &str)> = session_map
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let map_changed = AppDbService::upsert_antigravity_model_map_on_conn(&tx, &entries, true)?;
+        for (k, v) in &session_map {
+            persisted_map.insert(k.clone(), v.clone());
+        }
+        if map_changed > 0 {
+            AppDbService::backfill_antigravity_model_ids_on_conn(&tx)?;
+        }
+    }
+
     let mut imported = 0u32;
     let mut skipped = 0u32;
     for row in &rows {
-        let created_at = timestamps
-            .get(&row.response_id)
-            .or_else(|| timestamps.get(&row.message_id))
-            .copied()
+        let model = resolve_antigravity_model(&row.model, &session_map, persisted_map);
+        let created_at = row
+            .created_at
+            .or_else(|| {
+                timestamps
+                    .get(&row.response_id)
+                    .or_else(|| timestamps.get(&row.message_id))
+                    .copied()
+            })
             .unwrap_or(fallback_epoch);
         let request_id = format!("{}:{}", ANTIGRAVITY_SOURCE, row.dedup_key);
         let changed = AppDbService::insert_session_log_on_conn(
@@ -1066,7 +1259,7 @@ fn scan_one_session(
             ANTIGRAVITY_SOURCE,
             &request_id,
             &candidate.cascade_id,
-            &row.model,
+            &model,
             ANTIGRAVITY_SOURCE,
             row.input_tokens,
             row.output_tokens,
@@ -1093,6 +1286,23 @@ fn scan_one_session(
     }
     tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
     Ok((imported, skipped))
+}
+
+/// 扫描一个会话:两次 RPC 取用量、模型映射与时间戳,写入 session_request_logs。
+///
+/// 返回 (导入条数, 跳过条数)。时间戳缺失的记录回退到会话 mtime——宁可日期
+/// 略有偏差也不丢记录,否则该轮用量会永久缺失。
+fn scan_one_session(
+    app_db: &AppDbService,
+    agent: &ureq::Agent,
+    endpoint: &LsEndpoint,
+    candidate: &SessionCandidate,
+    persisted_map: &mut HashMap<String, String>,
+) -> Result<(u32, u32), String> {
+    let body = serde_json::json!({ "cascadeId": candidate.cascade_id });
+    let metadata = rpc_call(agent, endpoint, "GetCascadeTrajectoryGeneratorMetadata", &body)?;
+    let trajectory_result = rpc_call(agent, endpoint, "GetCascadeTrajectory", &body);
+    ingest_session_payloads(app_db, candidate, &metadata, trajectory_result, persisted_map)
 }
 
 fn empty_result(app_db: &AppDbService) -> DshScanResult {
@@ -1129,7 +1339,7 @@ pub fn scan_antigravity_with_backoff(app_db: &AppDbService) -> Result<DshScanRes
 pub fn scan_antigravity(app_db: &AppDbService) -> Result<DshScanResult, String> {
     let candidates = scan_session_candidates();
     let total_candidates = candidates.len();
-    let pending: Vec<SessionCandidate> = candidates
+    let mut pending: Vec<SessionCandidate> = candidates
         .into_iter()
         .filter_map(|mut c| {
             match app_db
@@ -1149,9 +1359,12 @@ pub fn scan_antigravity(app_db: &AppDbService) -> Result<DshScanResult, String> 
     if pending.is_empty() {
         return Ok(empty_result(app_db));
     }
+    // 旧会话先扫、新会话后扫,保证跨时期变更的占位符映射以最新会话为准
+    pending.sort_by(|a, b| a.mtime_nanos.cmp(&b.mtime_nanos).then_with(|| a.cascade_id.cmp(&b.cascade_id)));
 
     let endpoint = probe_endpoint()?;
     let agent = build_agent(RPC_TIMEOUT);
+    let mut persisted_map = app_db.load_antigravity_model_map()?;
     let mut files_scanned = 0u32;
     let mut imported = 0u32;
     let mut skipped = 0u32;
@@ -1159,7 +1372,7 @@ pub fn scan_antigravity(app_db: &AppDbService) -> Result<DshScanResult, String> 
 
     for candidate in &pending {
         files_scanned += 1;
-        match scan_one_session(app_db, &agent, &endpoint, candidate) {
+        match scan_one_session(app_db, &agent, &endpoint, candidate, &mut persisted_map) {
             Ok((added, dup)) => {
                 imported += added;
                 skipped += dup;
@@ -1657,6 +1870,239 @@ mod tests {
         assert!(!is_valid_cascade_id("460aa64e-335e-4c60-a4cc-119a1987072"));
         assert!(!is_valid_cascade_id("460aa64e_335e_4c60_a4cc_119a1987072f"));
         assert!(!is_valid_cascade_id("460aa64e-335e-4c60-a4cc-119a1987072g"));
+    }
+
+    #[test]
+    fn parse_checkpoint_steps_drops_records_without_model_placeholder() {
+        let payload = serde_json::json!({
+            "trajectory": {
+                "steps": [
+                    {
+                        "type": "CORTEX_STEP_TYPE_CHECKPOINT",
+                        "metadata": {
+                            "createdAt": "2026-09-22T13:11:58.782216900Z",
+                            "startedAt": "2026-09-22T13:11:58.782216900Z",
+                            "completedAt": "2026-09-22T13:12:39.443709800Z",
+                            "retryInfos": [{
+                                "usage": {
+                                    "inputTokens": "8766",
+                                    "outputTokens": "3006",
+                                    "cacheReadTokens": "237126",
+                                    "responseId": "old-cp-no-model"
+                                }
+                            }]
+                        }
+                    },
+                    {
+                        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                        "metadata": {
+                            "createdAt": "2026-11-28T02:26:00Z",
+                            "modelUsage": {
+                                "model": "MODEL_PLACEHOLDER_M525",
+                                "inputTokens": "100",
+                                "outputTokens": "10",
+                                "responseId": "not-a-checkpoint"
+                            }
+                        }
+                    }
+                ]
+            }
+        });
+        assert!(parse_checkpoint_steps(&payload).is_empty());
+    }
+
+    #[test]
+    fn parse_checkpoint_steps_extracts_model_usage_retries_and_duration() {
+        let payload = serde_json::json!({
+            "trajectory": {
+                "steps": [{
+                    "type": "CORTEX_STEP_TYPE_CHECKPOINT",
+                    "metadata": {
+                        "createdAt": "2026-11-28T02:26:36.924594400Z",
+                        "startedAt": "2026-11-28T02:26:36.924594400Z",
+                        "completedAt": "2026-11-28T02:27:05.219615600Z",
+                        "modelUsage": {
+                            "model": "MODEL_PLACEHOLDER_M525",
+                            "inputTokens": "3791",
+                            "outputTokens": "5175",
+                            "cacheReadTokens": "510316",
+                            "responseId": "cp-ok"
+                        },
+                        "retryInfos": [
+                            {
+                                "usage": {
+                                    "inputTokens": "1000",
+                                    "outputTokens": "50",
+                                    "responseId": "cp-retry-1"
+                                }
+                            },
+                            {
+                                "usage": {
+                                    "inputTokens": "3791",
+                                    "outputTokens": "5175",
+                                    "cacheReadTokens": "510316",
+                                    "responseId": "cp-ok"
+                                }
+                            }
+                        ]
+                    }
+                }]
+            }
+        });
+        let rows = parse_checkpoint_steps(&payload);
+        assert_eq!(rows.len(), 2);
+        // retryInfos 缺少 usage.model 时回退取 metadata.modelUsage.model
+        assert_eq!(rows[0].model, "MODEL_PLACEHOLDER_M525");
+        assert_eq!(rows[0].dedup_key, "cp-retry-1");
+        assert_eq!(rows[0].latency, 28295);
+        assert_eq!(rows[0].first_token_latency, 0);
+        assert_eq!(
+            rows[0].created_at,
+            Some(rfc3339_to_epoch("2026-11-28T02:26:36.924594400Z").unwrap())
+        );
+        assert_eq!(rows[1].dedup_key, "cp-ok");
+        assert_eq!(rows[1].cache_read, 510316);
+    }
+
+    #[test]
+    fn ingest_resolves_placeholder_and_backfills_when_dictionary_updates() {
+        let db = crate::services::app_db::AppDbService::new_in_memory().unwrap();
+        let mut persisted_map = db.load_antigravity_model_map().unwrap();
+
+        // 会话 1：发生了一次未在字典里的占位符压缩(M888)，以及一次无占位符的旧压缩(应丢弃)
+        let c1 = SessionCandidate {
+            cascade_id: "sess-1".into(),
+            sync_path: PathBuf::from(r"C:\ag\brain\sess-1"),
+            mtime_nanos: 1_700_000_000_000_000_000,
+            prev_row_count: 0,
+        };
+        let meta1 = serde_json::json!({ "generatorMetadata": [] });
+        let traj1 = serde_json::json!({
+            "trajectory": {
+                "steps": [
+                    {
+                        "type": "CORTEX_STEP_TYPE_CHECKPOINT",
+                        "metadata": {
+                            "createdAt": "2026-11-28T02:00:00Z",
+                            "startedAt": "2026-11-28T02:00:00Z",
+                            "completedAt": "2026-11-28T02:00:12.500Z",
+                            "modelUsage": {
+                                "model": "MODEL_PLACEHOLDER_M888",
+                                "inputTokens": "4000",
+                                "outputTokens": "500",
+                                "cacheReadTokens": "20000",
+                                "responseId": "cp-m888"
+                            }
+                        }
+                    },
+                    {
+                        "type": "CORTEX_STEP_TYPE_CHECKPOINT",
+                        "metadata": {
+                            "createdAt": "2026-11-28T01:00:00Z",
+                            "retryInfos": [{
+                                "usage": {
+                                    "inputTokens": "999",
+                                    "outputTokens": "99",
+                                    "responseId": "cp-no-model"
+                                }
+                            }]
+                        }
+                    }
+                ]
+            }
+        });
+        let (added1, _) = ingest_session_payloads(&db, &c1, &meta1, Ok(traj1), &mut persisted_map).unwrap();
+        assert_eq!(added1, 1);
+
+        // 映射不到时保留原占位符 ID，且无占位符的记录已被丢弃
+        let model_before: String = db
+            .conn()
+            .query_row(
+                "SELECT model FROM session_request_logs WHERE request_id = 'Antigravity:cp-m888'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(model_before, "MODEL_PLACEHOLDER_M888");
+        assert_eq!(db.get_session_log_count(ANTIGRAVITY_SOURCE).unwrap(), 1);
+
+        // 会话 2：主对话观测到 M888 -> gemini-4-pro-preview，同时包含一条 M888 压缩
+        let c2 = SessionCandidate {
+            cascade_id: "sess-2".into(),
+            sync_path: PathBuf::from(r"C:\ag\brain\sess-2"),
+            mtime_nanos: 1_700_000_100_000_000_000,
+            prev_row_count: 0,
+        };
+        let meta2 = serde_json::json!({
+            "generatorMetadata": [{
+                "chatModel": {
+                    "model": "MODEL_PLACEHOLDER_M888",
+                    "responseModel": "gemini-4-pro-preview",
+                    "streamingDuration": "1.0s",
+                    "usage": {
+                        "inputTokens": "100",
+                        "outputTokens": "20",
+                        "responseId": "chat-2"
+                    }
+                }
+            }]
+        });
+        let traj2 = serde_json::json!({
+            "trajectory": {
+                "steps": [
+                    {
+                        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                        "metadata": {
+                            "createdAt": "2026-11-28T03:00:00Z",
+                            "modelUsage": { "responseId": "chat-2" }
+                        }
+                    },
+                    {
+                        "type": "CORTEX_STEP_TYPE_CHECKPOINT",
+                        "metadata": {
+                            "createdAt": "2026-11-28T03:05:00Z",
+                            "startedAt": "2026-11-28T03:05:00Z",
+                            "completedAt": "2026-11-28T03:05:05Z",
+                            "modelUsage": {
+                                "model": "MODEL_PLACEHOLDER_M888",
+                                "inputTokens": "5000",
+                                "outputTokens": "600",
+                                "responseId": "cp-2"
+                            }
+                        }
+                    }
+                ]
+            }
+        });
+        let (added2, _) = ingest_session_payloads(&db, &c2, &meta2, Ok(traj2), &mut persisted_map).unwrap();
+        assert_eq!(added2, 2);
+
+        // 字典已更新，且之前 sess-1 保留原占位符的记录已被回刷映射为 gemini-4-pro-preview
+        let model_after_s1: String = db
+            .conn()
+            .query_row(
+                "SELECT model FROM session_request_logs WHERE request_id = 'Antigravity:cp-m888'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let model_s2_cp: String = db
+            .conn()
+            .query_row(
+                "SELECT model FROM session_request_logs WHERE request_id = 'Antigravity:cp-2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(model_after_s1, "gemini-4-pro-preview");
+        assert_eq!(model_s2_cp, "gemini-4-pro-preview");
+        assert_eq!(
+            db.load_antigravity_model_map()
+                .unwrap()
+                .get("MODEL_PLACEHOLDER_M888")
+                .map(String::as_str),
+            Some("gemini-4-pro-preview")
+        );
     }
 
     #[test]
