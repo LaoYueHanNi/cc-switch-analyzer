@@ -1,12 +1,28 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-11-28",
+    "commits": [
+      {
+        "hash": "7368595",
+        "subject": "feat(antigravity): 采集上下文压缩用量并维护占位符模型映射字典",
+        "date": "2026-11-28"
+      }
+    ]
+  },
+  {
+    "version": "0.8.19",
     "date": "2026-11-25",
     "commits": [
       {
         "hash": "bcc078a",
         "subject": "perf(startup): 异步化 Cursor 同步、缓存 OpenCode 元数据并去重启动链路 (#6)",
         "date": "2026-11-25"
+      },
+      {
+        "hash": "e1c4f0d",
+        "subject": "feat(trend): 模型汇总浮层支持智能避让、拖拽定位与位置记忆",
+        "date": "2026-11-22"
       }
     ]
   },
