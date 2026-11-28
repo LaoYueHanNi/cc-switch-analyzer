@@ -1,6 +1,17 @@
 [
   {
     "version": "Unreleased",
+    "date": "2026-11-25",
+    "commits": [
+      {
+        "hash": "bcc078a",
+        "subject": "perf(startup): 异步化 Cursor 同步、缓存 OpenCode 元数据并去重启动链路 (#6)",
+        "date": "2026-11-25"
+      }
+    ]
+  },
+  {
+    "version": "0.8.18",
     "date": "2026-11-22",
     "commits": [
       {

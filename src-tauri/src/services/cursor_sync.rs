@@ -1,7 +1,8 @@
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,90 @@ use crate::utils;
 const CURSOR_HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 /// 自动同步缓存有效期：24 小时内不重复请求 Cursor API（手动同步不受限）
 pub const CURSOR_AUTO_SYNC_FRESHNESS: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// 自动同步后台调度状态：防并发重入 + 失败指数退避（60s→120s→240s→480s→600s）
+#[derive(Debug, Default)]
+struct AutoSyncState {
+    in_flight: bool,
+    failures: u32,
+    next_retry_at: Option<Instant>,
+}
+
+static AUTO_SYNC_STATE: Mutex<AutoSyncState> = Mutex::new(AutoSyncState {
+    in_flight: false,
+    failures: 0,
+    next_retry_at: None,
+});
+
+/// 第 n 次连续失败后的等待秒数（n 从 1 起）：60s, 120s, 240s, 480s, 封顶 600s
+fn auto_sync_backoff_secs(failures: u32) -> u64 {
+    let shift = failures.saturating_sub(1).min(4);
+    (60u64 << shift).min(600)
+}
+
+fn try_begin_background_auto_sync_at(
+    state: &Mutex<AutoSyncState>,
+    now: Instant,
+    logged_in: bool,
+    fresh: bool,
+) -> bool {
+    if !logged_in || fresh {
+        return false;
+    }
+    let Ok(mut guard) = state.lock() else {
+        return false;
+    };
+    if guard.in_flight {
+        return false;
+    }
+    if guard.next_retry_at.is_some_and(|t| now < t) {
+        return false;
+    }
+    guard.in_flight = true;
+    true
+}
+
+fn finish_background_auto_sync_at(state: &Mutex<AutoSyncState>, now: Instant, synced: bool) {
+    let Ok(mut guard) = state.lock() else {
+        return;
+    };
+    guard.in_flight = false;
+    if synced {
+        guard.failures = 0;
+        guard.next_retry_at = None;
+    } else {
+        guard.failures = guard.failures.saturating_add(1);
+        let delay = auto_sync_backoff_secs(guard.failures);
+        guard.next_retry_at = Some(now + Duration::from_secs(delay));
+    }
+}
+
+fn reset_auto_sync_backoff_in(state: &Mutex<AutoSyncState>) {
+    if let Ok(mut guard) = state.lock() {
+        guard.failures = 0;
+        guard.next_retry_at = None;
+    }
+}
+
+/// 检查是否允许在后台启动一次 Cursor 自动同步；命中则标记 `in_flight = true`。
+pub fn try_begin_background_auto_sync() -> bool {
+    try_begin_background_auto_sync_at(
+        &AUTO_SYNC_STATE,
+        Instant::now(),
+        is_logged_in(),
+        cache_is_fresh(),
+    )
+}
+
+/// 后台自动同步结束时更新状态：成功清零退避，失败累加连续失败次数并进入指数退避。
+pub fn finish_background_auto_sync(synced: bool) {
+    finish_background_auto_sync_at(&AUTO_SYNC_STATE, Instant::now(), synced);
+}
+
+/// 手动登录、手动同步成功或登出后重置自动同步退避窗口。
+pub fn reset_auto_sync_backoff() {
+    reset_auto_sync_backoff_in(&AUTO_SYNC_STATE);
+}
 
 const USAGE_CSV_BASE: &str = "https://cursor.com/api/dashboard/export-usage-events-csv";
 const USAGE_SUMMARY_ENDPOINT: &str = "https://cursor.com/api/usage-summary";
@@ -666,6 +751,7 @@ pub fn sync_cursor_cache() -> SyncCursorResult {
 }
 
 /// 缓存过期时自动同步，返回是否执行了同步
+#[allow(dead_code)]
 pub fn maybe_auto_sync() -> Result<bool, String> {
     if !is_logged_in() {
         log::debug!("[CURSOR] auto-sync skip: not logged in");
@@ -803,5 +889,55 @@ mod tests {
         let meta = read_account_meta(dir.path()).unwrap();
         assert_eq!(meta.user_id, "uid-1");
         assert_eq!(meta.last_synced_at, Some(12345));
+    }
+
+    #[test]
+    fn auto_sync_backoff_grows_then_caps_at_600s() {
+        assert_eq!(
+            (1..=6).map(auto_sync_backoff_secs).collect::<Vec<_>>(),
+            vec![60, 120, 240, 480, 600, 600]
+        );
+    }
+
+    #[test]
+    fn auto_sync_state_prevents_reentry_backs_off_and_resets() {
+        let state = Mutex::new(AutoSyncState::default());
+        let t0 = Instant::now();
+
+        // 未登录或缓存未过期时不触发
+        assert!(!try_begin_background_auto_sync_at(&state, t0, false, false));
+        assert!(!try_begin_background_auto_sync_at(&state, t0, true, true));
+
+        // 首次触发成功并阻止并发重入
+        assert!(try_begin_background_auto_sync_at(&state, t0, true, false));
+        assert!(!try_begin_background_auto_sync_at(&state, t0, true, false));
+
+        // 失败后进入 60s 退避窗口
+        finish_background_auto_sync_at(&state, t0, false);
+        assert!(!try_begin_background_auto_sync_at(
+            &state,
+            t0 + Duration::from_secs(59),
+            true,
+            false
+        ));
+
+        // 到达 60s 后允许再次尝试，第 2 次失败进入 120s 退避
+        let t1 = t0 + Duration::from_secs(60);
+        assert!(try_begin_background_auto_sync_at(&state, t1, true, false));
+        finish_background_auto_sync_at(&state, t1, false);
+        assert!(!try_begin_background_auto_sync_at(
+            &state,
+            t1 + Duration::from_secs(119),
+            true,
+            false
+        ));
+
+        // 手动同步重置退避后立即放行，成功后归零
+        reset_auto_sync_backoff_in(&state);
+        let t2 = t1 + Duration::from_secs(10);
+        assert!(try_begin_background_auto_sync_at(&state, t2, true, false));
+        finish_background_auto_sync_at(&state, t2, true);
+        assert_eq!(state.lock().unwrap().failures, 0);
+        assert!(state.lock().unwrap().next_retry_at.is_none());
     }
 }

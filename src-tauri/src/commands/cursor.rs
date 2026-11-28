@@ -231,15 +231,15 @@ fn build_cursor_status(state: &State<AppState>) -> Result<CursorStatus, String> 
     })
 }
 
-/// 扫描并注册/重载全部账号缓存目录
-pub fn ensure_all_cursor_sources_registered(state: &State<AppState>) -> Result<(), String> {
+/// 扫描并注册/重载全部账号缓存目录（直接操作 SharedState，供前后台复用）
+pub fn ensure_all_cursor_sources_registered_in(shared: &crate::SharedState) -> Result<(), String> {
     let _ = utils::migrate_legacy_cursor_cache(active_sync_user_id().as_deref());
     let caches = utils::list_cursor_account_caches()?;
     if caches.is_empty() {
         return Ok(());
     }
 
-    let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+    let mut sources = shared.data_sources.write().map_err(|e| e.to_string())?;
     for acc in caches {
         let cache_str = acc.path.to_string_lossy().to_string();
         if let Some(entry) = sources
@@ -277,8 +277,13 @@ pub fn ensure_all_cursor_sources_registered(state: &State<AppState>) -> Result<(
     Ok(())
 }
 
-pub fn reload_cursor_sources(state: &State<AppState>) -> Result<(), String> {
-    let mut sources = state.data_sources.write().map_err(|e| e.to_string())?;
+/// 扫描并注册/重载全部账号缓存目录
+pub fn ensure_all_cursor_sources_registered(state: &State<AppState>) -> Result<(), String> {
+    ensure_all_cursor_sources_registered_in(state)
+}
+
+pub fn reload_cursor_sources_in(shared: &crate::SharedState) -> Result<(), String> {
+    let mut sources = shared.data_sources.write().map_err(|e| e.to_string())?;
     for entry in sources.iter_mut() {
         if matches!(entry.db_type, DbType::Cursor) {
             let path = entry.path.clone();
@@ -290,6 +295,10 @@ pub fn reload_cursor_sources(state: &State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
+pub fn reload_cursor_sources(state: &State<AppState>) -> Result<(), String> {
+    reload_cursor_sources_in(state)
+}
+
 fn save_sources(state: &State<AppState>) -> Result<Vec<SourceInfo>, String> {
     let sources = state.data_sources.read().map_err(|e| e.to_string())?;
     let info: Vec<SourceInfo> = sources.iter().map(|s| s.to_info()).collect();
@@ -297,19 +306,36 @@ fn save_sources(state: &State<AppState>) -> Result<Vec<SourceInfo>, String> {
     Ok(info)
 }
 
-/// 查询前自动同步 Cursor 缓存并在有更新时重载数据源
+/// 查询前确保 Cursor 缓存已注册；缓存过期时在后台线程异步拉取并退避，绝不阻塞查询。
 pub fn sync_and_reload_if_needed(state: &State<AppState>) -> Result<(), String> {
-    // 离线账号也要确保已注册
+    // 离线账号也要确保已注册（本地 stat，content_mtime 未变时跳过）
     if utils::any_cursor_usage_csv_exists() {
         let _ = ensure_all_cursor_sources_registered(state);
     }
-    if !cursor_sync::is_logged_in() {
+    if !cursor_sync::try_begin_background_auto_sync() {
         return Ok(());
     }
-    let synced = cursor_sync::maybe_auto_sync()?;
-    if synced {
-        ensure_all_cursor_sources_registered(state)?;
-        reload_cursor_sources(state)?;
+    let shared = state.shared_arc();
+    if let Err(e) = std::thread::Builder::new()
+        .name("cursor-auto-sync".into())
+        .spawn(move || {
+            log::info!("[CURSOR] auto-sync triggered in background: cache stale or missing");
+            let result = cursor_sync::sync_cursor_cache();
+            cursor_sync::finish_background_auto_sync(result.synced);
+            if result.synced {
+                if let Err(err) = ensure_all_cursor_sources_registered_in(&shared) {
+                    log::warn!("[CURSOR] 后台注册数据源失败: {}", err);
+                }
+                if let Err(err) = reload_cursor_sources_in(&shared) {
+                    log::warn!("[CURSOR] 后台重载数据源失败: {}", err);
+                }
+            } else if let Some(err) = result.error {
+                log::warn!("[CURSOR] 后台自动同步失败，已进入退避: {}", err);
+            }
+        })
+    {
+        cursor_sync::finish_background_auto_sync(false);
+        log::warn!("[CURSOR] 启动后台自动同步线程失败: {}", e);
     }
     Ok(())
 }
@@ -330,6 +356,7 @@ pub fn cursor_login(session_token: String, state: State<AppState>) -> Result<Vec
             .error
             .unwrap_or_else(|| "Cursor 同步失败".to_string()));
     }
+    cursor_sync::reset_auto_sync_backoff();
 
     ensure_all_cursor_sources_registered(&state)?;
     save_sources(&state)
@@ -339,6 +366,7 @@ pub fn cursor_login(session_token: String, state: State<AppState>) -> Result<Vec
 pub fn cursor_sync(state: State<AppState>) -> Result<SyncCursorResult, String> {
     let result = cursor_sync::sync_cursor_cache();
     if result.synced {
+        cursor_sync::reset_auto_sync_backoff();
         ensure_all_cursor_sources_registered(&state)?;
         reload_cursor_sources(&state)?;
         let _ = save_sources(&state);
@@ -693,6 +721,7 @@ pub fn cursor_merge_hooks_now() -> Result<crate::services::cursor_hook_merge::Ho
 pub fn cursor_logout(clear_cache: bool, state: State<AppState>) -> Result<Vec<SourceInfo>, String> {
     let active_dir = cursor_sync::try_active_cursor_cache_dir();
     cursor_sync::clear_credentials()?;
+    cursor_sync::reset_auto_sync_backoff();
 
     if clear_cache {
         if let Some(ref dir) = active_dir {

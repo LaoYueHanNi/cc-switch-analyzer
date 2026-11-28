@@ -117,6 +117,12 @@ pub struct AppState {
     collection_gate: Mutex<Option<std::time::Instant>>,
 }
 
+impl AppState {
+    pub(crate) fn shared_arc(&self) -> Arc<SharedState> {
+        self.shared.clone()
+    }
+}
+
 // 通过 Deref，Tauri 命令中 state.data_sources 仍然直接可用
 impl std::ops::Deref for AppState {
     type Target = SharedState;
@@ -191,7 +197,7 @@ pub fn run() {
             )?;
 
             // Restore cached prices and read-only sources before any WebView IPC or status service.
-            commands::database::initialize_sources(&app.state::<AppState>())?;
+            commands::database::ensure_sources_initialized(&app.state::<AppState>())?;
             app.manage(services::background_collection::BackgroundCollector::start(app.handle().clone())?);
 
             // 后台模式状态：先于任何回调注册（菜单回调会读它）
